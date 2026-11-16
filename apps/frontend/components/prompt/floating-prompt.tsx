@@ -20,6 +20,7 @@ import { useApiProviders } from "@/components/api-provider";
 import { multiviewRequirements } from "./multiview";
 import { canvasResults, generate, selectedModel, isMultiview, requiresImage, multiviewError, modelViews, type ModelViews, type ConversationMessage, type GeneratedFile, type Generation, type GenerationTask } from "./generation";
 import type { VisibleImage } from "@/components/image-canvas";
+import { CanvasModelViewer } from "@/components/canvas-model-viewer";
 import { canvasFileError, canvasFileKind } from "@/lib/image-canvas/image-canvas-storage";
 import { getSetting, saveSetting } from "@/lib/settings";
 
@@ -119,7 +120,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     importing.current = true;
     setAdding(file.url);
     try {
-      const response = await fetch(file.url, { credentials: "omit", signal: AbortSignal.timeout(60_000) });
+      const response = await fetch(file.url, { credentials: file.url.startsWith("/api/storage/files/") ? "same-origin" : "omit", signal: AbortSignal.timeout(60_000) });
       if (!response.ok) throw new Error("Could not download this result. The link may have expired.");
       const blob = await response.blob();
       const type = file.kind === "video" ? (blob.type.startsWith("video/webm") ? "video/webm" : "video/mp4") : file.kind === "file" ? "model/gltf-binary" : blob.type;
@@ -152,18 +153,19 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
 
   async function runTask(task: Generation, signal: AbortSignal, imageUrl?: string, images?: string[], sources?: ToolSource[]) {
     try {
-      const results = await generate(task, request, signal, (change) => updateGeneration(task.id, change), imageUrl, images, sources);
-      const files = await Promise.all(results.map(async (file) => ({ ...file, url: await persistentUrl(file.url) })));
+      let summary = "";
+      const results = await generate(task, request, signal, (change) => { if (change.summary) summary = change.summary; updateGeneration(task.id, change); }, imageUrl, images, sources);
+      const files = await Promise.all(results.map(async (file) => ({ ...file, url: await persistentUrl(file.url, file.kind === "file") })));
       results.forEach((file) => { if (file.url.startsWith("blob:")) URL.revokeObjectURL(file.url); });
       updateGeneration(task.id, { status: "Completed", files, error: undefined });
       const candidates = canvasResults(files, task.category);
       let imported = candidates.length > 0;
-      if (!imported) notifyError("No supported 3D model was returned. Download the result files to inspect them.");
+      if (!imported && !summary) notifyError("No supported 3D model was returned. Download the result files to inspect them.");
       for (const file of candidates) {
         if (!await addToCanvas(file, files)) imported = false;
       }
       if (imported) setExpanded((current) => current.filter((id) => id !== task.id));
-      return `${task.category} generated with ${task.model}: ${task.prompt}`;
+      return summary || `${task.category} generated with ${task.model}: ${task.prompt}`;
     } catch (cause) {
       const message = signal.aborted ? (cause instanceof Error && cause.name !== "AbortError" ? cause.message : "Request aborted. This provider may still finish submitted work and charge for it.") : cause instanceof Error ? cause.message : "Generation failed";
       notifyError(message);
@@ -196,8 +198,8 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       const tasks = plan.tasks.map((task): Generation => {
         const model = task.mediaTool ? mediaToolModel(task.mediaTool) : task.operation ? "Local image tools" : selectedModel(models, task.category);
         if (!model) throw new Error(`Select a ${task.category === "picture" ? "image" : task.category} model first`);
-        if (task.category === "3d" && !keys.fal) throw new Error("Enter your Fal API key in Settings to generate 3D models");
-        if (task.mediaTool && model !== "Local media tools" && !keys.fal) throw new Error("Enter your Fal API key in Settings to remove backgrounds or upscale images");
+        if (task.category === "3d" && !task.mediaTool && !keys.fal) throw new Error("Enter your Fal API key in Settings to generate 3D models");
+        if (task.mediaTool && model !== "Local media tools" && !keys.fal) throw new Error("Enter your Fal API key in Settings to run AI media tools");
         let views: ModelViews | undefined;
         if (task.category === "3d" && isMultiview(model)) {
           views = {};
@@ -242,7 +244,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     setStatus("Checking existing job…");
     updateGeneration(task.id, { error: undefined, status: "Checking" });
     try {
-      const outcome = await runTask(task, controller.signal);
+      const outcome = await runTask(task, controller.signal, undefined, undefined, selection);
       setHistory((current) => [...current, { role: "assistant" as const, content: outcome.slice(0, 8000) }]);
     }
     finally { active.current = null; setStatus(""); }
@@ -359,7 +361,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           {task.error && <p role="alert" className="text-destructive">{task.error}</p>}
           {task.error && <Button variant="outline" size="sm" disabled={!!status} onClick={() => void checkJob(task)}>{task.requestId ? "Check job" : "Try again"}</Button>}
           {task.files?.map((file) => <div key={file.url} className="flex flex-col gap-1">
-            <a href={file.url} target="_blank" rel="noopener noreferrer" download={file.url.startsWith("data:") || file.url.startsWith("blob:") ? file.name : undefined} className="underline">Download {file.name}</a>
+            <a href={file.url} target="_blank" rel="noopener noreferrer" download={file.url.startsWith("/api/storage/files/") ? `${file.name}.glb` : file.url.startsWith("data:") || file.url.startsWith("blob:") ? file.name : undefined} className="underline">Download {file.name}</a>
             {!canvasFiles[file.url] && onAddToCanvas && canvasResults(task.files ?? [], task.category).includes(file) && <Button variant="outline" size="sm" disabled={!!adding || !!status} onClick={() => void addToCanvas(file, task.files)}>{adding === file.url ? "Adding…" : "Retry adding to canvas"}</Button>}
           </div>)}
           </AccordionContent>
@@ -376,7 +378,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
             // Canvas blob URLs are already owned by the canvas.
             // eslint-disable-next-line @next/next/no-img-element
             <img src={item.url} alt={item.file.name || "Selected image"} className="size-full object-contain" />
-          ) : canvasFileKind(item.file) === "video" ? <video src={item.url} preload="metadata" muted aria-label={item.file.name} className="size-full object-contain" /> : <span className="px-2 text-center text-xs break-all">3D preview · {item.file.name}</span>}
+          ) : canvasFileKind(item.file) === "video" ? <video src={item.url} preload="metadata" muted aria-label={item.file.name} className="size-full object-contain" /> : <CanvasModelViewer src={item.url} name={item.file.name} />}
         </div>)}
       </div>}
       <div className="flex w-full min-w-0 items-center gap-2">

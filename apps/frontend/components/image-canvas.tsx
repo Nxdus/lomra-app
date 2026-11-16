@@ -3,8 +3,10 @@
 import { ConfirmDelete } from "@/components/confirm-delete";
 
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref } from "react";
-import { DownloadIcon, GripVerticalIcon, InfoIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import { CanvasModelViewer } from "@/components/canvas-model-viewer";
+import { ArrowDownToLineIcon, ArrowUpToLineIcon, CopyIcon, DownloadIcon, GripVerticalIcon, InfoIcon, PencilIcon, PlusIcon, ScanIcon, Trash2Icon } from "lucide-react";
+import { CanvasMedia } from "@/components/canvas-media";
+import dynamic from "next/dynamic";
+import { PictureEditor, type PictureEditorHandle } from "@/components/picture-editor";
 import { CanvasMenu } from "@/components/canvas-menu";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -13,12 +15,33 @@ import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
-import { canvasHistory, canvasTitle, canvasStorage, deleteCanvasStorage, canvasFileError, canvasFileKind, canvasFileSize, type CanvasImage } from "@/lib/image-canvas/image-canvas-storage";
+import { canvasHistory, canvasTitle, canvasStorage, isCanvasFilePending, deleteCanvasStorage, canvasFileError, canvasFileKind, canvasFileSize, type CanvasImage, type CanvasHistoryItem } from "@/lib/image-canvas/image-canvas-storage";
 import { CANVAS_CAMERA_KEY, canvasPoint, parseCanvasCamera, zoomCamera, type CanvasCamera } from "@/lib/image-canvas/image-canvas-camera";
 import { resizeImage, type ImageBounds, type ImageCorner } from "@/lib/image-canvas/image-canvas-resize";
+import { reorganizeCanvas, fitCanvas } from "@/lib/image-canvas/image-canvas-layout";
 import { getSetting, saveSetting } from "@/lib/settings";
+import { canvasMediaVisible } from "@/lib/image-canvas/image-canvas-visibility";
+import {
+  areCanvasItemsEqual,
+  cloneCanvasItems,
+  collectReferencedUrls,
+  emptyCanvasHistory,
+  isNativeTextEditingTarget,
+  isRedoKeyboardShortcut,
+  isUndoKeyboardShortcut,
+  pushCanvasHistory,
+  redoCanvasHistory,
+  undoCanvasHistory,
+  type CanvasHistoryEntry,
+  type CanvasHistoryState,
+} from "@/lib/image-canvas/image-canvas-history";
 
 export type VisibleImage = CanvasImage & { url: string };
+const ModelInspector = dynamic(() => import("@/components/model-inspector").then(module => module.ModelInspector), { ssr: false });
+
+function createNewCanvasId() {
+  return `canvas-${Date.now()}-${crypto.randomUUID()}`;
+}
 
 function ImageResizeHandles({ name, onPointerDown, onKeyDown }: {
   name: string;
@@ -57,6 +80,9 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   const imports = useRef(Promise.resolve());
   const drag = useRef<{ ids: string[]; pointer: number; x: number; y: number } | null>(null);
   const resize = useRef<{ id: string; pointer: number; corner: ImageCorner; x: number; y: number; image: ImageBounds } | null>(null);
+  const dragSnapshot = useRef<VisibleImage[] | null>(null);
+  const resizeSnapshot = useRef<VisibleImage[] | null>(null);
+  const canvasHistories = useRef<Map<string, CanvasHistoryState>>(new Map());
   const dragDepth = useRef(0);
   const view = useRef<CanvasCamera>({ x: 0, y: 0, scale: 1 });
   const pan = useRef<{ pointer: number; x: number; y: number } | null>(null);
@@ -65,20 +91,27 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   const [camera, setCamera] = useState<CanvasCamera>({ x: 0, y: 0, scale: 1 });
   const [panning, setPanning] = useState(false);
   const [images, setImages] = useState<VisibleImage[]>([]);
+  const [layoutUndo, setLayoutUndo] = useState<{ bounds: Map<string, ImageBounds>; camera: CanvasCamera } | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [inspectId, setInspectId] = useState<string | null>(null);
+  const inspected = images.find(image => image.id === inspectId);
+  const pictureEditor = useRef<PictureEditorHandle>(null);
   const preview = images.find((image) => image.id === previewId);
   const [ready, setReady] = useState(false);
   const [canvasId, setCanvasId] = useState('default');
   const activeCanvas = useRef('default');
   const switching = useRef(false);
-  const [history, setHistory] = useState<{ id: string; count: number }[]>([]);
+  const [history, setHistory] = useState<CanvasHistoryItem[]>([]);
   const cameraKey = () => activeCanvas.current === 'default' ? 'camera' : `camera-${activeCanvas.current}`;
   const [loadAttempt, setLoadAttempt] = useState(0);
   useEffect(() => { onReadyChange?.(ready); }, [ready, onReadyChange]);
   const [helpOpen, setHelpOpen] = useState(false);
   const [deletingFiles, setDeletingFiles] = useState<string[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
+  const [activeMedia, setActiveMedia] = useState<Set<string>>(new Set());
+  const activeMediaRef = useRef(activeMedia);
   const [contextMenuId, setContextMenuId] = useState<string | null>(null);
+  const contextMenuFiles = images.filter((image) => selected.includes(contextMenuId ?? "") ? selected.includes(image.id) : image.id === contextMenuId);
   const [dragOver, setDragOver] = useState(false);
   const cameraLoaded = useRef(false);
   const zoomTarget = useRef<CanvasCamera | null>(null);
@@ -87,8 +120,34 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   const cameraSaves = useRef(Promise.resolve());
 
   useEffect(() => {
-    onSelectionChange?.(images.filter((image) => selected.includes(image.id)));
+    const element = viewport.current!;
+    const updateVisibility = () => {
+      const previous = activeMediaRef.current;
+      const next = new Set(images.filter(image =>
+        selected.includes(image.id) || canvasMediaVisible(image, camera, { width: element.clientWidth, height: element.clientHeight }, previous.has(image.id))
+      ).map(image => image.id));
+      if (next.size === previous.size && [...next].every(id => previous.has(id))) return;
+      activeMediaRef.current = next;
+      setActiveMedia(next);
+    };
+    updateVisibility();
+    const observer = new ResizeObserver(updateVisibility);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [images, camera, selected]);
+
+  useEffect(() => {
+    onSelectionChange?.(images.filter((image) => image.url && selected.includes(image.id)));
   }, [images, selected, onSelectionChange]);
+
+  const mediaLoaded = useCallback((id: string, file: File) => {
+    const image = current.current.find(item => item.id === id);
+    if (!image || image.url) return;
+    const url = URL.createObjectURL(file);
+    urls.current.add(url);
+    current.current = current.current.map(item => item.id === id ? { ...item, file, url } : item);
+    setImages(current.current);
+  }, []);
 
   const changeView = useCallback((next: CanvasCamera) => {
     if (zoomFrame.current !== null) cancelAnimationFrame(zoomFrame.current);
@@ -143,11 +202,11 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   useEffect(() => {
     mounted.current = true;
     let cancelled = false;
-    Promise.all([canvasStorage(undefined, activeCanvas.current), getSetting<CanvasCamera>(cameraKey(), activeCanvas.current === 'default' ? CANVAS_CAMERA_KEY : undefined)]).then(([stored, savedCamera]) => {
+    Promise.all([canvasStorage(undefined, activeCanvas.current, true), getSetting<CanvasCamera>(cameraKey(), activeCanvas.current === 'default' ? CANVAS_CAMERA_KEY : undefined)]).then(([stored, savedCamera]) => {
       if (cancelled) return;
       current.current = stored.map((image) => {
-        const url = URL.createObjectURL(image.file);
-        urls.current.add(url);
+        const url = isCanvasFilePending(image.file) ? "" : URL.createObjectURL(image.file);
+        if (url) urls.current.add(url);
         return { ...image, url };
       });
       setImages(current.current);
@@ -246,16 +305,19 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       clearTimeout(cameraSave.current);
       await cameraSaves.current;
       await saveSetting(cameraKey(), view.current);
-      const nextId = id ?? `canvas-${Date.now()}-${crypto.randomUUID()}`;
+      const nextId = id ?? createNewCanvasId();
       if (!id) await canvasStorage([], nextId);
-      else await canvasStorage(undefined, nextId);
+      else await canvasStorage(undefined, nextId, true);
       activeCanvas.current = nextId;
+      setLayoutUndo(null);
       setCanvasId(nextId);
       onCanvasChange?.(nextId);
       setSelected([]);
       finishPan();
       drag.current = null;
       resize.current = null;
+      dragSnapshot.current = null;
+      resizeSnapshot.current = null;
       cameraLoaded.current = false;
       setLoadAttempt((attempt) => attempt + 1);
     } catch (error) {
@@ -280,11 +342,41 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     }
     try {
       await deleteCanvasStorage(id);
+      canvasHistories.current.delete(id);
+      cleanupUnreferencedUrls();
       await refreshHistory();
     } catch (error) {
       toast.add({ title: 'Could not delete canvas', description: error instanceof Error ? error.message : 'Please retry.', type: 'error' });
       throw error;
     }
+  }
+
+  function ensureRestoredUrl(item: VisibleImage): VisibleImage {
+    if (item.url && urls.current.has(item.url)) return item;
+    if (!isCanvasFilePending(item.file)) {
+      const url = URL.createObjectURL(item.file);
+      urls.current.add(url);
+      return { ...item, url };
+    }
+    return item;
+  }
+
+  function cleanupUnreferencedUrls() {
+    const referenced = collectReferencedUrls(current.current, canvasHistories.current.values());
+    for (const url of Array.from(urls.current)) {
+      if (!referenced.has(url)) {
+        URL.revokeObjectURL(url);
+        urls.current.delete(url);
+      }
+    }
+  }
+
+  function recordCanvasHistory(entry: CanvasHistoryEntry) {
+    const canvasId = activeCanvas.current;
+    const currentHist = canvasHistories.current.get(canvasId) ?? emptyCanvasHistory;
+    const nextHist = pushCanvasHistory(currentHist, entry, current.current);
+    canvasHistories.current.set(canvasId, nextHist);
+    cleanupUnreferencedUrls();
   }
 
   function update(next: VisibleImage[], save = true) {
@@ -293,20 +385,106 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     if (save) persist(next);
   }
 
+  function undo() {
+    if (!ready) return;
+    const canvasId = activeCanvas.current;
+    const currentHist = canvasHistories.current.get(canvasId) ?? emptyCanvasHistory;
+    const result = undoCanvasHistory(currentHist, current.current, view.current);
+    if (!result) return;
+    canvasHistories.current.set(canvasId, result.state);
+    const restored = result.items.map(ensureRestoredUrl);
+    update(restored, true);
+    if (result.camera) {
+      changeView(result.camera);
+    }
+    setLayoutUndo(null);
+    cleanupUnreferencedUrls();
+    const restoredIds = restored.map(item => item.id);
+    const validSelected = selected.filter(id => restoredIds.includes(id));
+    setSelected(validSelected.length ? validSelected : (restoredIds.length ? [restoredIds[restoredIds.length - 1]] : []));
+  }
+
+  function redo() {
+    if (!ready) return;
+    const canvasId = activeCanvas.current;
+    const currentHist = canvasHistories.current.get(canvasId) ?? emptyCanvasHistory;
+    const result = redoCanvasHistory(currentHist, current.current, view.current);
+    if (!result) return;
+    canvasHistories.current.set(canvasId, result.state);
+    const restored = result.items.map(ensureRestoredUrl);
+    update(restored, true);
+    if (result.camera) {
+      changeView(result.camera);
+    }
+    setLayoutUndo(null);
+    cleanupUnreferencedUrls();
+    const restoredIds = restored.map(item => item.id);
+    const validSelected = selected.filter(id => restoredIds.includes(id));
+    setSelected(validSelected.length ? validSelected : (restoredIds.length ? [restoredIds[restoredIds.length - 1]] : []));
+  }
+
   function select(id: string, additive = false) {
     setSelected((previous) => additive ? previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id] : [id]);
-    const list = current.current;
-    const image = list.find((item) => item.id === id);
-    if (image && list.at(-1)?.id !== id) update([...list.filter((item) => item.id !== id), image]);
+  }
+
+  function reorganize() {
+    const element = viewport.current;
+    if (!ready || !element || !current.current.length) return;
+    const previous = current.current;
+    const previousCamera = { ...view.current };
+    setLayoutUndo({ bounds: new Map(previous.map(({ id, x, y, width, height }) => [id, { x, y, width, height }])), camera: previousCamera });
+    const next = reorganizeCanvas(previous, element.clientWidth);
+    const nextCamera = fitCanvas(next, element.clientWidth, element.clientHeight);
+    if (!areCanvasItemsEqual(previous, next)) {
+      recordCanvasHistory({
+        items: previous,
+        camera: previousCamera,
+        nextCamera,
+        type: 'reorganize',
+      });
+    }
+    update(next);
+    changeView(nextCamera);
+    element.focus({ preventScroll: true });
+  }
+
+  function undoReorganize() {
+    if (!ready || !layoutUndo) return;
+    undo();
+  }
+
+  function duplicateSelection() {
+    const previous = current.current;
+    const copies = contextMenuFiles.map((image) => {
+      const url = URL.createObjectURL(image.file);
+      urls.current.add(url);
+      return { ...image, id: crypto.randomUUID(), url, x: image.x + 24, y: image.y + 24 };
+    });
+    recordCanvasHistory({ items: previous, type: 'generic' });
+    update([...previous, ...copies]);
+    setSelected(copies.map((image) => image.id));
+  }
+
+  function reorderSelection(front: boolean) {
+    const ids = new Set(contextMenuFiles.map((image) => image.id));
+    const chosen = current.current.filter((image) => ids.has(image.id));
+    const rest = current.current.filter((image) => !ids.has(image.id));
+    const previous = current.current;
+    const next = front ? [...rest, ...chosen] : [...chosen, ...rest];
+    if (!areCanvasItemsEqual(previous, next)) {
+      recordCanvasHistory({ items: previous, type: 'generic' });
+      update(next);
+    }
   }
 
   function remove(ids: string[]) {
     const removed = current.current.filter((item) => ids.includes(item.id));
-    update(current.current.filter((item) => !ids.includes(item.id)));
-    removed.forEach((image) => {
-      URL.revokeObjectURL(image.url);
-      urls.current.delete(image.url);
-    });
+    if (!removed.length) return;
+    const previous = current.current;
+    const next = previous.filter((item) => !ids.includes(item.id));
+    recordCanvasHistory({ items: previous, type: 'delete' });
+    update(next);
+    cleanupUnreferencedUrls();
     setSelected((previous) => previous.filter((id) => !ids.includes(id)));
     viewport.current?.focus({ preventScroll: true });
   }
@@ -336,6 +514,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
             x: origin.x + offset - (centered ? size.width / 2 : 0),
             y: origin.y + offset - (centered ? size.height / 2 : 0),
           };
+          recordCanvasHistory({ items: current.current, type: "generic" });
           update([...current.current, image]);
           setSelected([image.id]);
           offset += 24;
@@ -351,9 +530,16 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
 
   function finishDrag() {
     if (!drag.current && !resize.current) return;
+    const previous = dragSnapshot.current ?? resizeSnapshot.current;
+    const actionType = dragSnapshot.current ? "move" : "resize";
     drag.current = null;
     resize.current = null;
-    persist(current.current);
+    dragSnapshot.current = null;
+    resizeSnapshot.current = null;
+    if (previous && !areCanvasItemsEqual(previous, current.current)) {
+      recordCanvasHistory({ items: previous, type: actionType });
+      persist(current.current);
+    }
   }
 
   useImperativeHandle(ref, () => ({ modelPreview(id) {
@@ -383,6 +569,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     event.stopPropagation();
     viewport.current?.focus({ preventScroll: true });
     const position = point(event.clientX, event.clientY);
+    resizeSnapshot.current = cloneCanvasItems(current.current);
     resize.current = { id: image.id, pointer: event.pointerId, corner, ...position, image };
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -393,14 +580,21 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     event.preventDefault();
     event.stopPropagation();
     const step = event.shiftKey ? 40 : 10;
-    update(current.current.map((item) => item.id === id ? {
+    const previous = current.current;
+    const next = previous.map((item) => item.id === id ? {
       ...item, ...resizeImage(item, corner, direction[0] * step, direction[1] * step),
-    } : item));
+    } : item);
+    if (!areCanvasItemsEqual(previous, next)) {
+      recordCanvasHistory({ items: previous, type: "resize" });
+      update(next);
+    }
   }
 
   return (
     <>
-      <div
+      <ContextMenu open={contextMenuId === "background"} onOpenChange={(open) => setContextMenuId((id) => open ? "background" : id === "background" ? null : id)}>
+      <ContextMenuTrigger
+        render={<div />}
         ref={viewport}
         role="region"
         aria-label="Media canvas"
@@ -481,9 +675,27 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           importFiles(Array.from(event.dataTransfer.files), point(event.clientX, event.clientY));
         }}
         onKeyDown={(event) => {
-          if (!ready || event.target !== viewport.current) return;
+          if (!ready) return;
+          const target = event.target as HTMLElement | null;
+          if (!target || isNativeTextEditingTarget(target)) return;
+          if (target !== viewport.current && !viewport.current?.contains(target)) return;
+
+          if (isUndoKeyboardShortcut(event)) {
+            event.preventDefault();
+            if (layoutUndo && (canvasHistories.current.get(activeCanvas.current)?.past.length ?? 0) === 0) {
+              undoReorganize();
+            } else {
+              undo();
+            }
+            return;
+          }
+          if (isRedoKeyboardShortcut(event)) {
+            event.preventDefault();
+            redo();
+            return;
+          }
           if (!selected.length) return;
-          if (event.key === "Enter" && selected.length === 1 && images.some((image) => image.id === selected[0] && canvasFileKind(image.file) === "image")) {
+          if (event.key === "Enter" && selected.length === 1 && images.some((image) => image.url && image.id === selected[0] && canvasFileKind(image.file) === "image")) {
             event.preventDefault();
             setPreviewId(selected[0]);
             return;
@@ -497,9 +709,14 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           if (!direction) return;
           event.preventDefault();
           const step = event.shiftKey ? 40 : 10;
-          update(current.current.map((image) => selected.includes(image.id) ? {
+          const previous = current.current;
+          const next = previous.map((image) => selected.includes(image.id) ? {
             ...image, x: image.x + direction[0] * step, y: image.y + direction[1] * step,
-          } : image));
+          } : image);
+          if (!areCanvasItemsEqual(previous, next)) {
+            recordCanvasHistory({ items: previous, type: "move" });
+            update(next);
+          }
         }}
       >
         <div
@@ -507,20 +724,20 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})` }}
         >
           {images.map((image) => (
-            <ContextMenu key={image.id} open={contextMenuId === image.id} onOpenChange={(open) => setContextMenuId((id) => open ? image.id : id === image.id ? null : id)}>
+            <ContextMenu key={`${canvasId}:${image.id}`} open={contextMenuId === image.id} onOpenChange={(open) => setContextMenuId((id) => open ? image.id : id === image.id ? null : id)}>
             <ContextMenuTrigger
               render={<div />}
               data-canvas-image={image.id}
-              onContextMenu={() => { if (!selected.includes(image.id)) select(image.id); }}
+              onContextMenu={(event) => { event.stopPropagation(); if (!selected.includes(image.id)) select(image.id); }}
               onDoubleClick={(event) => {
-                if (canvasFileKind(image.file) !== "image" || (event.target as HTMLElement).closest("button")) return;
+                if (!image.url || canvasFileKind(image.file) !== "image" || (event.target as HTMLElement).closest("button")) return;
                 event.stopPropagation();
                 setPreviewId(image.id);
               }}
               className={cn("absolute touch-none cursor-grab select-none active:cursor-grabbing", panning && "cursor-grabbing")}
               style={{ left: image.x, top: image.y, width: image.width, height: image.height }}
               onPointerDownCapture={(event) => {
-                if ((event.target as HTMLElement).closest("[data-canvas-interactive]")) select(image.id, event.shiftKey);
+                if (event.button === 0 && (event.target as HTMLElement).closest("[data-canvas-interactive]")) select(image.id, event.shiftKey);
               }}
               onPointerDown={(event) => {
                 if (!event.isPrimary || event.button !== 0 || (event.target as HTMLElement).closest("[data-canvas-interactive]") || ((event.target as HTMLElement).closest("button") && !(event.target as HTMLElement).closest("[data-canvas-drag-handle]"))) return;
@@ -530,6 +747,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                 const ids = selected.includes(image.id) ? selected : [image.id];
                 if (!selected.includes(image.id)) select(image.id);
                 const position = point(event.clientX, event.clientY);
+                dragSnapshot.current = cloneCanvasItems(current.current);
                 drag.current = { ids, pointer: event.pointerId, x: position.x, y: position.y };
                 event.currentTarget.setPointerCapture(event.pointerId);
               }}
@@ -554,18 +772,12 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
               onPointerCancel={finishDrag}
               onLostPointerCapture={finishDrag}
             >
-              {canvasFileKind(image.file) === "image" ? (
-                // Local blob URLs need no Next.js image optimization.
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={image.url} alt={image.file.name || "Pasted image"} draggable={false} className="size-full rounded-xl object-contain" />
-              ) : <div className="flex size-full flex-col overflow-hidden rounded-xl border bg-card">
+              {canvasFileKind(image.file) === "image" ? (activeMedia.has(image.id) && <CanvasMedia key={image.url} image={image} onLoaded={mediaLoaded} />) : <div className="flex size-full flex-col overflow-hidden rounded-xl border bg-card">
                 <Button variant="secondary" size="sm" data-canvas-drag-handle className="h-7 w-full shrink-0 justify-start rounded-none border-0 pr-10 active:translate-y-0" aria-label={`Move ${image.file.name}`}>
                   <GripVerticalIcon /><span className="truncate">{image.file.name}</span>
                 </Button>
                 <div className="min-h-0 flex-1" data-canvas-interactive>
-                  {canvasFileKind(image.file) === "video" ? <video src={image.url} controls playsInline preload="metadata" aria-label={image.file.name} className="size-full object-contain"
-                    onError={() => toast.add({ id: `video-error-${image.id}`, title: `${image.file.name}: Could not play this video.`, type: "error" })} />
-                    : <CanvasModelViewer src={image.url} name={image.file.name} />}
+                  {activeMedia.has(image.id) && <CanvasMedia key={image.url} image={image} onLoaded={mediaLoaded} />}
                 </div>
               </div>}
               {selected.includes(image.id) && (
@@ -578,11 +790,39 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
             </ContextMenuTrigger>
             <ContextMenuContent data-canvas-interactive>
               <ContextMenuGroup>
-                <ContextMenuItem render={<a href={image.url} download={image.file.name} />}>
-                  <DownloadIcon /> Download
+                {contextMenuFiles.length === 1 && contextMenuFiles[0].url && canvasFileKind(contextMenuFiles[0].file) === "3d" && (
+                  <ContextMenuItem onClick={() => setInspectId(contextMenuFiles[0].id)}>
+                    <ScanIcon /> Inspect model
+                  </ContextMenuItem>
+                )}
+                {contextMenuFiles.length === 1 && contextMenuFiles[0].url && canvasFileKind(contextMenuFiles[0].file) === "image" && (
+                  <ContextMenuItem onClick={() => setPreviewId(contextMenuFiles[0].id)}>
+                    <PencilIcon /> Open / Edit
+                  </ContextMenuItem>
+                )}
+                <ContextMenuItem disabled={contextMenuFiles.some(image => !image.url)} onClick={duplicateSelection}>
+                  <CopyIcon /> Duplicate{contextMenuFiles.length > 1 && ` (${contextMenuFiles.length})`}
                 </ContextMenuItem>
-                <ContextMenuItem variant="destructive" onClick={() => setDeletingFiles([image.id])}>
-                  <Trash2Icon /> Delete
+                <ContextMenuItem onClick={() => reorderSelection(true)}>
+                  <ArrowUpToLineIcon /> Bring to front
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => reorderSelection(false)}>
+                  <ArrowDownToLineIcon /> Send to back
+                </ContextMenuItem>
+                <ContextMenuItem disabled={contextMenuFiles.some(image => !image.url)} onClick={() => {
+                  for (const file of contextMenuFiles) {
+                    const link = document.createElement("a");
+                    link.href = file.url;
+                    link.download = file.file.name;
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                  }
+                }}>
+                  <DownloadIcon /> Download{contextMenuFiles.length > 1 && ` (${contextMenuFiles.length})`}
+                </ContextMenuItem>
+                <ContextMenuItem variant="destructive" onClick={() => setDeletingFiles(contextMenuFiles.map((file) => file.id))}>
+                  <Trash2Icon /> Delete{contextMenuFiles.length > 1 && ` (${contextMenuFiles.length})`}
                 </ContextMenuItem>
               </ContextMenuGroup>
             </ContextMenuContent>
@@ -590,19 +830,34 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           ))}
           {selectionBox && <div aria-hidden="true" className="pointer-events-none absolute z-10 border border-primary bg-primary/10" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />}
         </div>
-      </div>
-      <Dialog open={!!preview} onOpenChange={(open) => { if (!open) setPreviewId(null); }}>
+      </ContextMenuTrigger>
+      <ContextMenuContent data-canvas-interactive>
+        <ContextMenuGroup>
+          <ContextMenuItem disabled={!ready || !images.length} onClick={() => setSelected(images.map((image) => image.id))}>
+            <ScanIcon /> Select all
+          </ContextMenuItem>
+        </ContextMenuGroup>
+      </ContextMenuContent>
+      </ContextMenu>
+      <Dialog open={!!inspected} onOpenChange={open => { if (!open) setInspectId(null); }}>
+        <DialogContent className="max-h-[90dvh] gap-3 overflow-y-auto sm:max-w-5xl" aria-describedby={undefined}>
+          <DialogTitle className="truncate pr-10"><span className="sr-only">Inspect model · </span>{inspected?.file.name}</DialogTitle>
+          {inspected && <ModelInspector key={inspected.id} src={inspected.url} file={inspected.file} />}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!preview} onOpenChange={(open) => { if (!open && (pictureEditor.current?.requestClose() ?? true)) setPreviewId(null); }}>
         <DialogContent className="w-fit max-w-[calc(100vw-2rem)] sm:max-w-[calc(100vw-4rem)]" aria-describedby={undefined}>
           <DialogTitle className="sr-only">{preview?.file.name || "Image preview"}</DialogTitle>
-          {preview && (
-            // Local blob URLs need no Next.js image optimization.
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={preview.url} alt={preview.file.name || "Image preview"} className="max-h-[80dvh] max-w-full object-contain" />
-          )}
+          {preview && <PictureEditor ref={pictureEditor} key={preview.id} url={preview.url} name={preview.file.name} onClose={() => setPreviewId(null)} onSave={async (file) => {
+            importFiles([file], { x: preview.x + preview.width + 24, y: preview.y });
+            await imports.current;
+            if (!current.current.some((image) => image.file === file)) throw new Error("Could not add edited picture to canvas.");
+            toast.add({ title: "Edited picture saved to canvas", type: "success" });
+          }} />}
         </DialogContent>
       </Dialog>
       <ConfirmDelete open={deletingFiles.length > 0} onOpenChange={(open) => { if (!open) setDeletingFiles([]); }} title="Delete canvas files?" description={`${deletingFiles.length} selected file(s) will be removed from this canvas.`} disabled={!ready} onConfirm={() => remove(deletingFiles)} />
-      <CanvasMenu canvasId={canvasId} history={history} onHistory={refreshHistory} onNew={() => void openCanvas()} onOpen={(id) => void openCanvas(id)} onDelete={deleteCanvas} title={canvasTitle(canvasId)} scale={camera.scale} ready={ready} onZoom={zoom} onReset={() => changeView({ x: 0, y: 0, scale: 1 })} />
+      <CanvasMenu canvasId={canvasId} history={history} onHistory={refreshHistory} onNew={() => void openCanvas()} onOpen={(id) => void openCanvas(id)} onDelete={deleteCanvas} title={canvasTitle(canvasId)} scale={camera.scale} ready={ready} onZoom={zoom} onReset={() => changeView({ x: 0, y: 0, scale: 1 })} canReorganize={images.length > 0} onReorganize={reorganize} />
       <div className="absolute left-4 top-4 flex items-center gap-2 text-muted-foreground">
         <input ref={fileInput} type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,.glb" className="hidden" aria-label="Add canvas files" onChange={(event) => {
           const files = Array.from(event.target.files ?? []);

@@ -207,6 +207,7 @@ export class StorageController {
         await tx.delete(savedData).where(and(eq(savedData.owner, owner), or(
           and(eq(savedData.kind, 'canvas'), eq(savedData.id, id)),
           and(eq(savedData.kind, 'settings'), eq(savedData.id, id === 'default' ? 'camera' : `camera-${id}`)),
+          and(eq(savedData.kind, 'settings'), eq(savedData.id, `canvas-name-${id}`)),
           chats.length ? and(eq(savedData.kind, 'chats'), inArray(savedData.id, chats)) : undefined,
         )));
       });

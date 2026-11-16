@@ -11,11 +11,15 @@ test("media tools route validated parameters and reject unsafe ranges", () => {
     { name: "extract_video_frames", video_index: 0, timestamps: [0, 1.5] },
     { name: "trim_video", video_index: 1, start: 2, end: 5 },
     { name: "render_3d_views", model_index: 0, views: ["front", "right", "back", "left"] },
+    { name: "inspect_3d", model_index: 0 },
+    { name: "optimize_3d", model_index: 1, max_texture_size: 1024 },
+    { name: "optimize_3d", model_index: 0, target_triangles: 100000, language: "th" },
+    { name: "optimize_3d", model_index: 0, target_triangles: 0 },
   ];
   for (const tool of tools) {
     const { name, ...args } = tool;
     const plan = generationPlan({ choices: [{ message: { tool_calls: [{ type: "function", function: { name, arguments: JSON.stringify({ prompt: "edit", ...args }) } }] } }] });
-    assert.deepEqual(plan.tasks[0], { category: name === "trim_video" ? "video" : "picture", prompt: "edit", mediaTool: tool });
+    assert.deepEqual(plan.tasks[0], { category: name === "inspect_3d" || name === "optimize_3d" ? "3d" : name === "trim_video" ? "video" : "picture", prompt: "edit", mediaTool: tool });
   }
   for (const invalid of [
     { name: "upscale_image", image_index: 0, scale: 100 },
@@ -26,6 +30,10 @@ test("media tools route validated parameters and reject unsafe ranges", () => {
     { name: "extract_video_frames", video_index: 0, timestamps: [] },
     { name: "render_3d_views", model_index: 0, views: ["front", "front"] },
     { name: "render_3d_views", model_index: 0, views: ["__proto__"] },
+    { name: "inspect_3d", model_index: -1 },
+    { name: "optimize_3d", model_index: 0, max_texture_size: 100000 },
+    { name: "optimize_3d", model_index: 0, language: "invalid" },
+    ...[-1, 1, 3, 4.5, "1000", null, Infinity, 5000001].map(target_triangles => ({ name: "optimize_3d", model_index: 0, target_triangles })),
   ]) assert.throws(() => validateMediaTool(invalid), /Invalid/);
 });
 
@@ -60,5 +68,6 @@ test("local tools reject absent sources and honor cancellation before processing
   const signal = new AbortController().signal;
   await assert.rejects(localMediaTool({ name: "render_3d_views", model_index: 0, views: ["front"] }, [], signal), /Select a GLB/);
   await assert.rejects(localMediaTool({ name: "trim_video", video_index: 0, start: 0, end: 1 }, [], signal), /Select a video/);
+  await assert.rejects(localMediaTool({ name: "inspect_3d", model_index: 0 }, [], signal), /Select a GLB/);
   await assert.rejects(localMediaTool({ name: "extract_video_frames", video_index: 0, timestamps: [0] }, [], AbortSignal.abort()));
 });

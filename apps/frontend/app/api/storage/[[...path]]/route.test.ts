@@ -35,3 +35,24 @@ test('an upstream body disconnect becomes a retryable HTTP error', async () => {
     expect(response.status).toBe(502);
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test('file responses reach the client before the upstream finishes', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const s3 of [false, true]) {
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const body = new ReadableStream<Uint8Array>({ start(c) { controller = c; } });
+      globalThis.fetch = (async (url) => s3 && String(url).includes('/storage/files/')
+        ? Response.json({ url: 'http://localhost:8333/private/file' })
+        : new Response(body)) as typeof fetch;
+      const response = await GET(new Request('http://localhost:3000/api/storage/files/asset'), {
+        params: Promise.resolve({ path: ['files', 'asset'] }),
+      });
+      const reader = response.body!.getReader();
+      controller.enqueue(new Uint8Array([1, 2]));
+      expect((await reader.read()).value).toEqual(new Uint8Array([1, 2]));
+      controller.close();
+      expect((await reader.read()).done).toBe(true);
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});

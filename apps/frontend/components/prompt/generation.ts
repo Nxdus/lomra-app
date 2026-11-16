@@ -1,14 +1,16 @@
 import { processImage, type ImageOperation } from "./image-tools";
+import { animationInput, animationFiles, rigFiles } from "./animation";
 import { localMediaTool, mediaToolModel, validateMediaTool, type MediaTool, type ToolSource } from "./media-tools";
 import type { Provider, ProviderRequest } from "@/components/api-provider";
 
 export type Category = "picture" | "video" | "3d";
 import { isMultiview, multiviewInput, type ModelView, type ModelViews } from "./multiview";
 export { modelViews, isMultiview, multiviewError, type ModelView, type ModelViews } from "./multiview";
-export type GenerationTask = { category: Category; prompt: string; texture?: boolean; viewIndices?: Partial<Record<ModelView, number>>; operation?: ImageOperation; mediaTool?: MediaTool };
+export type GenerationTask = { category: Category; prompt: string; aspectRatio?: string; texture?: boolean; viewIndices?: Partial<Record<ModelView, number>>; operation?: ImageOperation; mediaTool?: MediaTool };
 export type GeneratedFile = { url: string; name: string; kind: "image" | "video" | "file" };
 export type Generation = GenerationTask & {
-  id: string; model: string; status: string; requestId?: string; files?: GeneratedFile[]; error?: string; views?: ModelViews; messageIndex?: number;
+  id: string; model: string; status: string; requestId?: string; files?: GeneratedFile[]; error?: string; views?: ModelViews; messageIndex?: number; summary?: string;
+  motionJobs?: { rig?: string; motion?: string };
 };
 export type ConversationMessage = { role: "user" | "assistant"; content: string };
 type RequestProvider = (provider: Provider, options: ProviderRequest) => Promise<unknown>;
@@ -73,6 +75,47 @@ function pause(ms: number, signal: AbortSignal) {
   });
 }
 
+async function generateMotion(task: Generation, request: RequestProvider, signal: AbortSignal, update: (change: Partial<Generation>) => void, sources: ToolSource[]) {
+  const tool = task.mediaTool;
+  if (tool?.name !== "animate_3d" || !tool.motion_prompt) throw new Error("A motion prompt is required.");
+  const jobs = { ...task.motionJobs };
+  const outputs: Record<string, unknown> = {};
+  for (const stage of ["rig", "motion"] as const) {
+    signal.throwIfAborted();
+    const model = stage === "rig" ? "fal-ai/meshy/rigging" : "fal-ai/hunyuan-motion";
+    let id = jobs[stage];
+    if (!id) {
+      const input = stage === "rig" ? await animationInput(tool, sources, signal) : { prompt: tool.motion_prompt, duration: tool.duration ?? 4, output_format: "fbx" };
+      signal.throwIfAborted();
+      const submitted = await request("fal", { model, action: "submit", input, signal: AbortSignal.timeout(60_000) }) as { request_id?: string };
+      if (!submitted.request_id || !/^[a-zA-Z0-9_-]{1,100}$/.test(submitted.request_id)) throw new Error("Provider returned no valid motion job ID");
+      id = jobs[stage] = submitted.request_id;
+      update({ motionJobs: { ...jobs }, requestId: id });
+    }
+    const deadline = Date.now() + 20 * 60_000;
+    while (true) {
+      signal.throwIfAborted();
+      update({ status: stage === "rig" ? "Rigging character" : "Generating custom motion" });
+      const result = await request("fal", { model, action: "status", requestId: id, signal }) as { status?: string };
+      if (result.status === "COMPLETED") {
+        outputs[stage] = await request("fal", { model, action: "result", requestId: id, signal });
+        break;
+      }
+      if (!["IN_QUEUE", "IN_PROGRESS"].includes(result.status ?? "")) throw new Error(`The ${stage} job failed at Fal.`);
+      if (Date.now() >= deadline) throw new Error("Still waiting. Use Check job to continue without generating again.");
+      await pause(5000, signal);
+    }
+  }
+  signal.throwIfAborted();
+  const rig = outputs.rig as { rigged_character_glb?: { url?: string } };
+  const motion = outputs.motion as { fbx_file?: { url?: string } };
+  if (!safeMediaUrl(rig?.rigged_character_glb?.url) || !safeMediaUrl(motion?.fbx_file?.url)) throw new Error("Fal returned no rigged GLB or motion FBX.");
+  update({ status: "Fitting motion to character" });
+  const files = await (await import("./retarget-motion")).fitMotion(rig.rigged_character_glb.url, motion.fbx_file.url, signal);
+  update({ summary: "Custom motion fitted to the character's rest pose and leg proportions. Check foot contact and limb overlap; automatic fitting does not guarantee collision-free motion." });
+  return files;
+}
+
 export async function generate(
   task: Generation, request: RequestProvider, signal: AbortSignal,
   update: (change: Partial<Generation>) => void,
@@ -85,12 +128,19 @@ export async function generate(
   if (task.mediaTool) {
     validateMediaTool(task.mediaTool);
     if (task.model !== mediaToolModel(task.mediaTool)) throw new Error("Invalid media tool model.");
-    if (task.model === "Local media tools") return localMediaTool(task.mediaTool, sources, signal);
+    if (task.model === "Local media tools") return localMediaTool(task.mediaTool, sources, signal, summary => update({ summary }));
+    if (task.mediaTool.name === "animate_3d" && task.mediaTool.motion_prompt) {
+      try { return await generateMotion(task, request, signal, update, sources); }
+      catch (cause) {
+        if (signal.aborted) throw new Error("Stopped checking motion jobs. Submitted Fal jobs may still finish and charge; use Check job to resume without resubmitting.");
+        throw cause;
+      }
+    }
   }
   const provider = task.category === "3d" || task.mediaTool ? "fal" : "openrouter";
   const call = (options: ProviderRequest) => request(provider, { ...options, model: task.model, signal });
   if (task.category === "picture" && !task.mediaTool) {
-    const files = imageFiles(await call({ action: "image", input: task.prompt, images }));
+    const files = imageFiles(await call({ action: "image", input: task.prompt, images, ...(task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}) }));
     if (!files.length) throw new Error("The image model returned no supported images");
     return files;
   }
@@ -106,6 +156,7 @@ export async function generate(
         ...(task.texture === undefined ? {} : { textured_mesh: task.texture }),
       };
       let toolInput;
+      if (task.mediaTool?.name === "animate_3d" || task.mediaTool?.name === "rig_3d") toolInput = await animationInput(task.mediaTool, sources, signal);
       if (task.mediaTool && (task.mediaTool.name === "remove_background" || task.mediaTool.name === "upscale_image")) {
         const url = images[task.mediaTool.image_index];
         if (!url) throw new Error("Select the source image on the canvas first.");
@@ -126,6 +177,8 @@ export async function generate(
       if (status === "completed") {
         update({ status: "Loading result" });
         if (task.mediaTool) {
+          if (task.mediaTool.name === "rig_3d") return rigFiles(await call({ action: "result", requestId }));
+          if (task.mediaTool.name === "animate_3d") return animationFiles(await call({ action: "result", requestId }));
           const result = await call({ action: "result", requestId }) as { image?: { url?: string } };
           if (!safeMediaUrl(result.image?.url)) throw new Error("The image tool returned no supported image.");
           return [{ url: result.image.url, name: task.mediaTool.name === "remove_background" ? "Background removed" : `Upscaled ${task.mediaTool.name === "upscale_image" ? task.mediaTool.scale : 2}x`, kind: "image" }];

@@ -12,6 +12,7 @@ export type ProviderRequest = {
   input?: unknown;
   requestId?: string;
   images?: string[];
+  aspectRatio?: string;
   signal?: AbortSignal;
 };
 

@@ -41,6 +41,8 @@ export function validateSavedState(kind: string, id: string, value: unknown) {
     });
   }
   if (kind === 'settings') {
+    if (/^canvas-name-(default|canvas-\d{13}-[a-f0-9-]{36})$/.test(id))
+      valid = typeof value === 'string' && value.trim().length > 0 && value.length <= 200;
     if (id === 'camera' || /^camera-canvas-\d{13}-[a-f0-9-]{36}$/.test(id))
       valid =
         record(value) &&

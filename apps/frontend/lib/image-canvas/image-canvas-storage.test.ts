@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { localCanvasStorage as canvasStorage, canvasFileError, canvasFileKind, canvasFileSize, displaySize, imageFileError } from "./image-canvas-storage";
-import { canvasHistory, canvasStorage as remoteCanvasStorage } from './image-canvas-storage';
+import { canvasHistory, canvasStorage as remoteCanvasStorage, isCanvasFilePending, loadCanvasFile, renameCanvas } from './image-canvas-storage';
 import { storageFile, storage } from '../storage';
 
 test("canvas accepts videos and GLB, checks size limits and rejects invalid GLB headers", async () => {
@@ -19,6 +19,31 @@ test("canvas accepts videos and GLB, checks size limits and rejects invalid GLB 
   await assert.rejects(canvasFileSize(new File(["invalid"], "mesh.glb"), "blob:test"), /Invalid GLB/);
   const header = new Uint32Array([0x46546c67, 2, 12]);
   assert.deepEqual(await canvasFileSize(new File([header], "mesh.glb"), "blob:test"), { width: 320, height: 320 });
+});
+
+test('concurrent file readers share a download and release it after completion or failure', async () => {
+  const originalFetch = globalThis.fetch;
+  let downloads = 0;
+  let fail = false;
+  try {
+    globalThis.fetch = (async (url) => {
+      if (String(url) === '/api/storage') return Response.json({ account: 'account-a' });
+      downloads++;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return fail ? new Response(null, { status: 403 }) : new Response('bytes');
+    }) as typeof fetch;
+    const [a, b] = await Promise.all([storageFile('shared'), storageFile('shared')]);
+    assert.equal(downloads, 1);
+    assert.equal(await a!.text(), 'bytes');
+    assert.equal(await b!.text(), 'bytes');
+    await storageFile('shared');
+    assert.equal(downloads, 2);
+    fail = true;
+    await assert.rejects(storageFile('shared'), /403/);
+    fail = false;
+    assert.equal(await (await storageFile('shared'))!.text(), 'bytes');
+    assert.equal(downloads, 4);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('remote canvas restores file bytes and saves layout without uploading unchanged files', async () => {
@@ -48,6 +73,43 @@ test('remote canvas restores file bytes and saves layout without uploading uncha
     assert.equal(manifest[0].x, 55);
     assert.equal(manifest[1].name, 'new.png');
     assert.ok(calls.findIndex((call) => call.path === '/api/storage/files/file-2') < calls.indexOf(write));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('canvas layout opens without file downloads and saves safely while media loads or fails', async () => {
+  const originalFetch = globalThis.fetch;
+  const items = ['lazy-a', 'lazy-b'].map(id => ({ id, name: `${id}.png`, type: 'image/png', lastModified: 123, x: 10, y: 20, width: 100, height: 80 }));
+  let downloads = 0;
+  let fail = true;
+  let saved: unknown;
+  try {
+    globalThis.fetch = (async (url, options) => {
+      const path = String(url);
+      if (path === '/api/storage') return Response.json({ account: 'account-a' });
+      if (path === '/api/storage/canvas') return Response.json([{ id: 'lazy', value: items }]);
+      if (path.startsWith('/api/storage/files/')) {
+        assert.notEqual(options?.method, 'PUT', 'must not upload placeholder bytes');
+        downloads++;
+        return fail ? new Response(null, { status: 404 }) : new Response('real-bytes');
+      }
+      saved = JSON.parse(options!.body as string).value;
+      return Response.json({ saved: true });
+    }) as typeof fetch;
+    const layout = await remoteCanvasStorage(undefined, 'lazy', true);
+    assert.equal(downloads, 0);
+    assert.ok(layout.every(image => isCanvasFilePending(image.file)));
+    assert.deepEqual(layout.map(({ id, x, y, width, height }) => ({ id, x, y, width, height })), items.map(({ id, x, y, width, height }) => ({ id, x, y, width, height })));
+    await assert.rejects(loadCanvasFile(layout[0]), /404/);
+    await remoteCanvasStorage(layout, 'lazy');
+    assert.deepEqual(saved, items);
+    fail = false;
+    const file = await loadCanvasFile(layout[0]);
+    assert.equal(await file.text(), 'real-bytes');
+    assert.equal(file.name, items[0].name);
+    assert.equal(file.lastModified, 123);
+    assert.equal(isCanvasFilePending(file), false);
+    await remoteCanvasStorage([{ ...layout[0], file, x: 55 }, layout[1]], 'lazy');
+    assert.deepEqual(saved, [{ ...items[0], x: 55 }, items[1]]);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -185,6 +247,7 @@ test('separate canvases preserve the original and reopen saved file layouts', as
     globalThis.fetch = (async (url, options) => {
       const path = String(url);
       if (path === '/api/storage/canvas' && !options?.method) return Response.json([...rows].map(([id, value]) => ({ id, value })));
+      if (path === '/api/storage/settings') return Response.json([]);
       if (path.startsWith('/api/storage/canvas/') && options?.method === 'PUT') {
         rows.set(decodeURIComponent(path.split('/').at(-1)!), JSON.parse(options.body as string).value);
         return Response.json({ saved: true });
@@ -201,5 +264,28 @@ test('separate canvases preserve the original and reopen saved file layouts', as
     assert.equal(await restored[0].file.text(), 'history-bytes');
     assert.deepEqual(await canvasHistory(), [{ id, count: 1 }, { id: 'default', count: 0 }]);
     await assert.rejects(remoteCanvasStorage(undefined, 'missing'), /no longer exists/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('canvas names are trimmed, persist separately from file manifests and reject blank names', async () => {
+  const originalFetch = globalThis.fetch;
+  const settings = new Map<string, unknown>();
+  const manifest = [{ id: 'model', name: 'source.glb' }];
+  try {
+    globalThis.fetch = (async (url, options) => {
+      const path = String(url);
+      if (path === '/api/storage') return Response.json({ account: 'account-a' });
+      if (path === '/api/storage/settings') return Response.json([...settings].map(([id, value]) => ({ id, value })));
+      if (path === '/api/storage/canvas') return Response.json([{ id: 'default', value: manifest }]);
+      assert.equal(path, '/api/storage/settings/canvas-name-default');
+      assert.equal(options?.method, 'PUT');
+      settings.set('canvas-name-default', JSON.parse(options!.body as string).value);
+      return Response.json({ saved: true });
+    }) as typeof fetch;
+    assert.equal(await renameCanvas('default', '  Models  '), 'Models');
+    assert.deepEqual(await canvasHistory(), [{ id: 'default', count: 1, name: 'Models' }]);
+    await assert.rejects(renameCanvas('default', '  '), /cannot be empty/);
+    assert.deepEqual(await canvasHistory(), [{ id: 'default', count: 1, name: 'Models' }]);
+    assert.deepEqual(manifest, [{ id: 'model', name: 'source.glb' }]);
   } finally { globalThis.fetch = originalFetch; }
 });

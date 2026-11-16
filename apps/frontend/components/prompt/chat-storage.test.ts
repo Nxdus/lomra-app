@@ -51,3 +51,43 @@ test("chat history is isolated by canvas and legacy chats belong to the original
     else Reflect.deleteProperty(globalThis, 'localStorage');
   }
 });
+
+test("inline GLB results upload as binary once, leaving only a small durable link in chat", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousLocalStorage = globalThis.localStorage;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => 'true' } });
+  const file = { kind: "file" as const, name: "GLB", url: "data:model/gltf-binary;base64,Z2xURg==" };
+  const chat: Chat = { id: 'binary-chat', title: 'test', updatedAt: 1, history: [], models: [], generations: [{ id: 'g', category: '3d', model: 'Local media tools', status: 'Completed', prompt: 'optimize', files: [file] }] };
+  let uploaded = 0, saved: Chat | undefined, failUpload = true;
+  try {
+    globalThis.fetch = (async (url, options) => {
+      const path = String(url);
+      if (path.startsWith('data:')) return previousFetch(url, options);
+      if (path === '/api/storage') return Response.json({ account: null });
+      if (path.startsWith('/api/storage/files/') && options?.method === 'PUT') {
+        uploaded++;
+        assert.ok(options.body instanceof File);
+        assert.equal(options.body.size, 4);
+        return Response.json({}, { status: failUpload ? 500 : 200 });
+      }
+      if (options?.method === 'PUT') {
+        saved = JSON.parse(options.body as string).value;
+        assert.ok((options.body as string).length < 1000);
+        return Response.json({ saved: true });
+      }
+      return Response.json(saved ? [{ value: saved }] : []);
+    }) as typeof fetch;
+    await assert.rejects(chatStorage(chat), /Could not access canvas file/);
+    assert.equal(saved, undefined);
+    failUpload = false;
+    await chatStorage(chat);
+    assert.match(saved!.generations[0].files![0].url, /^\/api\/storage\/files\/[\w-]+$/);
+    assert.equal(file.url, 'data:model/gltf-binary;base64,Z2xURg==');
+    await chatStorage(chat);
+    assert.equal(uploaded, 2, 'failed upload retries; successful uploads are reused');
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousLocalStorage) Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: previousLocalStorage });
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
+});

@@ -1,4 +1,5 @@
 import { canImportBrowserData, storage, storageFile } from '../storage';
+import { saveSetting } from '../settings';
 
 export type CanvasImage = {
   id: string;
@@ -41,6 +42,14 @@ export async function localCanvasStorage(images?: CanvasImage[]): Promise<Canvas
 
 type SavedCanvasImage = Omit<CanvasImage, 'file'> & { name: string; type: string; lastModified: number };
 const uploaded = new Set<string>();
+const pendingFiles = new WeakSet<File>();
+export const isCanvasFilePending = (file: File) => pendingFiles.has(file);
+
+export async function loadCanvasFile(image: Pick<CanvasImage, 'id' | 'file'>) {
+  const blob = await storageFile(image.id);
+  if (!blob) throw new Error('Canvas file missing');
+  return new File([blob], image.file.name, { type: image.file.type, lastModified: image.file.lastModified });
+}
 export async function deleteCanvasStorage(id: string) {
   // Remove the legacy copy first so deleting the original cannot reimport its images.
   if (id === 'default' && await canImportBrowserData()) {
@@ -49,9 +58,21 @@ export async function deleteCanvasStorage(id: string) {
   await storage(`canvas/${encodeURIComponent(id)}`, 'DELETE');
 }
 
-export async function canvasHistory(): Promise<{ id: string; count: number }[]> {
-  const rows: { id: string; value: SavedCanvasImage[] }[] = await storage('canvas');
-  return rows.map((row) => ({ id: row.id, count: row.value.length })).sort((a, b) => (Number(b.id.split('-')[1]) || 0) - (Number(a.id.split('-')[1]) || 0));
+export type CanvasHistoryItem = { id: string; count: number; name?: string };
+
+export async function renameCanvas(id: string, name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Canvas name cannot be empty.');
+  await saveSetting(`canvas-name-${id}`, trimmed);
+  return trimmed;
+}
+
+export async function canvasHistory(): Promise<CanvasHistoryItem[]> {
+  const [rows, settings]: [{ id: string; value: SavedCanvasImage[] }[], { id: string; value: unknown }[]] = await Promise.all([storage('canvas'), storage('settings')]);
+  return rows.map((row) => {
+    const name = settings.find(setting => setting.id === `canvas-name-${row.id}`)?.value;
+    return { id: row.id, count: row.value.length, ...(typeof name === 'string' && name.trim() ? { name } : {}) };
+  }).sort((a, b) => (Number(b.id.split('-')[1]) || 0) - (Number(a.id.split('-')[1]) || 0));
 }
 
 export function canvasTitle(id: string) {
@@ -69,7 +90,7 @@ async function saveCanvas(images: CanvasImage[], id: string) {
   await storage(`canvas/${encodeURIComponent(id)}`, 'PUT', manifest);
 }
 
-export async function canvasStorage(images?: CanvasImage[], id = 'default'): Promise<CanvasImage[]> {
+export async function canvasStorage(images?: CanvasImage[], id = 'default', layoutOnly = false): Promise<CanvasImage[]> {
   if (images !== undefined) {
     await saveCanvas(images, id);
     return images;
@@ -83,6 +104,13 @@ export async function canvasStorage(images?: CanvasImage[], id = 'default'): Pro
       await saveCanvas(legacy, id);
       return legacy;
     }
+    if (layoutOnly) return saved.value.map(({ name, type, lastModified, ...item }) => {
+      const file = new File([], name, { type, lastModified });
+      pendingFiles.add(file);
+      // These files already exist remotely; saving a layout must never upload empty placeholders.
+      uploaded.add(item.id);
+      return { ...item, file };
+    });
     const restored: CanvasImage[] = new Array(saved.value.length);
     let cursor = 0;
     await Promise.all(Array.from({ length: Math.min(4, saved.value.length) }, async () => {

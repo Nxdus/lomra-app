@@ -1,27 +1,33 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { toast } from "@/components/ui/toast";
 
-export function CanvasModelViewer({ src, name }: { src: string; name: string }) {
+export function CanvasModelViewer({ src, name, onLoad, onError }: { src: string; name: string; onLoad?: () => void; onError?: () => void }) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("Loading 3D model…");
+  const notifyLoaded = useEffectEvent(() => onLoad?.());
+  const notifyError = useEffectEvent(() => onError?.());
 
   useEffect(() => {
     const container = host.current!;
     let disposed = false;
     let viewer: HTMLElement | undefined;
-    const loaded = () => setStatus("");
+    const loaded = () => { setStatus(""); notifyLoaded(); };
     const failed = () => {
       setStatus("");
+      notifyError();
       toast.add({ id: `model-preview-error:${src}`, title: `Could not display ${name}. Check the file and WebGL support.`, type: "error" });
     };
-    import("@google/model-viewer").then(() => {
+    import("@google/model-viewer").then(({ ModelViewerElement }) => {
       if (disposed) return;
+      // Evict decoded models once disconnected scenes release them (model-viewer waits 10 ms).
+      ModelViewerElement.modelCacheSize = 0;
       viewer = document.createElement("model-viewer");
       viewer.setAttribute("src", src);
       viewer.setAttribute("alt", name);
       viewer.setAttribute("camera-controls", "");
+      viewer.setAttribute("autoplay", "");
       viewer.setAttribute("touch-action", "none");
       viewer.setAttribute("loading", "eager");
       viewer.setAttribute("interaction-prompt", "none");

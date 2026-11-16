@@ -1,5 +1,5 @@
-import type { ConversationMessage, Generation } from "./generation";
-import { canImportBrowserData, storage } from "@/lib/storage";
+import type { ConversationMessage, GeneratedFile, Generation } from "./generation";
+import { canImportBrowserData, storage, storageFile } from "@/lib/storage";
 
 export type Chat = {
   id: string;
@@ -42,19 +42,35 @@ async function localChats(change?: Chat | string): Promise<Chat[]> {
 }
 
 let migration: Promise<void> | undefined;
+const savedFiles = new WeakMap<GeneratedFile, Promise<GeneratedFile>>();
+
+async function persistChatFiles(chat: Chat): Promise<Chat> {
+  return { ...chat, generations: await Promise.all(chat.generations.map(async task => ({
+    ...task, ...(task.files ? { files: await Promise.all(task.files.map(file => {
+      if (file.kind !== "file" || (!file.url.startsWith("data:") && !file.url.startsWith("blob:"))) return file;
+      let saved = savedFiles.get(file);
+      if (!saved) {
+        saved = persistentUrl(file.url, true).then(url => ({ ...file, url })).catch(error => { savedFiles.delete(file); throw error; });
+        savedFiles.set(file, saved);
+      }
+      return saved;
+    })) } : {}),
+  }))) };
+}
+
 export async function chatStorage(change?: Chat | string, canvasId = "default"): Promise<Chat[]> {
   migration ??= (async () => {
     if (localStorage.getItem('lomra-chats-migrated')) return;
     if (!await canImportBrowserData()) return;
     const existing: { id: string }[] = await storage('chats');
     for (const chat of await localChats()) {
-      if (!existing.some((row) => row.id === chat.id)) await storage(`chats/${encodeURIComponent(chat.id)}`, 'PUT', chat);
+      if (!existing.some((row) => row.id === chat.id)) await storage(`chats/${encodeURIComponent(chat.id)}`, 'PUT', await persistChatFiles(chat));
     }
     localStorage.setItem('lomra-chats-migrated', 'true');
   })().catch((error) => { migration = undefined; throw error; });
   await migration;
   if (typeof change === 'string') await storage(`chats/${encodeURIComponent(change)}`, 'DELETE');
-  else if (change) await storage(`chats/${encodeURIComponent(change.id)}`, 'PUT', change);
+  else if (change) await storage(`chats/${encodeURIComponent(change.id)}`, 'PUT', await persistChatFiles(change));
   const rows: { value: Chat }[] = await storage('chats');
   return rows.map((row) => row.value).filter((chat) => (chat.canvasId ?? 'default') === canvasId).sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -65,7 +81,15 @@ export function restoreGenerations(generations: Generation[]): Generation[] {
   });
 }
 
-export async function persistentUrl(url: string): Promise<string> {
+export async function persistentUrl(url: string, binary = false): Promise<string> {
+  if (binary && (url.startsWith("blob:") || url.startsWith("data:"))) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error("Could not read generated file.");
+    const blob = await response.blob();
+    const id = crypto.randomUUID();
+    await storageFile(id, new File([blob], "GLB.glb", { type: "model/gltf-binary" }));
+    return `/api/storage/files/${id}`;
+  }
   if (!url.startsWith("blob:")) return url;
   const blob = await (await fetch(url)).blob();
   return new Promise((resolve, reject) => {

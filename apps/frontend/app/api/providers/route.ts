@@ -1,4 +1,5 @@
 import { chatCompletion } from "./chat-stream";
+import { falErrorMessage } from "./provider-error";
 import { MAX_MEDIA_BYTES, MAX_MEDIA_ITEMS } from "@/components/prompt/media";
 import { generationPlan, generationTools, routingInstruction } from "./generation-tools";
 
@@ -22,7 +23,7 @@ export async function POST(request: Request) {
     return json({ message: "Expected JSON" }, 400);
   }
   if (!body || typeof body !== "object") return json({ message: "Invalid request" }, 400);
-  const { provider, action, model, input, requestId, images } = body;
+  const { provider, action, model, input, requestId, images, aspectRatio } = body;
   if (provider !== "openrouter" && provider !== "fal") {
     return json({ message: "Unknown provider" }, 400);
   }
@@ -95,7 +96,8 @@ export async function POST(request: Request) {
       if (images !== undefined && (action !== "image" || !Array.isArray(images) || images.length > MAX_MEDIA_ITEMS ||
         images.some((url: unknown) => typeof url !== "string" || !/^data:image\/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/.test(url) || url.split(",")[1].length % 4 !== 0) ||
         images.reduce((sum: number, url: string) => sum + url.length, 0) > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + MAX_MEDIA_ITEMS * 64)) return json({ message: "Invalid reference images (up to 10 images, 20 MB total)" }, 400);
-      payload = { model, prompt: input, ...(images?.length ? { input_references: images.map((url: string) => ({ type: "image_url", image_url: { url } })) } : {}) };
+      if (aspectRatio !== undefined && (action !== "image" || typeof aspectRatio !== "string" || !["1:1", "3:4", "9:16", "4:3", "16:9"].includes(aspectRatio))) return json({ message: "Invalid image aspect ratio" }, 400);
+      payload = { model, prompt: input, ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}), ...(images?.length ? { input_references: images.map((url: string) => ({ type: "image_url", image_url: { url } })) } : {}) };
     } else if (provider === "openrouter" && (action === "video-status" || action === "video-content")) {
       if (typeof requestId !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(requestId)) return json({ message: "A valid request ID is required" }, 400);
       url = `https://openrouter.ai/api/v1/videos/${requestId}${action === "video-content" ? "/content" : ""}`;
@@ -104,7 +106,21 @@ export async function POST(request: Request) {
         return json({ message: "Model input is required" }, 400);
       }
       url = `https://queue.fal.run/${model}`;
-      payload = input;
+      if (model === "fal-ai/meshy/rigging") {
+        const { model_url, enable_animation, animation_action_id } = input;
+        if (typeof model_url !== "string" || model_url.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + 64 ||
+          !/^data:model\/gltf-binary;base64,Z2xURg[A-Za-z0-9+/]*={0,2}$/.test(model_url) ||
+          (enable_animation !== false && (enable_animation !== true || ![0, 30, 14, 28, 22].includes(animation_action_id)))) {
+          return json({ message: "Invalid GLB animation input or unsupported preset" }, 400);
+        }
+        payload = { model_url, enable_animation, ...(enable_animation ? { animation_action_id } : {}) };
+      } else if (model === "fal-ai/hunyuan-motion") {
+        const { prompt, duration } = input;
+        if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 400 || typeof duration !== "number" || !Number.isFinite(duration) || duration < 2 || duration > 10) return json({ message: "Invalid motion prompt or duration" }, 400);
+        payload = { prompt: prompt.trim(), duration, output_format: "fbx" };
+      } else {
+        payload = input;
+      }
     } else if (provider === "fal" && (action === "status" || action === "result" || action === "cancel")) {
       if (typeof requestId !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(requestId)) {
         return json({ message: "A valid request ID is required" }, 400);
@@ -130,13 +146,16 @@ export async function POST(request: Request) {
       });
       if (!response.ok) {
         const status = response.status;
-        const message = status === 401 ? "API key was rejected" :
+        let message = status === 401 ? "API key was rejected" :
           status === 403 ? (provider === "fal" && (action === "usage" || action === "credits")
             ? "Credit usage requires a Fal key with billing permissions. Check usage in the Fal dashboard or update this key's permissions."
             : "This key does not have permission for this operation") :
           status === 402 ? "Insufficient provider credits" :
           status === 429 ? "Provider rate limit reached. Try again later" :
           "Provider could not complete the request";
+        if (provider === "fal" && ["submit", "status", "result", "cancel"].includes(action) && ![401, 402, 403, 429].includes(status)) {
+          message = await falErrorMessage(response, action, key);
+        }
         return json({ message }, [400, 401, 402, 403, 404, 422, 429].includes(status) ? status : 502);
       }
       if (action === "video-content") {

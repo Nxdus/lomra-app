@@ -43,7 +43,21 @@ export async function storage(path: string, method = 'GET', value?: unknown) {
   return response.json();
 }
 
+const pendingFiles = new Map<string, Promise<Blob | undefined>>();
+
 export async function storageFile(id: string, file?: File) {
+  const { account } = await storageSession();
+  if (file) return transferFile(id, file);
+  const key = JSON.stringify([account, id]);
+  let pending = pendingFiles.get(key);
+  if (!pending) {
+    pending = transferFile(id).finally(() => pendingFiles.delete(key));
+    pendingFiles.set(key, pending);
+  }
+  return pending;
+}
+
+async function transferFile(id: string, file?: File) {
   const { account } = await storageSession();
   for (let attempt = 0; ; attempt++) {
     try {
