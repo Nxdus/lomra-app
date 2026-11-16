@@ -165,3 +165,13 @@ test("Stop reports cancellation failure without claiming the job stopped", async
     throw new DOMException("Stopped", "AbortError");
   }, controller.signal, () => {}), /Could not confirm job cancellation/);
 });
+
+test("image generation forwards a requested aspect ratio with its source references", async () => {
+  const files = await generate({ id: "resize", category: "picture", prompt: "Recompose", aspectRatio: "9:16", model: "selected/image", status: "Waiting" }, async (provider, options) => {
+    assert.equal(provider, "openrouter");
+    assert.equal(options.aspectRatio, "9:16");
+    assert.deepEqual(options.images, ["data:image/png;base64,YQ=="]);
+    return { data: [{ b64_json: "Yg==", media_type: "image/png" }] };
+  }, new AbortController().signal, () => {}, "data:image/png;base64,YQ==");
+  assert.equal(files.length, 1);
+});

@@ -67,8 +67,10 @@ async function handle(request: Request, context: { params: Promise<{ path?: stri
       // Keep S3 private: remote development forwards only the app's port.
       const object = await fetch(url, { cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(120_000) });
       if (!object.ok) return Response.json({ message: 'Object storage unavailable. Please retry.' }, { status: 502 });
-      const bytes = await object.arrayBuffer();
-      return new Response(bytes, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+      return new Response(object.body, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+    }
+    if (file && request.method === 'GET' && response.ok) {
+      return new Response(response.body, { headers: { 'Content-Type': response.headers.get('content-type') ?? 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
     }
     // Read inside the try: upstream disconnects can happen after headers arrive.
     const body = await response.arrayBuffer();

@@ -2,10 +2,14 @@ import type { GeneratedFile } from "./generation";
 import { canvasFileKind } from "@/lib/image-canvas/image-canvas-storage";
 
 export type MediaTool =
+  | { name: "rig_3d"; model_index: number }
+  | { name: "animate_3d"; model_index: number; animation?: "idle" | "walk" | "run" | "wave" | "dance"; motion_prompt?: string; duration?: number }
   | { name: "remove_background"; image_index: number }
   | { name: "upscale_image"; image_index: number; scale: number }
   | { name: "extract_video_frames"; video_index: number; timestamps: number[] }
   | { name: "trim_video"; video_index: number; start: number; end: number }
+  | { name: "inspect_3d"; model_index: number }
+  | { name: "optimize_3d"; model_index: number; max_texture_size?: number; target_triangles?: number; language?: "en" | "th" }
   | { name: "render_3d_views"; model_index: number; views: string[] };
 export type ToolSource = { file: File; url: string };
 export const viewAngles: Record<string, number> = { front: 0, right: 90, back: 180, left: 270 };
@@ -14,14 +18,20 @@ export function validateMediaTool(value: unknown): asserts value is MediaTool {
   const index = (n: number) => Number.isInteger(n) && n >= 0 && n < 10;
   const time = (n: number) => Number.isFinite(n) && n >= 0;
   if (!tool || !(
+    (tool.name === "rig_3d" && index(tool.model_index)) ||
+    (tool.name === "animate_3d" && index(tool.model_index) && ((tool.motion_prompt === undefined && ["idle", "walk", "run", "wave", "dance"].includes(tool.animation ?? "")) || (tool.animation === undefined && typeof tool.motion_prompt === "string" && tool.motion_prompt.trim().length > 0 && tool.motion_prompt.length <= 400)) && (tool.duration === undefined || (Number.isFinite(tool.duration) && tool.duration >= 2 && tool.duration <= 10 && Number.isInteger(tool.duration * 2)))) ||
     (tool.name === "remove_background" && index(tool.image_index)) ||
     (tool.name === "upscale_image" && index(tool.image_index) && [2, 4].includes(tool.scale)) ||
     (tool.name === "extract_video_frames" && index(tool.video_index) && Array.isArray(tool.timestamps) && tool.timestamps.length > 0 && tool.timestamps.length <= 16 && tool.timestamps.every(time)) ||
     (tool.name === "trim_video" && index(tool.video_index) && time(tool.start) && time(tool.end) && tool.end > tool.start && tool.end - tool.start <= 120) ||
+    (tool.name === "inspect_3d" && index(tool.model_index)) ||
+    (tool.name === "optimize_3d" && index(tool.model_index) && (tool.language === undefined || ["en", "th"].includes(tool.language)) && (tool.max_texture_size === undefined || [512, 1024, 2048, 4096].includes(tool.max_texture_size)) && (tool.target_triangles === undefined || (Number.isInteger(tool.target_triangles) && (tool.target_triangles === 0 || tool.target_triangles >= 4) && tool.target_triangles <= 5_000_000))) ||
     (tool.name === "render_3d_views" && index(tool.model_index) && Array.isArray(tool.views) && tool.views.length > 0 && tool.views.length <= 4 && new Set(tool.views).size === tool.views.length && tool.views.every(v => Object.hasOwn(viewAngles, v)))
   )) throw new Error("Invalid media tool arguments");
 }
 export function mediaToolModel(tool: MediaTool) {
+  if (tool.name === "rig_3d") return "fal-ai/meshy/rigging";
+  if (tool.name === "animate_3d") return tool.motion_prompt ? "fal-ai/hunyuan-motion" : "fal-ai/meshy/rigging";
   return tool.name === "remove_background" ? "fal-ai/birefnet/v2" : tool.name === "upscale_image" ? "fal-ai/esrgan" : "Local media tools";
 }
 
@@ -46,16 +56,22 @@ async function seek(video: HTMLVideoElement, seconds: number, signal: AbortSigna
   await ready;
 }
 
-export async function localMediaTool(tool: MediaTool, sources: ToolSource[], signal: AbortSignal): Promise<GeneratedFile[]> {
+export async function localMediaTool(tool: MediaTool, sources: ToolSource[], signal: AbortSignal, report: (summary: string) => void = () => {}): Promise<GeneratedFile[]> {
   validateMediaTool(tool);
   signal.throwIfAborted();
-  if (tool.name === "remove_background" || tool.name === "upscale_image") throw new Error("This tool requires Fal.");
+  if (tool.name === "remove_background" || tool.name === "upscale_image" || tool.name === "animate_3d" || tool.name === "rig_3d") throw new Error("This tool requires Fal.");
+  if (tool.name === "inspect_3d" || tool.name === "optimize_3d") {
+    const source = sources.filter(s => canvasFileKind(s.file) === "3d")[tool.model_index];
+    if (!source) throw new Error("Select a GLB model on the canvas first.");
+    return (await import("./model-tools")).processModel(tool, source.file, signal, report);
+  }
   if (tool.name === "render_3d_views") {
     const source = sources.filter(s => canvasFileKind(s.file) === "3d")[tool.model_index];
     if (!source) throw new Error("Select a GLB model on the canvas first.");
     const THREE = await import("three");
     const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-    const gltf = await new GLTFLoader().parseAsync(await source.file.arrayBuffer(), "");
+    const { MeshoptDecoder } = await import("meshoptimizer");
+    const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).parseAsync(await source.file.arrayBuffer(), "");
     let renderer: InstanceType<typeof THREE.WebGLRenderer> | undefined;
     const files: GeneratedFile[] = [];
     try {

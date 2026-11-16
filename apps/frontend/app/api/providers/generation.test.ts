@@ -32,7 +32,7 @@ test("LLM routing validates tool calls and provider requests stay on fixed endpo
     const payload = JSON.parse(calls[0].options?.body as string);
     assert.equal(payload.model, "selected/llm");
     assert.equal(payload.messages[0].role, "system");
-    assert.equal(payload.tools.length, 9);
+    assert.equal(payload.tools.length, 13);
     assert.deepEqual(payload.modalities, ["text"]);
     assert.deepEqual(payload.provider, { require_parameters: true });
     assert.equal(payload.tool_choice, "auto");
@@ -112,4 +112,20 @@ test("3D view mapping preserves camera assignments and rejects malformed indices
     category: "3d", prompt: "A wooden chair", viewIndices: { front: 2, back: 0, left: 1 },
   });
   for (const invalid of [null, [], { front: -1 }, { front: 10 }, { front: 0.5 }, { front: "0" }, { top: 0 }, { front: 0, back: 0 }]) assert.throws(() => plan(invalid));
+});
+
+test("image aspect ratios are forwarded and unsupported values never reach the provider", async () => {
+  const original = globalThis.fetch;
+  const ratios: string[] = [];
+  globalThis.fetch = (async (_url, options) => {
+    ratios.push(JSON.parse(options?.body as string).aspect_ratio);
+    return Response.json({ data: [] });
+  }) as typeof fetch;
+  const send = (aspectRatio: unknown) => POST(new Request("http://localhost/api/providers", { method: "POST", headers: { "x-api-key": "test" }, body: JSON.stringify({ provider: "openrouter", action: "image", model: "selected/image", input: "recompose", aspectRatio }) }));
+  try {
+    for (const ratio of ["1:1", "3:4", "9:16", "4:3", "16:9"]) assert.equal((await send(ratio)).status, 200);
+    assert.deepEqual(ratios, ["1:1", "3:4", "9:16", "4:3", "16:9"]);
+    for (const ratio of ["99:1", "", 16, { value: "1:1" }]) assert.equal((await send(ratio)).status, 400);
+    assert.equal(ratios.length, 5);
+  } finally { globalThis.fetch = original; }
 });

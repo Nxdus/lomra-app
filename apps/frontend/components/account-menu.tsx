@@ -58,14 +58,14 @@ export function AccountMenu() {
         <Popover>
           <PopoverTrigger render={<Button variant="outline" size="icon-sm" aria-label={`Open profile for ${data.user.name}`} title={data.user.name} />}>
             <Avatar>
-              <AvatarImage src={data.user.image ?? undefined} alt="" />
+              <AvatarImage src={data.user.image ?? undefined} alt="" referrerPolicy="no-referrer" />
               <AvatarFallback><UserRoundIcon aria-hidden="true" /></AvatarFallback>
             </Avatar>
           </PopoverTrigger>
           <PopoverContent align="end" sideOffset={8} className="w-64 max-w-[calc(100vw-2rem)] gap-0 overflow-hidden p-0 shadow-lg">
             <div className="flex items-center gap-3 px-3 py-3.5">
               <Avatar>
-                <AvatarImage src={data.user.image ?? undefined} alt="" />
+                <AvatarImage src={data.user.image ?? undefined} alt="" referrerPolicy="no-referrer" />
                 <AvatarFallback><UserRoundIcon aria-hidden="true" /></AvatarFallback>
               </Avatar>
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">

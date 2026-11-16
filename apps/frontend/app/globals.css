@@ -1,6 +1,11 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+
+/* Watch source directories only; generated dev files must not trigger rebuilds. */
+@source "./";
+@source "../components";
+@source "../lib";
 
 @custom-variant dark (&:is(.dark *));
 

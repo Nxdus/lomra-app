@@ -5,7 +5,7 @@ export function parseCanvasCamera(value: string | null): CanvasCamera {
   try {
     const camera = JSON.parse(value ?? "null");
     if (camera && Number.isFinite(camera.x) && Number.isFinite(camera.y) &&
-      Number.isFinite(camera.scale) && camera.scale >= 0.2 && camera.scale <= 4) {
+      Number.isFinite(camera.scale) && camera.scale > 0 && camera.scale <= 4) {
       return { x: camera.x, y: camera.y, scale: camera.scale };
     }
   } catch { /* Invalid saved views fall back to the default camera. */ }

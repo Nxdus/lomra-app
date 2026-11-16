@@ -1,5 +1,10 @@
 # lomra-app
 
+Run frontend tests with `bun run test` from `apps/frontend`. The runner starts
+each test file in a fresh process to avoid a Bun 1.3.14 crash on Windows when
+the full suite shares one process. Run `bun run lint` and `bunx tsc --noEmit`
+there for lint and type checks.
+
 ## Google Sign-In
 
 Google Sign-In uses Better Auth in the NestJS backend, with PostgreSQL sessions
@@ -46,6 +51,29 @@ References: [Better Auth Google setup](https://better-auth.com/docs/authenticati
 and [Express integration](https://better-auth.com/docs/integrations/express).
 
 ## OpenRouter and Fal.AI setup
+
+Select a GLB on the canvas and ask "inspect this model" or "optimize this model".
+`inspect_3d` reports file size, stored geometry counts, materials, textures,
+skins and animations. `optimize_3d` aims to halve the triangle count, removes duplicate/unused resources and
+downsizes PNG/JPEG textures to a maximum edge of 2048 pixels by default
+(512/1024/2048/4096 can be requested). It adds a new GLB only when smaller,
+keeps the original, and reports before/after statistics in chat.
+
+Generated GLB results are stored as binary files; chat history stores durable
+file links instead of base64 payloads. Older inline GLB results are moved to
+file storage when the chat is next saved.
+Ask "reduce this model to 100,000 triangles" to set an approximate budget.
+Use `target_triangles: 0` (or ask to preserve polygon detail) to disable mesh
+simplification. Protected borders, small parts and a 1% geometric error limit
+can prevent reaching the requested count; the report shows actual counts.
+Geometry and texture detail can decrease, including deformation quality on
+rigged models; UV, skin, morph and animation data are retained. Topology repair
+is not included. Processing runs locally without Fal credits; chat routing still
+requires an OpenRouter key and a tool-capable LLM. Self-contained GLBs up to
+100 MB are supported, excluding Draco input and unknown extensions. Texture
+resizing uses the browser decoder for textures above 16 megapixels (up to
+64 megapixels). Larger textures or textures that cannot be resized are kept
+unchanged with a warning while other optimization steps continue.
 
 Open **Settings** at the top right of the canvas to enter your own API keys.
 Each provider has **Save key**, **Remove**, and **Test connection** controls.
@@ -215,6 +243,16 @@ Keep the backend private behind the frontend proxy. Chat payloads are limited to
 50 MB; generated media hosted by providers can still expire.
 
 ## Canvas media tools
+
+For 3D animation, select a biped GLB and describe the motion in chat, such as
+“walk with short waddling steps, keeping arms clear of the belly”. Uses your
+existing Fal key: Meshy rigs the selected model (up to 20 MB), Hunyuan Motion
+creates a new FBX motion from the full description, and the browser fits it to
+the character's rest pose and leg proportions. The result is a new animated GLB.
+Both provider stages use credits; saved job IDs let Check job resume without
+resubmitting. Stop pauses checking; submitted jobs may still run and charge.
+Requires a recognizable Meshy/Mixamo biped rig. Does not guarantee foot contact,
+collision-free limbs or support quadrupeds. Older preset jobs still resume.
 
 Select source files on the canvas and ask in chat, for example: “remove the background”,
 “upscale 2x”, “extract frames at 1 and 3 seconds”, “trim from 2 to 8 seconds”, or

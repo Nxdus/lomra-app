@@ -63,4 +63,14 @@ describe('saved canvas and settings validation', () => {
     ).toThrow();
     expect(() => validateSavedState('settings', 'unknown', {})).toThrow();
   });
+
+  it('accepts canvas names only for valid canvas IDs and bounded nonempty strings', () => {
+    for (const id of ['default', 'canvas-1794300000000-12345678-1234-1234-1234-123456789abc']) {
+      expect(() => validateSavedState('settings', `canvas-name-${id}`, 'Models')).not.toThrow();
+      for (const value of ['', '  ', 'x'.repeat(201), 1, {}]) {
+        expect(() => validateSavedState('settings', `canvas-name-${id}`, value)).toThrow();
+      }
+    }
+    expect(() => validateSavedState('settings', 'canvas-name-invalid', 'Models')).toThrow();
+  });
 });
