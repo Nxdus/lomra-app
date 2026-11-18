@@ -7,23 +7,18 @@
 - Preserve framework entrypoints, routing conventions, configuration locations, and the configured migration structure.
 - Follow each app's existing import conventions and prefer direct imports over unnecessary barrel exports. When moving files, update all affected imports, configuration, and documentation.
 
-## Backend (`apps/backend`)
+## Desktop (`apps/desktop`)
 
-### File organization
+- Electron shell, plain ESM (`.mjs`) with no build step; the sandboxed preload is `src/preload.cjs`. Keep the main process small: window, Next.js child process, workspace folder, `safeStorage` secret, and the agent bridge.
+- Keep agent CLI logic in `src/agents.mjs` with `bun:test` tests beside it. The renderer may only start presets by id; never accept a command line from it, validate IPC senders with `isTrustedSender`, and do not pass `LOMRA_*` variables to the agent.
+- Packaging is configured in `package.json` (`electron-builder`): `bun run pack` (unpacked) and `bun run dist` (installer). The Next.js `standalone` output ships in `resources/web`; `scripts/after-pack.cjs` copies its `node_modules`, and `@lydell/node-pty` must stay asar-unpacked.
+- Verify changes with `bun test` and a launch with `LOMRA_SMOKE=1` (it loads the app, checks the agent bridge and quits).
 
-- Keep each NestJS feature in `src/<feature>/`, with its module, controllers, services, validation/DTOs, calculations, and colocated `*.spec.ts` unit tests. Keep feature logic out of global controller/service/helper buckets.
-- Keep database infrastructure and the Drizzle schema in `src/database/`. Preserve `drizzle.config.ts` at the app root and its configured `drizzle/` migration output, including generated metadata.
-- Keep end-to-end tests in `test/` as `*.e2e-spec.ts`, separate from feature unit tests. Keep operational commands in the existing `package.json` scripts; add standalone operational scripts separately from `src/` feature code only when needed, reusing an existing scripts directory if present.
-- Preserve `src/main.ts`, `src/app.module.ts`, and app-root NestJS, TypeScript, Drizzle, and Vitest configuration. Follow the existing NodeNext ESM convention: relative TypeScript module imports use `.js` extensions.
+## Data
 
-## Production data: NestJS Observe
-
-This app's production telemetry - traces, errors, logs and metrics - goes to [NestJS Observe](https://observe.nestjs.com). Until `ObserveModule` is registered in `src/app.module.ts`, nothing is sent: `npx @nestjs/observe link` sets it up in one step - it installs `@nestjs/observe`, wires it into the app, and writes the key pair (`OBSERVE_APP_KEY`, `OBSERVE_APP_SECRET`) to `.env`.
-
-When a task depends on how the app behaves in production - an error users hit, a slow endpoint, a failing job, whether a release made things worse - work from that data, not from the code alone:
-
-- The Observe MCP server answers those questions directly: errors with their traces and logs, slow operations, jobs, and what a release changed (`find_regressions`, `diff_release`). It is included on the Pro plan and above. In Claude Code: `claude mcp add observe --transport http https://observe-api.nestjs.com/mcp`, and the client opens a browser to approve. Other clients: https://www.observe.nestjs.com/documentation/mcp
-- Without it, the user can open the request or error in the Observe dashboard and click **Copy agent prompt**, which hands over that page's trace, stack and logs as text.
+- The app is local-first: no accounts, database or cloud storage. `/api/storage` (`apps/frontend/app/api/storage/`) reads and writes the workspace folder (`LOMRA_DATA_DIR`, default `~/Documents/Lomra`) through `apps/frontend/lib/local-store/`: `canvas/`, `chats/`, `settings/` and `keys/` as JSON (keys AES-GCM encrypted) and media in `files/`.
+- Saved state is validated in `lib/local-store/validation.ts`; update it together with any change to the saved canvas, chat or settings shapes. Keep IDs matching `^[w-]{1,128}$` so they are safe file names.
+- Voice input calls a Whisper service (`WHISPER_URL`, `docker compose up -d whisper`) directly from `app/api/transcriptions`.
 
 ## Frontend (`apps/frontend`)
 
@@ -32,6 +27,7 @@ When a task depends on how the app behaves in production - an error users hit, a
 - Keep Next.js App Router routes, layouts, and route handlers under `app/`, preserving special filenames such as `page.tsx` and `layout.tsx`. Colocate route-specific helpers, hooks, and tests with the route.
 - Put standalone UI components under the existing `components/`, even when currently used by only one route. Keep UI primitives in `components/ui/` and feature or navigation components outside `components/ui/`. Group by feature only when useful; do not create a folder just to wrap one component.
 - Put genuinely shared hooks in `hooks/` (already configured in `components.json`) only when needed. Keep shared non-UI utilities in the existing `lib/`, including `lib/utils.ts`; keep feature-only helpers with their feature.
+- Keep saved-data and workspace file logic server-side in `lib/local-store/`; client code reaches it only through `lib/storage.ts`. Bridge types for the Electron preload live in `lib/desktop.ts`.
 - Follow the existing `@/*` alias rooted at `apps/frontend` and the aliases in `components.json`; use local relative imports where appropriate. Preserve app-root Next.js, TypeScript, ESLint, and shadcn configuration and `app/globals.css`.
 
 ### UI components

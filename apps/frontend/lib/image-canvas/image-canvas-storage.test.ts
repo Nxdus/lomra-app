@@ -26,8 +26,7 @@ test('concurrent file readers share a download and release it after completion o
   let downloads = 0;
   let fail = false;
   try {
-    globalThis.fetch = (async (url) => {
-      if (String(url) === '/api/storage') return Response.json({ account: 'account-a' });
+    globalThis.fetch = (async () => {
       downloads++;
       await new Promise((resolve) => setTimeout(resolve, 5));
       return fail ? new Response(null, { status: 403 }) : new Response('bytes');
@@ -54,8 +53,6 @@ test('remote canvas restores file bytes and saves layout without uploading uncha
     globalThis.fetch = (async (url, options) => {
       const path = String(url);
       calls.push({ path, method: options?.method ?? 'GET', body: options?.body });
-      if (path === '/api/storage') return Response.json({ account: 'account-a' });
-      assert.equal(new Headers(options?.headers).get('x-storage-account'), 'account-a');
       if (path === '/api/storage/canvas') return Response.json([{ id: 'default', value: [item] }]);
       if (path === '/api/storage/files/file-1') return new Response('original-bytes');
       return Response.json({ saved: true });
@@ -85,7 +82,6 @@ test('canvas layout opens without file downloads and saves safely while media lo
   try {
     globalThis.fetch = (async (url, options) => {
       const path = String(url);
-      if (path === '/api/storage') return Response.json({ account: 'account-a' });
       if (path === '/api/storage/canvas') return Response.json([{ id: 'lazy', value: items }]);
       if (path.startsWith('/api/storage/files/')) {
         assert.notEqual(options?.method, 'PUT', 'must not upload placeholder bytes');
@@ -135,22 +131,6 @@ test('file downloads recover from transient responses and interrupted bodies wit
     globalThis.fetch = (async () => { attempts++; throw new TypeError('Network offline'); }) as typeof fetch;
     await assert.rejects(storageFile('upload', new File(['data'], 'test.png')), /Network offline/);
     assert.equal(attempts, 1);
-  } finally { globalThis.fetch = originalFetch; }
-});
-
-test('S3 downloads use the signed URL without forwarding account headers or cookies', async () => {
-  const originalFetch = globalThis.fetch;
-  try {
-    globalThis.fetch = (async (url, options) => {
-      if (String(url).startsWith('/api/storage/files/')) {
-        return Response.json({ url: 'http://localhost:8333/private/file?signature=test' });
-      }
-      assert.equal(String(url), 'http://localhost:8333/private/file?signature=test');
-      assert.equal(options?.credentials, 'omit');
-      assert.equal(options?.headers, undefined);
-      return new Response('s3-bytes');
-    }) as typeof fetch;
-    assert.equal(await (await storageFile('s3-file'))?.text(), 's3-bytes');
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -274,7 +254,6 @@ test('canvas names are trimmed, persist separately from file manifests and rejec
   try {
     globalThis.fetch = (async (url, options) => {
       const path = String(url);
-      if (path === '/api/storage') return Response.json({ account: 'account-a' });
       if (path === '/api/storage/settings') return Response.json([...settings].map(([id, value]) => ({ id, value })));
       if (path === '/api/storage/canvas') return Response.json([{ id: 'default', value: manifest }]);
       assert.equal(path, '/api/storage/settings/canvas-name-default');

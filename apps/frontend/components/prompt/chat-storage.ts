@@ -1,5 +1,5 @@
 import type { ConversationMessage, GeneratedFile, Generation } from "./generation";
-import { canImportBrowserData, storage, storageFile } from "@/lib/storage";
+import { storage, storageFile } from "@/lib/storage";
 
 export type Chat = {
   id: string;
@@ -61,7 +61,6 @@ async function persistChatFiles(chat: Chat): Promise<Chat> {
 export async function chatStorage(change?: Chat | string, canvasId = "default"): Promise<Chat[]> {
   migration ??= (async () => {
     if (localStorage.getItem('lomra-chats-migrated')) return;
-    if (!await canImportBrowserData()) return;
     const existing: { id: string }[] = await storage('chats');
     for (const chat of await localChats()) {
       if (!existing.some((row) => row.id === chat.id)) await storage(`chats/${encodeURIComponent(chat.id)}`, 'PUT', await persistChatFiles(chat));

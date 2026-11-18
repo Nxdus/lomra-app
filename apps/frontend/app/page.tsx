@@ -1,9 +1,9 @@
 "use client";
 
-import { Suspense, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { FloatingPrompt } from "@/components/prompt/floating-prompt";
 import { ImageCanvas, type CanvasHandle, type VisibleImage } from "@/components/image-canvas";
-import { AccountMenu } from "@/components/account-menu";
+import { AgentPanel } from "@/components/agent-panel";
 
 export default function Home() {
   const canvas = useRef<CanvasHandle>(null);
@@ -12,7 +12,7 @@ export default function Home() {
   const [canvasId, setCanvasId] = useState("default");
   return (
     <main className="relative h-dvh overflow-hidden">
-      <Suspense fallback={null}><AccountMenu /></Suspense>
+      <AgentPanel />
       <ImageCanvas ref={canvas} onSelectionChange={setSelection} onReadyChange={setCanvasReady} onCanvasChange={setCanvasId} />
       <div className="relative z-10">
         <FloatingPrompt key={canvasId} canvasId={canvasId} loading={!canvasReady} selection={selection} onModelPreview={(id) => {

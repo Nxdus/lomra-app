@@ -31,7 +31,6 @@ test("chat history is isolated by canvas and legacy chats belong to the original
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => 'true' } });
   try {
     globalThis.fetch = (async (url, options) => {
-      if (String(url) === '/api/storage') return Response.json({ account: null });
       if (options?.method === 'PUT') {
         const chat = JSON.parse(options.body as string).value as Chat;
         rows.push(chat);
@@ -63,7 +62,6 @@ test("inline GLB results upload as binary once, leaving only a small durable lin
     globalThis.fetch = (async (url, options) => {
       const path = String(url);
       if (path.startsWith('data:')) return previousFetch(url, options);
-      if (path === '/api/storage') return Response.json({ account: null });
       if (path.startsWith('/api/storage/files/') && options?.method === 'PUT') {
         uploaded++;
         assert.ok(options.body instanceof File);
