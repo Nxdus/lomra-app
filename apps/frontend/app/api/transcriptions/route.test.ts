@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { POST } from "./route";
 
-test("transcription proxy validates uploads and forwards backend responses", async () => {
+test("transcription validates uploads and calls Whisper directly", async () => {
   function request(file?: File) {
     const body = new FormData();
     if (file) body.append("file", file);
@@ -27,14 +27,17 @@ test("transcription proxy validates uploads and forwards backend responses", asy
       return Response.json({ text: "สวัสดี", language: "th" });
     }) as typeof fetch;
     assert.deepEqual(await (await POST(request(file))).json(), { text: "สวัสดี", language: "th" });
-    assert.equal(forwardedUrl, new URL("/transcriptions", process.env.BACKEND_URL ?? "http://127.0.0.1:3001").href);
+    assert.equal(forwardedUrl, new URL("/asr?task=transcribe&output=json", process.env.WHISPER_URL ?? "http://127.0.0.1:9000").href);
     assert.equal(forwardedOptions?.method, "POST");
-    const uploaded = (forwardedOptions?.body as FormData).get("file") as File;
+    const uploaded = (forwardedOptions?.body as FormData).get("audio_file") as File;
     assert.equal(uploaded.type, file.type);
     assert.equal(await uploaded.text(), await file.text());
 
     globalThis.fetch = (async () => Response.json({ message: "Invalid audio" }, { status: 400 })) as typeof fetch;
-    assert.equal((await POST(request(file))).status, 400);
+    assert.equal((await POST(request(file))).status, 502);
+    globalThis.fetch = (async () => Response.json({ text: 1 })) as typeof fetch;
+    assert.equal((await POST(request(file))).status, 502);
+    assert.equal((await POST(request(new File(["x"], "a.txt", { type: "text/plain" })))).status, 400);
 
     globalThis.fetch = (async () => { throw new Error("offline"); }) as typeof fetch;
     assert.equal((await POST(request(file))).status, 502);

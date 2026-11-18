@@ -1,4 +1,4 @@
-import { canImportBrowserData, storage, storageFile } from '../storage';
+import { storage, storageFile } from '../storage';
 import { saveSetting } from '../settings';
 
 export type CanvasImage = {
@@ -52,7 +52,7 @@ export async function loadCanvasFile(image: Pick<CanvasImage, 'id' | 'file'>) {
 }
 export async function deleteCanvasStorage(id: string) {
   // Remove the legacy copy first so deleting the original cannot reimport its images.
-  if (id === 'default' && await canImportBrowserData()) {
+  if (id === 'default') {
     await localCanvasStorage([]);
   }
   await storage(`canvas/${encodeURIComponent(id)}`, 'DELETE');
@@ -100,7 +100,7 @@ export async function canvasStorage(images?: CanvasImage[], id = 'default', layo
     const saved = rows.find((row) => row.id === id);
     if (!saved) {
       if (id !== 'default') throw new Error('Canvas no longer exists');
-      const legacy = await canImportBrowserData() ? await localCanvasStorage() : [];
+      const legacy = await localCanvasStorage();
       await saveCanvas(legacy, id);
       return legacy;
     }

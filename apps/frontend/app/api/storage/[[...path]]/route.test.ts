@@ -1,58 +1,35 @@
 // @ts-expect-error Bun provides this module at test runtime; Next.js does not load it.
-import { test, expect, mock } from 'bun:test';
+import { test, expect } from 'bun:test';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-mock.module('next/headers', () => ({ cookies: async () => ({ get: () => ({ value: 'a'.repeat(64) }) }) }));
-const { GET } = await import('./route');
+process.env.LOMRA_DATA_DIR = await mkdtemp(join(tmpdir(), 'lomra-route-'));
+const { GET, PUT, DELETE } = await import('./route');
 
-test('remote clients receive S3 bytes through the app port without exposing signed URLs', async () => {
-  const originalFetch = globalThis.fetch;
-  const calls: string[] = [];
-  try {
-    globalThis.fetch = (async (url, options) => {
-      calls.push(String(url));
-      if (String(url).includes('/storage/files/')) {
-        expect(new Headers(options?.headers).get('cookie')).toBe('session=test');
-        return Response.json({ url: 'http://localhost:8333/private/file?signature=test' });
-      }
-      expect(options?.headers).toBeUndefined();
-      return new Response(new Uint8Array([0, 128, 255]));
-    }) as typeof fetch;
-    const response = await GET(new Request('http://localhost:3000/api/storage/files/asset', {
-      headers: { cookie: 'session=test', 'x-storage-account': 'account' },
-    }), { params: Promise.resolve({ path: ['files', 'asset'] }) });
-    expect(response.status).toBe(200);
-    expect(response.headers.get('content-type')).toBe('application/octet-stream');
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([0, 128, 255]));
-    expect(calls).toHaveLength(2);
-  } finally { globalThis.fetch = originalFetch; }
+const origin = 'http://localhost:3000';
+const call = (handler: typeof GET, path: string[], init: RequestInit = {}) =>
+  handler(new Request(`${origin}/api/storage/${path.join('/')}`, { ...init, headers: { origin, ...init.headers } }), { params: Promise.resolve({ path }) });
+
+test('files and saved state round-trip through the workspace folder', async () => {
+  expect((await call(PUT, ['files', 'asset'], { method: 'PUT', body: new Uint8Array([0, 128, 255]) })).status).toBe(200);
+  const file = await call(GET, ['files', 'asset']);
+  expect(file.headers.get('content-type')).toBe('application/octet-stream');
+  expect(new Uint8Array(await file.arrayBuffer())).toEqual(new Uint8Array([0, 128, 255]));
+  expect((await call(GET, ['files', 'missing'])).status).toBe(404);
+
+  const value = { x: 1, y: 2 };
+  expect((await call(PUT, ['settings', 'prompt-position'], { method: 'PUT', body: JSON.stringify({ value }) })).status).toBe(200);
+  expect(await (await call(GET, ['settings'])).json()).toEqual([{ id: 'prompt-position', value }]);
+  expect((await call(DELETE, ['settings', 'prompt-position'], { method: 'DELETE' })).status).toBe(200);
+  expect(await (await call(GET, ['settings'])).json()).toEqual([]);
 });
 
-test('an upstream body disconnect becomes a retryable HTTP error', async () => {
-  const originalFetch = globalThis.fetch;
-  try {
-    globalThis.fetch = (async () => new Response(new ReadableStream({ start(c) { c.error(new TypeError('Disconnected')); } }))) as typeof fetch;
-    const response = await GET(new Request('http://localhost:3000/api/storage/chats'), { params: Promise.resolve({ path: ['chats'] }) });
-    expect(response.status).toBe(502);
-  } finally { globalThis.fetch = originalFetch; }
-});
-
-test('file responses reach the client before the upstream finishes', async () => {
-  const originalFetch = globalThis.fetch;
-  try {
-    for (const s3 of [false, true]) {
-      let controller!: ReadableStreamDefaultController<Uint8Array>;
-      const body = new ReadableStream<Uint8Array>({ start(c) { controller = c; } });
-      globalThis.fetch = (async (url) => s3 && String(url).includes('/storage/files/')
-        ? Response.json({ url: 'http://localhost:8333/private/file' })
-        : new Response(body)) as typeof fetch;
-      const response = await GET(new Request('http://localhost:3000/api/storage/files/asset'), {
-        params: Promise.resolve({ path: ['files', 'asset'] }),
-      });
-      const reader = response.body!.getReader();
-      controller.enqueue(new Uint8Array([1, 2]));
-      expect((await reader.read()).value).toEqual(new Uint8Array([1, 2]));
-      controller.close();
-      expect((await reader.read()).done).toBe(true);
-    }
-  } finally { globalThis.fetch = originalFetch; }
+test('invalid requests are rejected', async () => {
+  expect((await call(GET, [])).status).toBe(404);
+  expect((await call(GET, ['unknown'])).status).toBe(404);
+  expect((await call(PUT, ['settings', 'prompt-position'], { method: 'PUT', body: '{"value":1}' })).status).toBe(400);
+  expect((await call(PUT, ['settings', 'prompt-position'], { method: 'PUT', body: 'nope' })).status).toBe(400);
+  expect((await call(PUT, ['files', 'asset'], { method: 'PUT', body: new Uint8Array([1]), headers: { origin: 'http://evil.example' } })).status).toBe(403);
+  expect((await call(GET, ['settings'], { headers: { 'sec-fetch-site': 'cross-site' } })).status).toBe(403);
 });

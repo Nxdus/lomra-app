@@ -1,35 +1,4 @@
 services:
-  postgres:
-    image: postgres:17-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-lomra}
-      POSTGRES_USER: ${POSTGRES_USER:-lomra}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lomra}
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  seaweedfs:
-    image: chrislusf/seaweedfs:4.53
-    restart: unless-stopped
-    command: ["mini", "-dir=/data"]
-    environment:
-      AWS_ACCESS_KEY_ID: ${SEAWEEDFS_ACCESS_KEY:-lomra-local}
-      AWS_SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:-lomra-local-development-only}
-      S3_BUCKET: ${SEAWEEDFS_BUCKET:-lomra-canvas}
-    ports:
-      - "127.0.0.1:${SEAWEEDFS_S3_PORT:-8333}:8333"
-    volumes:
-      - seaweedfs_data:/data
-
   whisper:
     image: onerahmet/openai-whisper-asr-webservice:latest
     restart: unless-stopped
@@ -51,6 +20,4 @@ services:
       start_period: 5m
 
 volumes:
-  postgres_data:
   whisper_models:
-  seaweedfs_data:
