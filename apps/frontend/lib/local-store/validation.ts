@@ -1,14 +1,19 @@
+import { parseOllamaUrl } from '../ollama-url';
+import { validStoryboard } from '../../components/prompt/storyboard-data';
+import { characterImageType, characterNameLimit, characterNamePattern, characterNotesLimit } from '../characters';
+
 export class StoreError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 
 const record = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
+const time = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1e13;
 const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1e9;
 const model = (value: unknown) => typeof value === 'string' && /^(llm|picture|video|3d):\S.{0,511}$/.test(value);
 const canvasId = /^(default|canvas-\d{13}-[a-f0-9-]{36})$/;
 
-export const kinds = ['chats', 'keys', 'canvas', 'settings'] as const;
+export const kinds = ['chats', 'keys', 'canvas', 'settings', 'characters'] as const;
 export type Kind = (typeof kinds)[number];
 
 export function validId(id: string) {
@@ -38,7 +43,24 @@ function validSetting(id: string, value: unknown) {
       typeof value.scale === 'number' && value.scale >= 0.2 && value.scale <= 4;
   }
   if (id === 'prompt-position') return record(value) && finite(value.x) && finite(value.y);
+  if (id === 'chat-engine') return typeof value === 'string' && ['openrouter', 'claude', 'codex', 'opencode'].includes(value);
+  if (id === 'google-usage') {
+    return record(value) && typeof value.month === 'string' && /^\d{4}-\d{2}$/.test(value.month) &&
+      ['requests', 'inputTokens', 'outputTokens'].every((field) => finite(value[field]) && (value[field] as number) >= 0);
+  }
+  if (id === 'agent-limits') {
+    return record(value) && Object.entries(value).every(([agent, saved]) => agent === 'claude' && record(saved) && time(saved.updatedAt) &&
+      Array.isArray(saved.windows) && saved.windows.length <= 8 && saved.windows.every((window: unknown) => record(window) &&
+        typeof window.id === 'string' && typeof window.label === 'string' && finite(window.usedPercent) && time(window.resetsAt)));
+  }
+  if (id === 'disabled-agents') return Array.isArray(value) && value.length <= 20 && value.every((agent) => typeof agent === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(agent));
+  if (id === 'ollama-url') return typeof value === 'string' && value.length <= 200 && parseOllamaUrl(value) === value;
+  if (id === 'speech-model') return typeof value === 'string' && /^[a-z0-9-]{1,32}$/.test(value);
+  if (id === 'agent-effort') {
+    return record(value) && Object.entries(value).every(([agent, level]) => ['claude', 'codex'].includes(agent) && typeof level === 'string' && /^[a-z]{3,8}$/.test(level));
+  }
   if (id === 'selected-models') return Array.isArray(value) && value.length <= 4 && value.every(model);
+  if (id === 'hidden-models') return Array.isArray(value) && value.length <= 500 && value.every(model);
   if (id === 'custom-models') {
     return Array.isArray(value) && value.length <= 500 && value.every((item: unknown) =>
       record(item) && model(item.value) && typeof item.name === 'string' &&
@@ -54,9 +76,15 @@ function validChat(id: string, value: unknown) {
   if (!chat || chat.id !== id ||
     (chat.canvasId !== undefined && (typeof chat.canvasId !== 'string' || !canvasId.test(chat.canvasId))) ||
     typeof chat.title !== 'string' || typeof chat.updatedAt !== 'number' || !Number.isFinite(chat.updatedAt) ||
+    (chat.agentSession !== undefined && !(record(chat.agentSession) && ['claude', 'codex', 'opencode'].includes(chat.agentSession.engine as string) && typeof chat.agentSession.id === 'string' && /^[A-Za-z0-9_][A-Za-z0-9_-]{0,127}$/.test(chat.agentSession.id) &&
+      (chat.agentSession.modelId === undefined || (typeof chat.agentSession.modelId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,122}(?:\[1m\])?$/.test(chat.agentSession.modelId))))) ||
     !Array.isArray(chat.history) || !Array.isArray(chat.generations) || !Array.isArray(chat.models)) return false;
-  return chat.models.every((entry) => typeof entry === 'string') &&
-    chat.history.every((message) => message && ['user', 'assistant'].includes(message.role) && typeof message.content === 'string') &&
+  return (chat.storyboard === undefined || validStoryboard(chat.storyboard, Array.isArray(chat.history[0]?.images) ? chat.history[0].images.length : 0)) &&
+    chat.models.every((entry) => typeof entry === 'string') &&
+    chat.history.every((message) => message && ['user', 'assistant'].includes(message.role) && typeof message.content === 'string' &&
+      (message.images === undefined || (message.role === 'user' && Array.isArray(message.images) && message.images.length <= 10 &&
+        message.images.every((image: unknown) => record(image) && typeof image.name === 'string' && image.name.length <= 512 &&
+          typeof image.url === 'string' && image.url.length <= 1024 * 1024 && /^data:image\/jpeg;base64,(?:[A-Za-z0-9+/]+={0,2})$/.test(image.url))))) &&
     chat.generations.every((task) => task && ['picture', 'video', '3d'].includes(task.category) &&
       ['id', 'model', 'prompt', 'status'].every((field) => typeof task[field] === 'string') &&
       ['error', 'requestId'].every((field) => task[field] === undefined || typeof task[field] === 'string') &&
@@ -65,12 +93,23 @@ function validChat(id: string, value: unknown) {
         ['image', 'video', 'file'].includes(file.kind as string)))));
 }
 
+function validCharacter(id: string, value: unknown) {
+  return /^character-[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/.test(id) &&
+    record(value) && value.id === id &&
+    typeof value.name === 'string' && value.name.length <= characterNameLimit && characterNamePattern.test(value.name) &&
+    typeof value.notes === 'string' && value.notes.length <= characterNotesLimit &&
+    typeof value.imageType === 'string' && characterImageType.test(value.imageType);
+}
+
 export function validateValue(kind: Kind, id: string, value: unknown) {
   if (!validId(id)) throw new StoreError(400, 'Invalid ID');
   if (kind === 'keys') {
-    if (!['openrouter', 'fal'].includes(id) || typeof value !== 'string' || value.length > 512) throw new StoreError(400, 'Invalid key');
+    if (!['openrouter', 'fal', 'google'].includes(id) || typeof value !== 'string' || value.length > 512) throw new StoreError(400, 'Invalid key');
     return;
   }
-  const valid = kind === 'canvas' ? validCanvas(id, value) : kind === 'settings' ? validSetting(id, value) : validChat(id, value);
+  const valid = kind === 'canvas' ? validCanvas(id, value)
+    : kind === 'settings' ? validSetting(id, value)
+    : kind === 'characters' ? validCharacter(id, value)
+    : validChat(id, value);
   if (!valid) throw new StoreError(400, 'Invalid saved state');
 }

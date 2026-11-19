@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canvasResults, generate, modelFiles, safeMediaUrl, selectedModel, isMultiview, multiviewError, type Generation, type ModelViews } from "./generation";
+import { canvasResults, generate, modelFiles, requiresImage, safeMediaUrl, selectedModel, isMultiview, multiviewError, type Generation, type ModelViews } from "./generation";
 
 test("Hunyuan maps texture intent to textured_mesh without changing unspecified defaults", async () => {
   const views: ModelViews = Object.fromEntries(["front", "back", "left"].map((view, i) => [view, { url: `data:image/png;base64,${["YQ==", "Yg==", "Yw=="][i]}`, name: view }]));
@@ -174,4 +174,68 @@ test("image generation forwards a requested aspect ratio with its source referen
     return { data: [{ b64_json: "Yg==", media_type: "image/png" }] };
   }, new AbortController().signal, () => {}, "data:image/png;base64,YQ==");
   assert.equal(files.length, 1);
+});
+
+test("local Stable Diffusion runs through the desktop bridge, reports progress and stops with the signal", async () => {
+  const task: Generation = { id: "11111111-1111-1111-1111-111111111111", category: "picture", prompt: "a fox", aspectRatio: "16:9", model: "sd/sd-turbo", status: "Waiting" };
+  const calls: unknown[] = [];
+  let progress: ((event: { runId: string; step: number; total: number }) => void) | undefined;
+  let cancelled = "";
+  const sd = {
+    onProgress: (callback: typeof progress) => { progress = callback; return () => { progress = undefined; }; },
+    generate: async (runId: string, input: unknown): Promise<{ image: string } | { error: string }> => { calls.push([runId, input]); progress?.({ runId, step: 2, total: 4 }); return { image: "data:image/png;base64,YQ==" }; },
+    cancel: (runId: string) => { cancelled = runId; },
+  };
+  Object.assign(globalThis, { window: { lomra: { sd } } });
+  try {
+    const statuses: string[] = [];
+    const files = await generate(task, async () => { throw new Error("no provider call"); }, new AbortController().signal, (change) => { if (change.status) statuses.push(change.status); });
+    assert.deepEqual(files, [{ url: "data:image/png;base64,YQ==", name: "Image 1", kind: "image" }]);
+    assert.deepEqual(calls, [[task.id, { model: "sd-turbo", prompt: "a fox", aspectRatio: "16:9" }]]);
+    assert.ok(statuses.includes("Generating locally… 2/4"));
+    assert.equal(progress, undefined);
+    await assert.rejects(generate(task, async () => ({}), new AbortController().signal, () => {}, "data:image/png;base64,YQ==", ["data:image/png;base64,YQ=="]), /text only/);
+    const controller = new AbortController();
+    sd.generate = async () => { controller.abort(); return { error: "Stopped." }; };
+    await assert.rejects(generate(task, async () => ({}), controller.signal, () => {}));
+    assert.equal(cancelled, task.id);
+    Object.assign(globalThis, { window: { lomra: {} } });
+    await assert.rejects(generate(task, async () => ({}), new AbortController().signal, () => {}), /desktop app/);
+  } finally {
+    delete (globalThis as { window?: unknown }).window;
+  }
+});
+
+test("a local 3D model sends one picture through the desktop bridge, returns a GLB and skips the Fal job flow", async () => {
+  const picture = "data:image/png;base64,YQ==";
+  const task: Generation = { id: "11111111-1111-1111-1111-111111111111", category: "3d", prompt: "a fox", model: "local3d/hunyuan-2mini", status: "Waiting" };
+  const calls: unknown[] = [];
+  let progress: ((event: { runId: string; stage: string }) => void) | undefined;
+  let cancelled = "";
+  const local3d = {
+    onProgress: (callback: typeof progress) => { progress = callback; return () => { progress = undefined; }; },
+    generate: async (runId: string, input: unknown): Promise<{ model: string } | { error: string }> => { calls.push([runId, input]); progress?.({ runId, stage: "shape" }); return { model: "data:model/gltf-binary;base64,Z2xi" }; },
+    cancel: (runId: string) => { cancelled = runId; },
+  };
+  Object.assign(globalThis, { window: { lomra: { local3d } } });
+  try {
+    assert.equal(requiresImage(task.model), true);
+    const statuses: string[] = [];
+    const files = await generate(task, async () => { throw new Error("no provider call"); }, new AbortController().signal, (change) => { if (change.status) statuses.push(change.status); }, picture);
+    assert.deepEqual(files, [{ url: "data:model/gltf-binary;base64,Z2xi", name: "GLB", kind: "file" }]);
+    assert.deepEqual(calls, [[task.id, { model: "hunyuan-2mini", image: picture }]]);
+    assert.ok(statuses.includes("Making the 3D shape…"));
+    assert.equal(progress, undefined);
+    assert.deepEqual(canvasResults(files, "3d"), files);
+    await assert.rejects(generate(task, async () => ({}), new AbortController().signal, () => {}), /PNG, JPEG or WebP/);
+    await assert.rejects(generate(task, async () => ({}), new AbortController().signal, () => {}, "https://example.com/a.png"), /PNG, JPEG or WebP/);
+    const controller = new AbortController();
+    local3d.generate = async () => { controller.abort(); return { error: "Stopped." }; };
+    await assert.rejects(generate(task, async () => ({}), controller.signal, () => {}, picture));
+    assert.equal(cancelled, task.id);
+    Object.assign(globalThis, { window: { lomra: {} } });
+    await assert.rejects(generate(task, async () => ({}), new AbortController().signal, () => {}, picture), /desktop app/);
+  } finally {
+    delete (globalThis as { window?: unknown }).window;
+  }
 });

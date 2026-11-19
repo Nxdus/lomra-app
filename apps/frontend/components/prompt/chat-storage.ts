@@ -1,4 +1,5 @@
 import type { ConversationMessage, GeneratedFile, Generation } from "./generation";
+import type { Storyboard } from "./storyboard-data";
 import { storage, storageFile } from "@/lib/storage";
 
 export type Chat = {
@@ -9,6 +10,9 @@ export type Chat = {
   history: ConversationMessage[];
   generations: Generation[];
   models: string[];
+  storyboard?: Storyboard;
+  /** Local agent session, so the next message continues the same conversation. */
+  agentSession?: { engine: "claude" | "codex" | "opencode"; id: string; modelId?: string };
 };
 
 // Store each conversation independently so other tabs cannot overwrite the whole list.

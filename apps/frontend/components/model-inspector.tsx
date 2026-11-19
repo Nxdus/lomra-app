@@ -1,5 +1,6 @@
 "use client";
 
+import { Tip } from "@/components/tip";
 import { useEffect, useRef, useState } from "react";
 import type { AnimationAction } from "three";
 import { BoneIcon, DownloadIcon, InfoIcon, PauseIcon, PlayIcon, RotateCcwIcon, SunIcon } from "lucide-react";
@@ -218,9 +219,9 @@ export function ModelInspector({ src, file }: { src: string; file: File }) {
     {error && <Alert variant="destructive"><AlertTitle>Could not inspect model</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
     <div className="flex flex-wrap items-center justify-center gap-2">
       <div role="toolbar" aria-label="Model inspection tools" className="flex max-w-full flex-wrap items-center justify-center gap-1 rounded-3xl border bg-popover p-1.5 shadow-sm">
-        <Button variant="ghost" size="icon-sm" aria-label="Reset view" title="Reset view" disabled={!info} onClick={() => controls.current?.reset()}><RotateCcwIcon /></Button>
+        <Tip label="Reset view"><Button variant="ghost" size="icon-sm" aria-label="Reset view" disabled={!info} onClick={() => controls.current?.reset()}><RotateCcwIcon /></Button></Tip>
         <Popover>
-          <PopoverTrigger render={<Button variant={mode === "render" ? "secondary" : "ghost"} size="icon-sm" aria-label="Render settings" title="Render settings" disabled={!info} />}><SunIcon /></PopoverTrigger>
+          <Tip label="Render settings"><PopoverTrigger render={<Button variant={mode === "render" ? "secondary" : "ghost"} size="icon-sm" aria-label="Render settings" disabled={!info} />}><SunIcon /></PopoverTrigger></Tip>
           <PopoverContent side="top" className="w-72 gap-4">
             <PopoverTitle>Shading</PopoverTitle>
             <ToggleGroup value={[mode]} onValueChange={value => { if (value[0]) setMode(String(value[0])); }} size="sm" variant="outline" spacing={0} aria-label="Shading mode">
@@ -232,13 +233,13 @@ export function ModelInspector({ src, file }: { src: string; file: File }) {
             </>}
           </PopoverContent>
         </Popover>
-        <Toggle size="sm" aria-label="Show skeleton" title="Show skeleton" pressed={skeleton} disabled={!info?.rig.length} onPressedChange={show => { setSkeleton(show); controls.current?.skeleton(show); }}><BoneIcon /></Toggle>
+        <Tip label="Show skeleton"><Toggle size="sm" aria-label="Show skeleton" pressed={skeleton} disabled={!info?.rig.length} onPressedChange={show => { setSkeleton(show); controls.current?.skeleton(show); }}><BoneIcon /></Toggle></Tip>
         <ToggleGroup value={[background]} onValueChange={value => { if (value[0]) setBackground(String(value[0])); }} size="sm" spacing={0} aria-label="Preview background">
-          {[{ value: "light", color: "#ffffff" }, { value: "gray", color: "#808080" }, { value: "dark", color: "#171717" }].map(({ value, color }) => <ToggleGroupItem key={value} value={value} aria-label={`${value} background`} title={`${value} background`}><span className="size-3.5 rounded-full border border-black/15" style={{ background: color }} /></ToggleGroupItem>)}
+          {[{ value: "light", color: "#ffffff" }, { value: "gray", color: "#808080" }, { value: "dark", color: "#171717" }].map(({ value, color }) => <Tip key={value} label={`${value} background`}><ToggleGroupItem value={value} aria-label={`${value} background`}><span className="size-3.5 rounded-full border border-black/15" style={{ background: color }} /></ToggleGroupItem></Tip>)}
         </ToggleGroup>
         <Popover>
-          <PopoverTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Model details" title="Model details" disabled={!info} />}><InfoIcon /></PopoverTrigger>
-          <PopoverContent side="top" align="center" className="max-h-[65vh] w-80 max-w-[calc(100vw-3rem)] gap-4 overflow-y-auto">
+          <Tip label="Model details"><PopoverTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Model details" disabled={!info} />}><InfoIcon /></PopoverTrigger></Tip>
+          <PopoverContent side="top" align="center" className="max-h-[min(65vh,var(--available-height))] w-80 max-w-[calc(100vw-3rem)] gap-4">
             <PopoverTitle>Model details</PopoverTitle>
             {info && <>
               <dl className="flex flex-col gap-2 text-sm">{Object.entries({ "File size": fileSize, Meshes: info.meshes, Triangles: info.triangles.toLocaleString(), Materials: info.materials, Textures: info.textures, Bones: info.rig.length, "Skinned meshes": info.skinnedMeshes, Animations: clips.length }).map(([label, value]) => <div key={label} className="flex items-center justify-between gap-4"><dt className="text-muted-foreground">{label}</dt><dd className="tabular-nums">{value}</dd></div>)}</dl>
@@ -249,10 +250,10 @@ export function ModelInspector({ src, file }: { src: string; file: File }) {
             </>}
           </PopoverContent>
         </Popover>
-        <Button variant="ghost" size="icon-sm" aria-label="Save PNG" title="Save PNG · 2048 px" disabled={!info || saving} onClick={() => void saveRender()}><DownloadIcon /></Button>
+        <Tip label="Save PNG · 2048 px"><Button variant="ghost" size="icon-sm" aria-label="Save PNG" disabled={!info || saving} onClick={() => void saveRender()}><DownloadIcon /></Button></Tip>
       </div>
       {!!clips.length && <div className="flex max-w-full items-center gap-1 rounded-3xl border bg-popover p-1.5 shadow-sm">
-        <Button variant="ghost" size="icon-sm" aria-label={playing ? "Pause animation" : "Play animation"} title={playing ? "Pause" : "Play"} onClick={() => setPlaying(!playing)}>{playing ? <PauseIcon /> : <PlayIcon />}</Button>
+        <Tip label={playing ? "Pause" : "Play"}><Button variant="ghost" size="icon-sm" aria-label={playing ? "Pause animation" : "Play animation"} onClick={() => setPlaying(!playing)}>{playing ? <PauseIcon /> : <PlayIcon />}</Button></Tip>
         <Select value={clip} onValueChange={value => { if (value) setClip(value); }}><SelectTrigger size="sm" className="min-w-0 max-w-40" aria-label="Animation clip"><SelectValue className="min-w-0" title={clips[Number(clip)]?.name}><span className="truncate">{clips[Number(clip)]?.name}</span></SelectValue></SelectTrigger><SelectContent side="top" align="start" alignItemWithTrigger={false} className="w-auto max-w-[calc(100vw-3rem)]"><SelectGroup>{clips.map((animation, i) => <SelectItem key={i} value={String(i)}>{animation.name} ({animation.duration.toFixed(2)}s)</SelectItem>)}</SelectGroup></SelectContent></Select>
         <Select value={speed} onValueChange={value => { if (value) setSpeed(value); }}><SelectTrigger size="sm" aria-label="Playback speed"><SelectValue>{speed}×</SelectValue></SelectTrigger><SelectContent side="top" align="end" alignItemWithTrigger={false}><SelectGroup>{["0.25", "0.5", "1", "1.5", "2"].map(value => <SelectItem key={value} value={value}>{value}×</SelectItem>)}</SelectGroup></SelectContent></Select>
       </div>}

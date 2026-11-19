@@ -1,19 +1,24 @@
 "use client";
 
+import { Tip } from "@/components/tip";
 import { useEffect, useRef, useState } from "react";
 import { RotateCcwIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { Button } from "@/components/ui/button";
+import { useDisabledAgents } from "@/hooks/use-disabled-agents";
 import { desktopAgents, type AgentInfo } from "@/lib/desktop";
 
 type Session = { status: "starting" | "running" | "exited"; error?: string };
 
 /** Agent CLI terminal (desktop app only): runs Claude Code or Codex in the workspace folder. */
 export function AgentPanel() {
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [allAgents, setAgents] = useState<AgentInfo[]>([]);
+  const { disabled } = useDisabledAgents();
+  const agents = allAgents.filter((agent) => !disabled.includes(agent.id));
   const [open, setOpen] = useState(false);
   const [started, setStarted] = useState(false);
-  const [active, setActive] = useState<string>();
+  const [chosen, setActive] = useState<string>();
+  const active = agents.some((agent) => agent.id === chosen) ? chosen : agents.find((agent) => agent.available)?.id;
   const [restart, setRestart] = useState(0);
   const [session, setSession] = useState<Session>({ status: "starting" });
   const container = useRef<HTMLDivElement>(null);
@@ -28,7 +33,6 @@ export function AgentPanel() {
     if (!bridge) return;
     bridge.list().then((list) => {
       setAgents(list);
-      setActive((list.find((agent) => agent.available) ?? list[0])?.id);
     }, () => setAgents([]));
   }, []);
 
@@ -42,7 +46,7 @@ export function AgentPanel() {
     void (async () => {
       const [{ Terminal }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
       if (disposed) return;
-      const terminal = new Terminal({ fontFamily: "ui-monospace, Consolas, monospace", fontSize: 13, cursorBlink: true, scrollback: 5000, theme: { background: "#0a0a0a" } });
+      const terminal = new Terminal({ fontFamily: "ui-monospace, Consolas, monospace", fontSize: 13, cursorBlink: true, scrollback: 5000, overviewRuler: { width: 6 }, theme: { background: "#0a0a0a" } });
       const fit = new FitAddon();
       terminal.loadAddon(fit);
       terminal.open(host);
@@ -85,9 +89,9 @@ export function AgentPanel() {
   const current = agents.find((agent) => agent.id === active);
   return (
     <>
-      <Button variant="outline" size="icon-sm" className="fixed top-4 right-4 z-20" aria-label="Open agent terminal" title="Agent terminal" onClick={() => { setOpen(true); setStarted(true); }}>
+      <Tip label="Agent terminal"><Button variant="outline" size="icon-sm" className="fixed top-4 right-4 z-20" aria-label="Open agent terminal" onClick={() => { setOpen(true); setStarted(true); }}>
         <SquareTerminalIcon aria-hidden="true" />
-      </Button>
+      </Button></Tip>
       <aside aria-label="Agent terminal" hidden={!open} className="fixed inset-y-0 right-0 z-30 flex w-[min(640px,100vw)] flex-col border-l bg-background shadow-xl">
         <header className="flex items-center gap-1 border-b p-2">
           {agents.map((agent) => (

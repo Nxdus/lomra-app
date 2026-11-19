@@ -4,6 +4,7 @@
   "private": true,
   "description": "Lomra desktop app",
   "author": "Lomra",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "src/main.mjs",
   "scripts": {
@@ -23,6 +24,7 @@
     "electron"
   ],
   "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
     "@lydell/node-pty": "^1.2.0-beta.18"
   },
   "build": {
@@ -30,7 +32,10 @@
     "productName": "Lomra",
     "asar": true,
     "asarUnpack": [
-      "**/node_modules/@lydell/**"
+      "**/node_modules/@lydell/**",
+      "**/node_modules/onnxruntime-node/**",
+      "**/node_modules/sharp/**",
+      "**/node_modules/@img/**"
     ],
     "directories": {
       "output": "dist"
@@ -38,9 +43,12 @@
     "files": [
       "src/**/*",
       "package.json",
-      "!src/**/*.test.mjs"
+      "!src/**/*.test.mjs",
+      "!node_modules/onnxruntime-web/**"
     ],
     "extraResources": [
+      { "from": "../../LICENSE", "to": "LICENSE-Lomra.txt" },
+      { "from": "../../NOTICE", "to": "NOTICE-Lomra.txt" },
       {
         "from": "../frontend/.next/standalone",
         "to": "web"
@@ -51,15 +59,29 @@
       }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**",
+        "!node_modules/onnxruntime-node/bin/napi-v6/linux/**",
+        "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**"
+      ]
     },
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.graphics-design"
+      "category": "public.app-category.graphics-design",
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v6/win32/**",
+        "!node_modules/onnxruntime-node/bin/napi-v6/linux/**"
+      ]
     },
     "linux": {
       "target": "AppImage",
-      "category": "Graphics"
+      "category": "Graphics",
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v6/win32/**",
+        "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**",
+        "!node_modules/onnxruntime-node/bin/napi-v6/linux/arm64/**"
+      ]
     },
     "afterPack": "scripts/after-pack.cjs"
   }

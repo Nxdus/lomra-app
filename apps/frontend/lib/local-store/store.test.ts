@@ -29,6 +29,33 @@ test('invalid state and unsafe IDs are rejected', async () => {
   await expect(s.readFile('missing')).rejects.toMatchObject({ status: 404 });
 });
 
+test('Character metadata and its own reference survive deleting the source canvas', async () => {
+  const { store: s } = await store();
+  const id = 'character-00000000-0000-0000-0000-000000000001';
+  const value = { id, name: 'น้องฝน', notes: 'Yellow coat', imageType: 'image/png' };
+  await s.save('canvas', 'default', [item('source')]);
+  await s.writeFile('source', new Uint8Array([1]));
+  await s.writeFile(id, await s.readFile('source'));
+  await s.save('characters', id, value);
+  await expect(s.save('characters', id, { ...value, name: 'name with spaces' })).rejects.toMatchObject({ status: 400 });
+  await s.remove('canvas', 'default');
+  expect(await s.list('characters')).toEqual([{ id, value }]);
+  expect([...await s.readFile(id)]).toEqual([1]);
+});
+
+test('chat history preserves attached image previews alongside older text messages', async () => {
+  const { store: s } = await store();
+  const history = [
+    { role: 'user', content: 'Earlier message' },
+    { role: 'user', content: 'See this image', images: [{ name: 'canvas.jpg', url: 'data:image/jpeg;base64,/9j/' }] },
+  ];
+  const chat = { id: 'chat', title: 'Chat', updatedAt: 1, history, generations: [], models: [] };
+  await s.save('chats', chat.id, chat);
+  expect(await s.list('chats')).toEqual([{ id: chat.id, value: chat }]);
+  history[1].images![0].url = 'blob:ephemeral';
+  await expect(s.save('chats', chat.id, chat)).rejects.toMatchObject({ status: 400 });
+});
+
 test('API keys are encrypted on disk and decrypted when listed', async () => {
   const { root, store: s } = await store();
   await s.save('keys', 'fal', ' secret-key ');

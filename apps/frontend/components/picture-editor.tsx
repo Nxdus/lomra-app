@@ -1,5 +1,6 @@
 "use client";
 
+import { Tip } from "@/components/tip";
 import { useEffect, useImperativeHandle, useReducer, useRef, useState, type PointerEvent, type Ref } from "react";
 import { ArrowRightIcon, CheckIcon, CircleIcon, EraserIcon, LoaderCircleIcon, MinusIcon, MousePointer2Icon, PenLineIcon, PictureInPicture2Icon, Redo2Icon, ScanIcon, ShapesIcon, SquareIcon, TypeIcon, Undo2Icon, XIcon } from "lucide-react";
 import { PictureTools, type PictureTool } from "@/components/picture-tools";
@@ -12,7 +13,7 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast";
 import { useApiProviders } from "@/components/api-provider";
-import { generate, selectedModel } from "@/components/prompt/generation";
+import { isBrowserModel, isSdModel, generate, modelProvider, selectedModel } from "@/components/prompt/generation";
 import { getSetting } from "@/lib/settings";
 import { drawMarkup, emptyMarkup, hitMarkup, markupBounds, markupHistory, moveMarkup, type Markup, type MarkupKind, type Point } from "@/lib/image-canvas/picture-markup";
 import { cn } from "@/lib/utils";
@@ -172,9 +173,10 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
       } else {
         const background = action === "Remove BG";
         if (action === "Erase" && !history.items.length) throw new Error("Brush over what you want to remove first.");
-        if (!keys[background ? "fal" : "openrouter"]) throw new Error(`Enter your ${background ? "Fal" : "OpenRouter"} API key in Settings first.`);
         const model = background ? "fal-ai/birefnet/v2" : selectedModel(await getSetting<string[]>("selected-models") ?? [], "picture");
         controller.signal.throwIfAborted();
+        const keyProvider = background ? "fal" : modelProvider(model ?? "");
+        if (!isBrowserModel(model ?? "") && !isSdModel(model ?? "") && !keys[keyProvider]) throw new Error(`Enter your ${{ fal: "Fal", google: "Google", openrouter: "OpenRouter" }[keyProvider]} API key in Settings first.`);
         if (!model) throw new Error("Select an Image model in the prompt toolbar first.");
         const references = [original.toDataURL("image/png")];
         if (action === "Erase") {
@@ -221,15 +223,15 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
   }
 
   const historyControls = <>
-    <Button variant="ghost" size="icon-sm" aria-label="Undo" title="Undo · Ctrl/⌘ Z" disabled={!history.past.length || !!busy} onClick={() => dispatch({ type: "undo" })}><Undo2Icon /></Button>
-    <Button variant="ghost" size="icon-sm" aria-label="Redo" title="Redo · Ctrl/⌘ Shift Z" disabled={!history.future.length || !!busy} onClick={() => dispatch({ type: "redo" })}><Redo2Icon /></Button>
+    <Tip label="Undo · Ctrl/⌘ Z"><Button variant="ghost" size="icon-sm" aria-label="Undo" disabled={!history.past.length || !!busy} onClick={() => dispatch({ type: "undo" })}><Undo2Icon /></Button></Tip>
+    <Tip label="Redo · Ctrl/⌘ Shift Z"><Button variant="ghost" size="icon-sm" aria-label="Redo" disabled={!history.future.length || !!busy} onClick={() => dispatch({ type: "redo" })}><Redo2Icon /></Button></Tip>
   </>;
 
   return <>
     <div className="relative mx-auto w-fit max-w-full">
       {/* Local blob URLs need no Next.js image optimization. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={url} alt={name || "Image preview"} className="block max-h-[80dvh] max-w-full object-contain" />
+      <img src={url} alt={name || "Image preview"} className="block max-h-[min(80dvh,calc(var(--app-content-height)-5rem))] max-w-full object-contain" />
       <canvas ref={overlay} tabIndex={painting ? 0 : -1} aria-label={tool === "Markup" ? "Draw on image" : tool === "Erase" ? "Mark areas to remove" : undefined} aria-hidden={!painting} className={cn("absolute inset-0 size-full outline-none", painting && !busy ? "touch-none cursor-crosshair" : "pointer-events-none", tool === "Markup" && drawingTool === "select" && "cursor-default", tool === "Erase" && "opacity-50")}
         onPointerDown={event => {
           if (!ready || busy || !painting || !event.isPrimary || event.button !== 0 || textDraft) return;
@@ -290,22 +292,22 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
       {busy ? <><LoaderCircleIcon className="mx-2 size-4 shrink-0 animate-spin" /><span role="status" className="truncate text-sm text-muted-foreground">{busy}</span><Button variant="ghost" size="icon-sm" aria-label="Cancel processing" onClick={() => setDiscard("viewer")}><XIcon /></Button></>
       : tool === "Markup" ? <>
         <ToggleGroup value={[drawingTool]} onValueChange={value => { if (value[0]) { setDrawingTool(value[0] as typeof drawingTool); setSelected(null); } }} size="sm" aria-label="Drawing tools" spacing={0}>
-          {[{ value: "select", label: "Select", icon: MousePointer2Icon }, { value: "pen", label: "Pen", icon: PenLineIcon }, { value: "text", label: "Text", icon: TypeIcon }].map(({ value, label, icon: Icon }) => <ToggleGroupItem key={value} value={value} aria-label={label} title={label}><Icon /></ToggleGroupItem>)}
+          {[{ value: "select", label: "Select", icon: MousePointer2Icon }, { value: "pen", label: "Pen", icon: PenLineIcon }, { value: "text", label: "Text", icon: TypeIcon }].map(({ value, label, icon: Icon }) => <Tip key={value} label={label}><ToggleGroupItem value={value} aria-label={label}><Icon /></ToggleGroupItem></Tip>)}
         </ToggleGroup>
-        <DropdownMenu open={shapeOpen} onOpenChange={setShapeOpen}><DropdownMenuTrigger render={<Button variant={shapes.some(shape => shape.value === drawingTool) ? "secondary" : "ghost"} size="icon-sm" aria-label="Shapes" title="Shapes" />}><ShapesIcon /></DropdownMenuTrigger>
+        <DropdownMenu open={shapeOpen} onOpenChange={setShapeOpen}><Tip label="Shapes"><DropdownMenuTrigger render={<Button variant={shapes.some(shape => shape.value === drawingTool) ? "secondary" : "ghost"} size="icon-sm" aria-label="Shapes" />}><ShapesIcon /></DropdownMenuTrigger></Tip>
           <DropdownMenuContent side="top" align="center"><DropdownMenuGroup>{shapes.map(({ label, value, icon: Icon }) => <DropdownMenuItem key={value} onClick={() => { setDrawingTool(value); setSelected(null); }}><Icon />{label}</DropdownMenuItem>)}</DropdownMenuGroup></DropdownMenuContent>
         </DropdownMenu>
-        <Popover open={colorOpen} onOpenChange={setColorOpen}><PopoverTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Ink color" title="Ink color" />}><CircleIcon fill={color} style={{ color }} /></PopoverTrigger>
+        <Popover open={colorOpen} onOpenChange={setColorOpen}><Tip label="Ink color"><PopoverTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Ink color" />}><CircleIcon fill={color} style={{ color }} /></PopoverTrigger></Tip>
           <PopoverContent side="top" align="center" className="w-auto gap-2 p-3"><PopoverTitle className="sr-only">Ink color</PopoverTitle><Input type="color" aria-label="Ink color" value={color} onChange={event => setColor(event.target.value)} className="w-24" /></PopoverContent>
         </Popover>
-        <ToggleGroup value={drawingTool === "eraser" ? ["eraser"] : []} onValueChange={value => { if (value[0]) { setDrawingTool("eraser"); setSelected(null); } }} size="sm" aria-label="Markup eraser"><ToggleGroupItem value="eraser" aria-label="Eraser" title="Erase markup"><EraserIcon /></ToggleGroupItem></ToggleGroup>
+        <ToggleGroup value={drawingTool === "eraser" ? ["eraser"] : []} onValueChange={value => { if (value[0]) { setDrawingTool("eraser"); setSelected(null); } }} size="sm" aria-label="Markup eraser"><Tip label="Erase markup"><ToggleGroupItem value="eraser" aria-label="Eraser"><EraserIcon /></ToggleGroupItem></Tip></ToggleGroup>
         {historyControls}
-        <Button variant="ghost" size="icon-sm" aria-label="Cancel markup" title="Cancel markup" onClick={cancel}><XIcon /></Button>
-        <Button size="icon-sm" aria-label="Done" title="Done · Add marked image to canvas" disabled={!history.items.length || !!textDraft} onClick={() => void run("Markup")}><CheckIcon /></Button>
+        <Tip label="Cancel markup"><Button variant="ghost" size="icon-sm" aria-label="Cancel markup" onClick={cancel}><XIcon /></Button></Tip>
+        <Tip label="Done · Add marked image to canvas"><Button size="icon-sm" aria-label="Done" disabled={!history.items.length || !!textDraft} onClick={() => void run("Markup")}><CheckIcon /></Button></Tip>
       </> : tool === "Erase" ? <>
         {history.items.length || history.past.length || history.future.length ? historyControls : <span className="px-2 text-sm text-muted-foreground">Brush over what you want to remove</span>}
         <Button size="sm" disabled={!history.items.length} onClick={() => void run("Erase")}>Send</Button>
-        <Button variant="ghost" size="icon-sm" aria-label="Cancel erase" title="Cancel" onClick={cancel}><XIcon /></Button>
+        <Tip label="Cancel"><Button variant="ghost" size="icon-sm" aria-label="Cancel erase" onClick={cancel}><XIcon /></Button></Tip>
       </> : <>
         <Button variant="ghost" size="sm" disabled={!ready} onClick={() => enter("Markup")}><PenLineIcon data-icon="inline-start" />Markup</Button>
         <Button variant="ghost" size="sm" disabled={!ready} onClick={() => void run("Remove BG")}><ScanIcon data-icon="inline-start" />Remove BG</Button>

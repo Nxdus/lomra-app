@@ -3,11 +3,14 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { toast } from "@/components/ui/toast";
 import { storage } from "@/lib/storage";
+import { recordGoogleUsage } from "@/components/google-usage";
 
-export type Provider = "openrouter" | "fal";
-type Keys = Record<Provider, string>;
+/** Providers that need an API key. Local models (Ollama) need none. */
+export type KeyedProvider = "openrouter" | "fal" | "google";
+export type Provider = KeyedProvider | "ollama";
+type Keys = Record<KeyedProvider, string>;
 export type ProviderRequest = {
-  action: "verify" | "usage" | "credits" | "chat" | "submit" | "status" | "result" | "route" | "image" | "video" | "video-status" | "video-content" | "cancel";
+  action: "verify" | "models" | "prices" | "usage" | "credits" | "chat" | "submit" | "status" | "result" | "route" | "image" | "video" | "video-status" | "video-content" | "cancel";
   model?: string;
   input?: unknown;
   requestId?: string;
@@ -18,36 +21,37 @@ export type ProviderRequest = {
 
 const ApiContext = createContext<{
   keys: Keys;
-  setKey: (provider: Provider, key: string) => Promise<void>;
+  setKey: (provider: KeyedProvider, key: string) => Promise<void>;
   keysReady: boolean;
   storageError: string;
   request: (provider: Provider, options: ProviderRequest) => Promise<unknown>;
 } | null>(null);
 
 export async function callProvider(provider: Provider, key: string, options: ProviderRequest): Promise<unknown> {
-  if (!key) throw new Error("Enter your API key in Settings first");
+  if (!key && provider !== "ollama") throw new Error("Enter your API key in Settings first");
   const response = await fetch("/api/providers", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": key },
     body: JSON.stringify({ provider, ...options, signal: undefined }),
     cache: "no-store",
-    signal: AbortSignal.any([AbortSignal.timeout(options.action === "image" ? 185_000 : 65_000), ...(options.signal ? [options.signal] : [])]),
+    signal: AbortSignal.any([AbortSignal.timeout(options.action === "image" ? 185_000 : provider === "ollama" ? 305_000 : 65_000), ...(options.signal ? [options.signal] : [])]),
   });
   if (response.ok && options.action === "video-content") return response.blob();
   const result = await response.json();
   if (!response.ok) throw new Error(result.message ?? "Provider request failed");
+  if (provider === "google") recordGoogleUsage(options.action, result);
   return result;
 }
 
 export function ApiProvider({ children }: { children: ReactNode }) {
-  const [keys, setKeys] = useState<Keys>({ openrouter: "", fal: "" });
+  const [keys, setKeys] = useState<Keys>({ openrouter: "", fal: "", google: "" });
   const [keysReady, setKeysReady] = useState(false);
   const [storageError, setStorageError] = useState("");
   useEffect(() => {
     let cancelled = false;
-    void storage('keys').then((rows: { id: Provider; value: string }[]) => {
+    void storage('keys').then((rows: { id: KeyedProvider; value: string }[]) => {
       if (cancelled) return;
-      setKeys({ openrouter: rows.find((row) => row.id === 'openrouter')?.value ?? '', fal: rows.find((row) => row.id === 'fal')?.value ?? '' });
+      setKeys({ openrouter: rows.find((row) => row.id === 'openrouter')?.value ?? '', fal: rows.find((row) => row.id === 'fal')?.value ?? '', google: rows.find((row) => row.id === 'google')?.value ?? '' });
       setKeysReady(true);
     }).catch(() => { if (!cancelled) {
       const title = 'Could not load API keys. Reload to retry.';
@@ -63,7 +67,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
       await storage(`keys/${provider}`, key.trim() ? 'PUT' : 'DELETE', key.trim() || undefined);
       setKeys((current) => ({ ...current, [provider]: key.trim() }));
     },
-    request: (provider, options) => callProvider(provider, keys[provider], options),
+    request: (provider, options) => callProvider(provider, provider === "ollama" ? "" : keys[provider], options),
   }}>{children}</ApiContext.Provider>;
 }
 

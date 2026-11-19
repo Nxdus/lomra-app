@@ -5,9 +5,9 @@ import { POST } from "./route";
 test("provider proxy validates requests, isolates keys and hides upstream errors", async () => {
   const originalFetch = globalThis.fetch;
   const calls: { url: string; options?: RequestInit }[] = [];
-  function request(body: unknown, key = "test-key", origin = "http://localhost") {
+  function request(body: unknown, key = "test-key", origin = "http://localhost", host = "localhost") {
     return new Request("http://localhost/api/providers", {
-      method: "POST", headers: { "x-api-key": key, origin }, body: JSON.stringify(body),
+      method: "POST", headers: { "x-api-key": key, origin, host }, body: JSON.stringify(body),
     });
   }
   try {
@@ -24,10 +24,17 @@ test("provider proxy validates requests, isolates keys and hides upstream errors
     ]) assert.equal((await POST(request(body))).status, 400);
     assert.equal((await POST(request({ provider: "fal", action: "verify" }, ""))).status, 400);
     assert.equal((await POST(request({}, "test", "https://evil.test"))).status, 403);
+    assert.equal((await POST(request({}, "test", "http://localhost", "127.0.0.1:3000"))).status, 403);
+    assert.equal((await POST(request({}, "test", "https://127.0.0.1:3000", "127.0.0.1:3000"))).status, 403);
     assert.equal((await POST(new Request("http://localhost/api/providers", {
       method: "POST", headers: { "x-api-key": "test-key" }, body: "invalid",
     }))).status, 400);
     assert.equal(calls.length, 0);
+
+    const desktopResult = await POST(request(
+      { provider: "openrouter", action: "verify" }, "test-key", "http://127.0.0.1:3000", "127.0.0.1:3000",
+    ));
+    assert.deepEqual(await desktopResult.json(), { connected: true });
 
     for (const [provider, key, expected] of [
       ["openrouter", "user-a", "Bearer user-a"], ["fal", "user-b", "Key user-b"],
@@ -129,6 +136,84 @@ test("provider proxy validates requests, isolates keys and hides upstream errors
     controller.abort();
     const aborted = request({ provider: "fal", action: "verify" });
     assert.equal((await POST(new Request(aborted, { signal: controller.signal }))).status, 504);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Google requests use the Gemini endpoints, strip the model prefix and send the key as Google expects", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: { url: string; options?: RequestInit }[] = [];
+  const request = (body: unknown) => new Request("http://localhost/api/providers", { method: "POST", headers: { "x-api-key": "g-key", origin: "http://localhost", host: "localhost" }, body: JSON.stringify(body) });
+  try {
+    globalThis.fetch = (async (url, options) => {
+      calls.push({ url: String(url), options });
+      return String(url).includes("/models?pageSize=1000")
+        ? Response.json({ models: [{ name: "models/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", supportedGenerationMethods: ["generateContent"] }] })
+        : Response.json({ data: [{ b64_json: "AAAA" }] });
+    }) as typeof fetch;
+    assert.deepEqual(await (await POST(request({ provider: "google", action: "verify" }))).json(), { connected: true });
+    assert.equal(calls[0].url, "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1");
+    assert.equal((calls[0].options?.headers as Record<string, string>)["x-goog-api-key"], "g-key");
+    assert.deepEqual((await (await POST(request({ provider: "google", action: "models" }))).json()).models.filter((model: { category: string }) => model.category !== "video"), [{ id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", category: "llm" }]);
+
+    assert.equal((await POST(request({ provider: "google", action: "image", model: "google/other", input: "a cat" }))).status, 400);
+    assert.equal((await POST(request({ provider: "google", action: "video", model: "google-ai/gemini-2.5-flash", input: "a cat" }))).status, 400);
+    assert.equal((await POST(request({ provider: "google", action: "video-status", model: "google-ai/veo-3.1:x", requestId: "abc" }))).status, 400);
+    assert.equal((await POST(request({ provider: "google", action: "usage" }))).status, 400);
+    calls.length = 0;
+    globalThis.fetch = (async (url, options) => {
+      calls.push({ url: String(url), options });
+      const target = String(url);
+      if (target.endsWith(":predictLongRunning")) return Response.json({ name: "models/veo-3.1-generate-preview/operations/op1" });
+      if (target.endsWith("/operations/op1")) return Response.json({ done: true, response: { generateVideoResponse: { generatedSamples: [{ video: { uri: "https://generativelanguage.googleapis.com/v1beta/files/f1:download?alt=media" } }] } } });
+      if (target.includes("/files/f1")) return new Response(null, { status: 302, headers: { location: "https://storage.googleapis.com/signed" } });
+      return new Response("video-bytes");
+    }) as typeof fetch;
+    assert.deepEqual(await (await POST(request({ provider: "google", action: "video", model: "google-ai/veo-3.1-generate-preview", input: "a cat" }))).json(), { id: "op1" });
+    assert.equal(calls[0].url, "https://generativelanguage.googleapis.com/v1beta/models/veo-3.1-generate-preview:predictLongRunning");
+    assert.equal((calls[0].options?.headers as Record<string, string>)["x-goog-api-key"], "g-key");
+    assert.deepEqual(JSON.parse(String(calls[0].options?.body)), { instances: [{ prompt: "a cat" }] });
+    const veo = { provider: "google", model: "google-ai/veo-3.1-generate-preview", requestId: "op1" };
+    assert.deepEqual(await (await POST(request({ ...veo, action: "video-status" }))).json(), { status: "completed" });
+    assert.equal(await (await POST(request({ ...veo, action: "video-content" }))).text(), "video-bytes");
+    assert.equal(calls.at(-1)?.url, "https://storage.googleapis.com/signed");
+    assert.equal((calls.at(-1)?.options?.headers as Record<string, string> | undefined)?.["x-goog-api-key"], undefined);
+    calls.length = 0;
+    globalThis.fetch = (async (url, options) => {
+      calls.push({ url: String(url), options });
+      return Response.json({ data: [{ b64_json: "AAAA" }] });
+    }) as typeof fetch;
+    assert.equal((await POST(request({ provider: "google", action: "image", model: "google-ai/gemini-2.5-flash-image", input: "a cat" }))).status, 200);
+    assert.equal(calls[0].url, "https://generativelanguage.googleapis.com/v1beta/openai/images/generations");
+    assert.equal((calls[0].options?.headers as Record<string, string>).Authorization, "Bearer g-key");
+    assert.deepEqual(JSON.parse(String(calls[0].options?.body)), { model: "gemini-2.5-flash-image", prompt: "a cat", n: 1, response_format: "b64_json" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fal prices are looked up with the user's key, validated and shown as USD per unit", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: { url: string; options?: RequestInit }[] = [];
+  const request = (body: unknown) => new Request("http://localhost/api/providers", { method: "POST", headers: { "x-api-key": "id:secret", origin: "http://localhost", host: "localhost" }, body: JSON.stringify(body) });
+  try {
+    globalThis.fetch = (async (url, options) => {
+      calls.push({ url: String(url), options });
+      return Response.json({ prices: [
+        { endpoint_id: "fal-ai/trellis", unit_price: 0.02, unit: "generation", currency: "USD" },
+        { endpoint_id: "fal-ai/eur", unit_price: 1, unit: "image", currency: "EUR" },
+        { endpoint_id: "fal-ai/bad", unit_price: "x", unit: "image", currency: "USD" },
+        null,
+      ], next_cursor: null, has_more: false });
+    }) as typeof fetch;
+    assert.deepEqual(await (await POST(request({ provider: "fal", action: "prices", input: ["fal-ai/trellis", "fal-ai/eur", "fal-ai/bad"] }))).json(), { prices: { "fal-ai/trellis": "$0.02/generation" } });
+    assert.equal(calls[0].url, "https://api.fal.ai/v1/models/pricing?endpoint_id=fal-ai%2Ftrellis&endpoint_id=fal-ai%2Feur&endpoint_id=fal-ai%2Fbad");
+    assert.equal((calls[0].options?.headers as Record<string, string>).Authorization, "Key id:secret");
+    for (const input of [undefined, [], ["../x"], ["fal-ai/ok&x=1"], Array(51).fill("fal-ai/x")]) {
+      assert.equal((await POST(request({ provider: "fal", action: "prices", input }))).status, 400);
+    }
+    assert.equal(calls.length, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

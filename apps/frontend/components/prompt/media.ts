@@ -8,6 +8,26 @@ export type MediaPart = { type: "text"; text: string }
 export const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 export const MAX_MEDIA_ITEMS = 10;
 
+export async function imagePreview(file: File, signal: AbortSignal) {
+  signal.throwIfAborted();
+  const bitmap = await createImageBitmap(file);
+  try {
+    signal.throwIfAborted();
+    const scale = Math.min(1, 384 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not preview the selected image.");
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.7);
+  } finally {
+    bitmap.close();
+  }
+}
+
 export async function promptContent(
   prompt: string, selection: { id: string; file: File }[], signal: AbortSignal,
   modelPreview?: (id: string) => string,

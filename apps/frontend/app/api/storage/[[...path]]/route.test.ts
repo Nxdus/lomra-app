@@ -9,7 +9,7 @@ const { GET, PUT, DELETE } = await import('./route');
 
 const origin = 'http://localhost:3000';
 const call = (handler: typeof GET, path: string[], init: RequestInit = {}) =>
-  handler(new Request(`${origin}/api/storage/${path.join('/')}`, { ...init, headers: { origin, ...init.headers } }), { params: Promise.resolve({ path }) });
+  handler(new Request(`${origin}/api/storage/${path.join('/')}`, { ...init, headers: { origin, host: new URL(origin).host, ...init.headers } }), { params: Promise.resolve({ path }) });
 
 test('files and saved state round-trip through the workspace folder', async () => {
   expect((await call(PUT, ['files', 'asset'], { method: 'PUT', body: new Uint8Array([0, 128, 255]) })).status).toBe(200);
@@ -32,4 +32,18 @@ test('invalid requests are rejected', async () => {
   expect((await call(PUT, ['settings', 'prompt-position'], { method: 'PUT', body: 'nope' })).status).toBe(400);
   expect((await call(PUT, ['files', 'asset'], { method: 'PUT', body: new Uint8Array([1]), headers: { origin: 'http://evil.example' } })).status).toBe(403);
   expect((await call(GET, ['settings'], { headers: { 'sec-fetch-site': 'cross-site' } })).status).toBe(403);
+});
+
+test('removed catalog models and an empty selection are saved', async () => {
+  const settings = [
+    { id: 'hidden-models', value: ['llm:google/gemini-3.1-flash-lite'] },
+    { id: 'selected-models', value: [] },
+    { id: 'disabled-agents', value: ['opencode'] },
+    { id: 'speech-model', value: 'base' },
+    { id: 'agent-limits', value: { claude: { updatedAt: 1795020000000, windows: [{ id: 'five_hour', label: '5 hr', usedPercent: 35, resetsAt: 1795026600 }] } } },
+  ];
+  for (const { id, value } of settings) {
+    expect((await call(PUT, ['settings', id], { method: 'PUT', body: JSON.stringify({ value }) })).status).toBe(200);
+  }
+  expect(await (await call(GET, ['settings'])).json()).toEqual([...settings].sort((a, b) => a.id.localeCompare(b.id)));
 });
