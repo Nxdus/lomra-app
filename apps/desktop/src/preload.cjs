@@ -48,6 +48,15 @@ contextBridge.exposeInMainWorld('lomra', {
     cancel: (runId) => ipcRenderer.send('sd:cancel', runId),
     onProgress: (callback) => subscribe('sd:progress', callback),
   },
+  video: {
+    status: () => ipcRenderer.invoke('video:status'),
+    download: () => ipcRenderer.invoke('video:download'),
+    cancelDownload: () => ipcRenderer.invoke('video:cancelDownload'),
+    remove: () => ipcRenderer.invoke('video:remove'),
+    stitch: (runId, input) => ipcRenderer.invoke('video:stitch', runId, input),
+    cancel: (runId) => ipcRenderer.send('video:cancel', runId),
+    onProgress: (callback) => subscribe('video:progress', callback),
+  },
   local3d: {
     status: () => ipcRenderer.invoke('local3d:status'),
     install: (id) => ipcRenderer.invoke('local3d:install', id),

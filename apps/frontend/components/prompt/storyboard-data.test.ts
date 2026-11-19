@@ -10,6 +10,7 @@ test("reads fenced story drafts and rejects an empty synopsis", () => {
   const json = JSON.stringify({ reply: "Add a storm?", story: "A keeper waits." });
   assert.deepEqual(storyReply(completion("```json\n" + json + "\n```")), { ...JSON.parse(json), characters: [] });
   assert.throws(() => storyReply(completion('{"reply":"Ready","story":" "}')));
+  assert.deepEqual(storyReply(completion("Here you go:\n" + json + "\nDone.")), { ...JSON.parse(json), characters: [] });
 });
 
 test("keeps reviewed appearance, validates shot cast indices, and prioritizes continuity in a long image prompt", () => {
@@ -46,4 +47,15 @@ test("validates a saved storyboard alongside older chats", () => {
   assert.doesNotThrow(() => validateValue("chats", id, chat));
   assert.doesNotThrow(() => validateValue("chats", id, { ...chat, storyboard: { story: "Draft", shots: [{ ...shot, generatedId: "a-new-file" }] } }));
   assert.throws(() => validateValue("chats", id, { ...chat, storyboard: { story: "Draft", shots: [{ ...shot, generatedId: "../file" }] } }));
+  assert.doesNotThrow(() => validateValue("chats", id, { ...chat, storyboard: { story: "Draft", shots: [{ ...shot, videoId: "a-new-clip" }] } }));
+  assert.throws(() => validateValue("chats", id, { ...chat, storyboard: { story: "Draft", shots: [{ ...shot, videoId: "../clip" }] } }));
+  assert.doesNotThrow(() => validateValue("chats", id, { ...chat, storyboard: { story: "Draft", videoItemId: "canvas-item-1" } }));
+  assert.throws(() => validateValue("chats", id, { ...chat, storyboard: { story: "Draft", videoItemId: "../item" } }));
+});
+
+test("accepts finite shot positions only", () => {
+  const at = (position: unknown) => validStoryboard({ story: "", shots: [{ ...shot, position }] }, 1);
+  assert.equal(at({ x: -120.5, y: 40 }), true);
+  assert.equal(at({ x: Infinity, y: 0 }), false);
+  assert.equal(at({ x: 0 }), false);
 });

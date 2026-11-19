@@ -65,8 +65,19 @@ export function createLocalStore(root: string, secret: Buffer) {
     await atomicWrite(jsonPath(kind, id), JSON.stringify(stored));
   }
 
+  // Pictures generated for storyboard cast and shots are workspace files that no canvas item owns.
+  async function removeStoryboardFiles(chats: unknown[]) {
+    for (const chat of chats) {
+      const board = (chat as { storyboard?: { characters?: { generatedId?: string }[]; shots?: { generatedId?: string; videoId?: string }[] } } | null)?.storyboard;
+      for (const item of [...(board?.characters ?? []), ...(board?.shots ?? [])]) {
+        for (const id of [item.generatedId, (item as { videoId?: string }).videoId]) if (id && validId(id)) await rm(join(dir('files'), id), { force: true });
+      }
+    }
+  }
+
   async function remove(kind: Kind, id: string) {
     if (!validId(id)) throw new StoreError(400, 'Invalid ID');
+    if (kind === 'chats') { const raw = await readOptional(jsonPath('chats', id)); if (raw) await removeStoryboardFiles([JSON.parse(raw.toString('utf8'))]); }
     if (kind !== 'canvas') return rm(jsonPath(kind, id), { force: true });
     const canvases = await list('canvas');
     const others = new Set(canvases.filter((row) => row.id !== id).flatMap((row) => (row.value as { id: string }[]).map((item) => item.id)));
@@ -74,6 +85,7 @@ export function createLocalStore(root: string, secret: Buffer) {
     const chats = (await list('chats')).filter((row) => ((row.value as { canvasId?: string }).canvasId ?? 'default') === id);
     // Delete the manifest last so a failed cleanup can be retried.
     for (const file of new Set(mine)) if (!others.has(file)) await rm(join(dir('files'), file), { force: true });
+    await removeStoryboardFiles(chats.map((chat) => chat.value));
     for (const chat of chats) await rm(jsonPath('chats', chat.id), { force: true });
     await rm(jsonPath('settings', id === 'default' ? 'camera' : `camera-${id}`), { force: true });
     await rm(jsonPath('settings', `canvas-name-${id}`), { force: true });

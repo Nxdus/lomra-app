@@ -10,7 +10,7 @@ import { customModelId, defaultSdModel, hfFilePattern, hfRepoPattern, parseHuggi
 const binaryName = (platform) => platform === 'win32' ? 'sd-cli.exe' : 'sd-cli';
 
 /** Streams `url` to `file`, checking its SHA-256. Nothing is left at `file` unless the hash matches. */
-async function downloadFile(fetchImpl, url, file, { sha256, signal, onBytes }) {
+export async function downloadFile(fetchImpl, url, file, { sha256, signal, onBytes }) {
   const response = await fetchImpl(url, { signal });
   if (response.status === 401 || response.status === 403) throw new Error('This model needs a Hugging Face login, which Lomra does not support.');
   if (!response.ok || !response.body) throw new Error(`The download failed (${response.status}).`);
@@ -28,13 +28,13 @@ async function downloadFile(fetchImpl, url, file, { sha256, signal, onBytes }) {
 }
 
 /** Unpacks a zip with the system's tar (Windows, macOS) or unzip (Linux). */
-function extractZip(zip, dest, { platform, env, spawnProcess }) {
+export function extractZip(zip, dest, { platform, env, spawnProcess }, what = 'the image engine') {
   const [command, args] = platform === 'linux' ? ['unzip', ['-q', '-o', zip, '-d', dest]]
     : [platform === 'win32' ? join(env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar', ['-xf', zip, '-C', dest]];
   return new Promise((resolve, reject) => {
     const proc = spawnProcess(command, args, { windowsHide: true, stdio: 'ignore' });
-    proc.on('error', () => reject(new Error('Could not unpack the image engine.')));
-    proc.on('exit', (code) => code === 0 ? resolve() : reject(new Error('Could not unpack the image engine.')));
+    proc.on('error', () => reject(new Error(`Could not unpack ${what}.`)));
+    proc.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`Could not unpack ${what}.`)));
   });
 }
 

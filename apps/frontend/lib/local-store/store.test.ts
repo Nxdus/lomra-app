@@ -41,6 +41,13 @@ test('Character metadata and its own reference survive deleting the source canva
   await s.remove('canvas', 'default');
   expect(await s.list('characters')).toEqual([{ id, value }]);
   expect([...await s.readFile(id)]).toEqual([1]);
+  const multiview = { ...value, additionalImageTypes: ['image/jpeg'], coverIndex: 1 };
+  await s.writeFile(`${id}-1`, new Uint8Array([2]));
+  await s.save('characters', id, multiview);
+  await expect(s.save('characters', id, { ...multiview, coverIndex: 2 })).rejects.toMatchObject({ status: 400 });
+  await expect(s.save('characters', id, { ...multiview, additionalImageTypes: ['video/mp4'] })).rejects.toMatchObject({ status: 400 });
+  expect(await s.list('characters')).toEqual([{ id, value: multiview }]);
+  expect([...await s.readFile(`${id}-1`)]).toEqual([2]);
 });
 
 test('chat history preserves attached image previews alongside older text messages', async () => {

@@ -218,3 +218,29 @@ test("fal prices are looked up with the user's key, validated and shown as USD p
     globalThis.fetch = originalFetch;
   }
 });
+
+test("video requests send one first-frame picture, a duration and an aspect ratio to OpenRouter", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: { url: string; body: unknown }[] = [];
+  const image = "data:image/png;base64,iVBORw0KGgo=";
+  const post = (body: unknown) => POST(new Request("http://localhost/api/providers", {
+    method: "POST", headers: { "x-api-key": "test-key", origin: "http://localhost", host: "localhost" }, body: JSON.stringify({ provider: "openrouter", action: "video", model: "google/veo-3.1", ...(body as object) }),
+  }));
+  try {
+    globalThis.fetch = (async (url, options) => {
+      calls.push({ url: String(url), body: JSON.parse(String(options?.body)) });
+      return Response.json({ id: "job-1" });
+    }) as typeof fetch;
+    assert.equal((await post({ input: "a cat", images: [image], aspectRatio: "16:9", duration: 6 })).status, 200);
+    assert.deepEqual(calls[0], { url: "https://openrouter.ai/api/v1/videos", body: {
+      model: "google/veo-3.1", prompt: "a cat", aspect_ratio: "16:9", duration: 6,
+      frame_images: [{ type: "image_url", image_url: { url: image }, frame_type: "first_frame" }],
+    } });
+    for (const body of [{ images: [image, image] }, { images: ["https://evil.test/a.png"] }, { duration: 0 }, { duration: 1.5 }, { aspectRatio: "7:3" }]) {
+      assert.equal((await post({ input: "a cat", ...body })).status, 400);
+    }
+    assert.equal(calls.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

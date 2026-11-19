@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { FloatingPrompt } from "@/components/prompt/floating-prompt";
 import { ImageCanvas, type CanvasHandle, type VisibleImage } from "@/components/image-canvas";
+import type { ImageBounds } from "@/lib/image-canvas/image-canvas-resize";
 import { PopupBoundaryContext } from "@/components/ui/popup-boundary";
 
 export default function Home() {
@@ -10,6 +11,10 @@ export default function Home() {
   const [selection, setSelection] = useState<VisibleImage[]>([]);
   const [canvasReady, setCanvasReady] = useState(false);
   const [canvasId, setCanvasId] = useState("default");
+  const [storyboardHost, setStoryboardHost] = useState<HTMLElement | null>(null);
+  const [storyboardOrigin, setStoryboardOrigin] = useState({ x: 0, y: 0 });
+  const [videoItem, setVideoItem] = useState<string>();
+  const [videoBounds, setVideoBounds] = useState<ImageBounds | null>(null);
   const [contentBoundary, setContentBoundary] = useState<HTMLElement | null>(null);
   return (
     <div className="flex h-dvh flex-col">
@@ -17,18 +22,22 @@ export default function Home() {
         aria-hidden="true"
         className="h-(--app-titlebar-space) shrink-0 overflow-hidden bg-background shadow-[inset_0_-1px_0_var(--border)]"
       >
-        <div className="ml-[env(titlebar-area-x,0px)] h-(--app-titlebar-height) w-[env(titlebar-area-width,100%)] [app-region:drag]" />
+        <div className="ml-[env(titlebar-area-x,0px)] h-(--app-titlebar-height) w-[env(titlebar-area-width,100%)] [app-region:drag]">
+          <svg viewBox="0 0 512 512" aria-hidden="true" className="ml-2 size-4 translate-y-[calc((var(--app-titlebar-height)-1rem)/2)] fill-foreground">
+            <path d="M1.7281 455.111C37.9931 327.111 17.4557 0 17.4557 0C93.9754 290.828 208.914 384.017 512 455.111C512 455.111 -34.5369 583.111 1.7281 455.111Z" />
+          </svg>
+        </div>
       </div>
       <main ref={setContentBoundary} className="relative min-h-0 flex-1 overflow-hidden">
         <PopupBoundaryContext value={contentBoundary ?? undefined}>
-          <ImageCanvas ref={canvas} onSelectionChange={setSelection} onReadyChange={setCanvasReady} onCanvasChange={setCanvasId} />
+          <ImageCanvas ref={canvas} onSelectionChange={setSelection} onReadyChange={setCanvasReady} onCanvasChange={setCanvasId} onStoryboardHost={setStoryboardHost} onStoryboardOrigin={setStoryboardOrigin} watchItem={videoItem} onWatchedBounds={setVideoBounds} />
           <div className="relative z-10">
-            <FloatingPrompt key={canvasId} canvasId={canvasId} loading={!canvasReady} selection={selection} onDeselect={(ids) => canvas.current?.deselect(ids)} onModelPreview={(id) => {
+            <FloatingPrompt key={canvasId} canvasId={canvasId} storyboardHost={storyboardHost} storyboardOrigin={storyboardOrigin} videoBounds={videoBounds} onVideoItem={setVideoItem} onRemoveFromCanvas={(ids) => canvas.current?.removeItems(ids)} loading={!canvasReady} selection={selection} onDeselect={(ids) => canvas.current?.deselect(ids)} onModelPreview={(id) => {
               if (!canvas.current) throw new Error("Canvas is not ready");
               return canvas.current.modelPreview(id);
-            }} onAddToCanvas={(files) => {
+            }} onAddToCanvas={(files, at) => {
               if (!canvas.current) throw new Error("Canvas is not ready");
-              return canvas.current.addFiles(files);
+              return canvas.current.addFiles(files, at);
             }} onFocusFile={(file) => {
               if (!canvas.current) throw new Error("Canvas is not ready");
               canvas.current.focusFile(file);

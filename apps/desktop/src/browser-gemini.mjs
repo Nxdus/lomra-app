@@ -10,8 +10,14 @@ const maxImageBytes = 20 * 1024 * 1024;
 const maxVideoBytes = 100 * 1024 * 1024;
 const reference = /^data:image\/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/;
 const menuRoles = ['menuitem', 'menuitemradio', 'menuitemcheckbox', 'option', 'button'];
+const modelPicker = /^(?:Open )?(?:model|mode) picker\b/i;
+const autoModel = /^(?:Gemini )?Auto\b/i;
+const autoSelected = /\bcurrently(?: selected:?| using)?\s+(?:Gemini )?Auto\b/i;
 
-const isHome = url => sameUrl(url, home);
+// Gemini's "limit reached / try again later" replies, in English and Thai.
+const declined = /unusually high|reached (?:its|the|your) [\w ]*limits?|(?:can(?:'|’)?t|cannot|unable to) (?:create|generate) (?:videos?|images?)|try again later|ลองอีกครั้งในภายหลัง|ขีดจำกัด|ไม่สามารถสร้าง(?:วิดีโอ|วิดิโอ|รูปภาพ|ภาพ)/i;
+
+const isHome =url => sameUrl(url, home);
 const isConversation = url => conversation.test(url.split(/[?#]/)[0].replace(/\/+$/, ''));
 
 function videoType(bytes) {
@@ -53,7 +59,7 @@ export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } 
     }
     // Waits for a control by accessible name; `url` pins the page once the request has created its conversation.
     let seen = [];
-    async function waitFor(name, { url, timeout = 15_000, role = 'button', error, interval = 600, allowSignIn = false }) {
+    async function waitFor(name, { url, timeout = 15_000, role = 'button', error, interval = 600, allowSignIn = false, find = state => control(state, name, role) }) {
       let deadline = Date.now() + timeout;
       for (;;) {
         signal.throwIfAborted();
@@ -76,7 +82,7 @@ export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } 
           throw new Error('The Gemini page navigated away from this request.');
         }
         if (!url && isConversation(state.url)) url = state.url;
-        const node = control(state, name, role);
+        const node = find(state);
         if (node) return { node, url: state.url };
         await delay(interval, undefined, { signal });
       }
@@ -91,14 +97,17 @@ export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } 
 
     // Best effort: Gemini remembers the last mode it was used in, so choose Auto explicitly.
     let mode;
-    const picker = await optional(/^Open mode picker\b/i, { url: home, timeout: 4000 });
-    if (!picker) mode = 'Could not find the Gemini model picker to set Auto.';
-    else if (!/currently Auto\b/i.test(picker.node.name.value)) {
+    const findPicker = state => control(state, modelPicker) ?? control({
+      nodes: state.nodes.filter(node => node.properties?.some(({ name, value }) => name === 'hasPopup' && ['menu', 'listbox'].includes(value.value))),
+    }, /^(?:Gemini )?(?:Auto|Flash-Lite|Flash|Fast|Thinking|Pro)$/i);
+    const picker = await optional(modelPicker, { url: home, timeout: 4000, find: findPicker });
+    if (!picker) mode = 'Could not verify Auto in Gemini. Check Settings → Usage limits → Auto model selection.';
+    else if (!autoSelected.test(picker.node.name.value) && !autoModel.test(picker.node.name.value)) {
       await page.click(picker.node, home);
-      const auto = await optional(/^Auto\b/i, { url: home, role: menuRoles, timeout: 4000 });
+      const auto = await optional(autoModel, { url: home, role: menuRoles, timeout: 4000 });
       if (auto) await page.click(auto.node, home);
       else {
-        mode = 'Could not set the Gemini model to Auto.';
+        mode = 'Gemini did not offer Auto in the model picker. Check Settings → Usage limits → Auto model selection.';
         await page.click(picker.node, home);
       }
     }
@@ -130,10 +139,16 @@ export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } 
     await page.click(send.node, home);
 
     const done = kind === 'video' ? /^Download video\b/i : /^Download (?:full size )?image\b/i;
+    // Gemini answers a usage limit or busy system with plain text and no media: stop waiting and show it.
+    const own = prompt.trim().slice(0, 30);
+    let refusal;
     const result = await waitFor(done, {
       timeout: kind === 'video' ? 15 * 60_000 : 6 * 60_000, interval: 2500,
+      find: state => control(state, done) ?? (refusal = state.nodes.find(node => !node.ignored && node.name?.value?.length < 600 &&
+        declined.test(node.name.value) && !node.name.value.includes(own))),
       error: `Gemini did not return a ${kind} in time. Check your Gemini activity for the result or a usage limit.`,
     });
+    if (result.node === refusal) throw new Error(`Gemini could not create the ${kind}: ${refusal.name.value}`);
     const url = result.url;
     if (!isConversation(url)) throw new Error('Could not identify the Gemini conversation.');
     const output = join(dir, `generated-${kind}`);

@@ -1,3 +1,4 @@
+import type { StoryboardLayout } from "./storyboard-layout";
 import type { CanvasCamera } from "./image-canvas-camera";
 
 export type CanvasItemSnapshot = {
@@ -19,6 +20,8 @@ export type CanvasHistoryEntry = {
   camera?: CanvasCamera;
   nextCamera?: CanvasCamera;
   type?: CanvasHistoryActionType;
+  // Storyboard shot node positions before the change; present only for changes that moved nodes.
+  layout?: StoryboardLayout;
 };
 
 export type CanvasHistoryState = {
@@ -68,7 +71,7 @@ export function pushCanvasHistory(
       entry.camera.y === entry.nextCamera.y &&
       entry.camera.scale === entry.nextCamera.scale);
 
-  if (isItemsEqual && isCameraEqual) {
+  if (isItemsEqual && isCameraEqual && !entry.layout) {
     return state;
   }
 
@@ -77,6 +80,7 @@ export function pushCanvasHistory(
     camera: entry.camera ? { ...entry.camera } : undefined,
     nextCamera: entry.nextCamera ? { ...entry.nextCamera } : undefined,
     type: entry.type,
+    ...(entry.layout && { layout: { ...entry.layout, shots: [...entry.layout.shots] } }),
   };
 
   return {
@@ -89,12 +93,14 @@ export type UndoResult = {
   state: CanvasHistoryState;
   items: CanvasItemSnapshot[];
   camera?: CanvasCamera;
+  layout?: StoryboardLayout;
 };
 
 export function undoCanvasHistory(
   state: CanvasHistoryState,
   currentItems: CanvasItemSnapshot[],
-  currentCamera?: CanvasCamera
+  currentCamera?: CanvasCamera,
+  currentLayout?: StoryboardLayout | null
 ): UndoResult | null {
   if (!state.past.length) return null;
   const entry = state.past[state.past.length - 1];
@@ -104,6 +110,7 @@ export function undoCanvasHistory(
     camera: entry.nextCamera ? { ...entry.nextCamera } : (currentCamera ? { ...currentCamera } : undefined),
     nextCamera: entry.camera ? { ...entry.camera } : undefined,
     type: entry.type,
+    ...(entry.layout && currentLayout && { layout: { ...currentLayout, shots: [...currentLayout.shots] } }),
   };
 
   return {
@@ -113,6 +120,7 @@ export function undoCanvasHistory(
     },
     items: cloneCanvasItems(entry.items),
     camera: entry.camera ? { ...entry.camera } : undefined,
+    layout: entry.layout,
   };
 }
 
@@ -120,12 +128,14 @@ export type RedoResult = {
   state: CanvasHistoryState;
   items: CanvasItemSnapshot[];
   camera?: CanvasCamera;
+  layout?: StoryboardLayout;
 };
 
 export function redoCanvasHistory(
   state: CanvasHistoryState,
   currentItems: CanvasItemSnapshot[],
-  currentCamera?: CanvasCamera
+  currentCamera?: CanvasCamera,
+  currentLayout?: StoryboardLayout | null
 ): RedoResult | null {
   if (!state.future.length) return null;
   const entry = state.future[0];
@@ -135,6 +145,7 @@ export function redoCanvasHistory(
     camera: entry.nextCamera ? { ...entry.nextCamera } : (currentCamera ? { ...currentCamera } : undefined),
     nextCamera: entry.camera ? { ...entry.camera } : undefined,
     type: entry.type,
+    ...(entry.layout && currentLayout && { layout: { ...currentLayout, shots: [...currentLayout.shots] } }),
   };
 
   return {
@@ -144,6 +155,7 @@ export function redoCanvasHistory(
     },
     items: cloneCanvasItems(entry.items),
     camera: entry.camera ? { ...entry.camera } : undefined,
+    layout: entry.layout,
   };
 }
 

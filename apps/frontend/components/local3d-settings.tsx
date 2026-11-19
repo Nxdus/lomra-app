@@ -26,29 +26,29 @@ export function Local3dSettings() {
   const ready = status?.supported ? status : null;
   const hasInstalledModel = !!ready?.engine && ready.models.some((model) => model.installed && model.fits);
   const statusLabel = status === undefined ? "Checking…" : status === null ? "Desktop app required"
-    : !status.supported ? "Unavailable" : job ? "Installing…" : hasInstalledModel ? "Ready" : "No usable models installed";
+    : !status.supported ? "Unavailable" : job ? "Downloading…" : hasInstalledModel ? "Ready" : "No models installed";
   const downloadBytes = confirming ? confirming.bytes + (ready?.engine ? 0 : ready?.engineBytes ?? 0) : 0;
 
   async function start(model: Local3dModel) {
-    if (!await install(model.id)) toast.add({ title: "Could not start the installation.", type: "error" });
+    if (!await install(model.id)) toast.add({ title: "Could not start the download.", type: "error" });
   }
 
   return <section aria-labelledby="local3d-heading" className="flex flex-col gap-3">
     <ConfirmDelete open={!!removing} onOpenChange={(open) => { if (!open) setRemoving(null); }} title="Remove 3D model?"
-      description={`“${removing?.name}” will be deleted from this computer. You can install it again later.`}
+      description={`“${removing?.name}” will be deleted from this computer. You can download it again later.`}
       onConfirm={async () => { if (removing) try { await remove(removing.id); } catch (error) { toast.add({ title: error instanceof Error ? error.message : "Could not remove the model", type: "error" }); } }} />
 
     <Dialog open={!!confirming} onOpenChange={(open) => { if (!open) setConfirming(null); }}>
       <DialogContent showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle>Install {confirming?.name}?</DialogTitle>
+          <DialogTitle>Download {confirming?.name}?</DialogTitle>
           <DialogDescription>
             About {localModelSize(downloadBytes)} will be downloaded{ready?.engine ? "" : " (including the 3D engine)"}. You can keep using Lomra meanwhile. License: {confirming?.license}.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" onClick={() => setConfirming(null)}>Not now</Button>
-          <Button autoFocus onClick={() => { const model = confirming; setConfirming(null); if (model) void start(model); }}>Install</Button>
+          <Button autoFocus onClick={() => { const model = confirming; setConfirming(null); if (model) void start(model); }}>Download</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -77,12 +77,12 @@ export function Local3dSettings() {
       <ul className="divide-y">
         {status.models.map((model) => {
           const installing = job?.id === model.id;
-          const modelStatus = installing ? "Installing" : !model.fits ? "Needs more graphics memory" : model.installed ? "Installed" : undefined;
+          const modelStatus = installing ? "Downloading" : !model.fits ? "Needs more graphics memory" : model.installed ? "Installed" : undefined;
           const action = installing
-            ? { label: "Stop installing", icon: <XIcon aria-hidden="true" />, onClick: () => void cancel() }
+            ? { label: "Stop download", icon: <XIcon aria-hidden="true" />, onClick: () => void cancel() }
             : model.installed
               ? { label: "Remove", icon: <Trash2Icon aria-hidden="true" />, onClick: () => setRemoving(model), disabled: !!job }
-              : model.fits ? { label: "Install", icon: <DownloadIcon aria-hidden="true" />, onClick: () => setConfirming(model), disabled: !!job } : undefined;
+              : model.fits ? { label: "Download", icon: <DownloadIcon aria-hidden="true" />, onClick: () => setConfirming(model), disabled: !!job } : undefined;
           return <li key={model.id}>
             <LocalModelRow name={model.name} description={`${model.quality} · ${model.note}`}
               size={localModelSize(model.bytes)} status={modelStatus} action={action} />
@@ -94,7 +94,7 @@ export function Local3dSettings() {
           <span className="min-w-0 flex-1 truncate">{stageLabel[job.stage]} · {job.label}{job.total > 0 && ` · ${localModelSize(job.received)} of ${localModelSize(job.total)}`}</span>
           {percent !== null && <span className="shrink-0">{percent}%</span>}
         </div>
-        <Progress value={percent} aria-label={`Installing ${job.name}`} />
+        <Progress value={percent} aria-label={`Downloading ${job.name}`} />
       </div>}
       {status.error && <p role="alert" className="text-xs text-destructive">{status.error}</p>}
     </>}

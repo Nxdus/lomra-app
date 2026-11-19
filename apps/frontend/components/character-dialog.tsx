@@ -7,13 +7,15 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/c
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
-import { characterImageType, characterNameKey, characterNameLimit, characterNamePattern, characterNotesLimit, type Character } from "@/lib/characters";
+import { characterImageId, characterImageLimit, characterImageType, characterNameKey, characterNameLimit, characterNamePattern, characterNotesLimit, type Character } from "@/lib/characters";
+import type { CanvasImage } from "@/lib/image-canvas/image-canvas-storage";
 import { storage, storageFile } from "@/lib/storage";
 import { MAX_MEDIA_BYTES } from "./prompt/media";
 
-export function CharacterDialog({ file, onClose }: { file: File; onClose: () => void }) {
+export function CharacterDialog({ images, onClose }: { images: (CanvasImage & { url: string })[]; onClose: () => void }) {
   const [name, setName] = useState("");
   const [notes, setNotes] = useState("");
+  const [coverIndex, setCoverIndex] = useState(0);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const pending = useRef(false);
@@ -27,8 +29,13 @@ export function CharacterDialog({ file, onClose }: { file: File; onClose: () => 
       setError("Use letters, numbers, hyphens, or underscores, with no spaces.");
       return;
     }
-    if (!file.size || file.size > MAX_MEDIA_BYTES || !characterImageType.test(file.type)) {
-      setError("Choose a PNG, JPEG, WebP, or GIF under 20 MB.");
+    const files = images.map(({ file }) => file);
+    if (files.length > characterImageLimit || files.reduce((size, file) => size + file.size, 0) > MAX_MEDIA_BYTES) {
+      setError(`Choose up to ${characterImageLimit} images totaling at most 20 MB.`);
+      return;
+    }
+    if (files.some(file => !file.size || !characterImageType.test(file.type))) {
+      setError("Choose PNG, JPEG, WebP, or GIF images.");
       return;
     }
     setError("");
@@ -41,8 +48,12 @@ export function CharacterDialog({ file, onClose }: { file: File; onClose: () => 
         return;
       }
       // Keep the reference available even when its original canvas is deleted.
-      await storageFile(id, file);
-      await storage(`characters/${id}`, "PUT", { id, name: alias, notes: notes.trim(), imageType: file.type } satisfies Character);
+      for (const [index, file] of files.entries()) await storageFile(characterImageId(id, index), file);
+      const [imageType, ...additionalImageTypes] = files.map(file => file.type);
+      await storage(`characters/${id}`, "PUT", {
+        id, name: alias, notes: notes.trim(), imageType,
+        ...(additionalImageTypes.length > 0 && { additionalImageTypes, coverIndex }),
+      } satisfies Character);
       toast.add({ title: `Character saved as @${alias}`, type: "success" });
       onClose();
     } catch {
@@ -58,10 +69,25 @@ export function CharacterDialog({ file, onClose }: { file: File; onClose: () => 
       <DialogContent showCloseButton={!saving}>
         <DialogHeader>
           <DialogTitle>Save as Character</DialogTitle>
-          <DialogDescription>Use @{name.trim() || "name"} in any chat in this workspace to reference this image.</DialogDescription>
+          <DialogDescription>Use @{name.trim() || "name"} in chat to reference {images.length === 1 ? "this image" : `these ${images.length} images`}.</DialogDescription>
         </DialogHeader>
         <form onSubmit={save} className="flex flex-col gap-4">
           <FieldGroup>
+            {images.length > 1 && images.length <= characterImageLimit && (
+              <Field>
+                <div role="group" aria-label="Cover image" className="grid grid-cols-5 gap-2">
+                  <span className="col-span-5 text-sm font-medium">Cover image</span>
+                  {images.map(({ id, url }, index) => (
+                    <Button key={id} type="button" variant={index === coverIndex ? "default" : "outline"}
+                      aria-label={`Image ${index + 1}`} aria-pressed={index === coverIndex} disabled={saving}
+                      className="aspect-square h-auto overflow-hidden rounded-lg p-1" onClick={() => setCoverIndex(index)}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={url} alt="" className="size-full rounded-sm object-cover" />
+                    </Button>
+                  ))}
+                </div>
+              </Field>
+            )}
             <Field>
               <FieldLabel htmlFor="character-name">Name</FieldLabel>
               <Input id="character-name" required maxLength={characterNameLimit} disabled={saving} value={name} onChange={(event) => setName(event.target.value)} />

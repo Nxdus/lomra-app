@@ -19,6 +19,8 @@ import { cn } from "@/lib/utils";
 import { canvasHistory, canvasTitle, canvasStorage, isCanvasFilePending, deleteCanvasStorage, canvasFileError, canvasFileKind, canvasFileSize, type CanvasImage, type CanvasHistoryItem } from "@/lib/image-canvas/image-canvas-storage";
 import { CANVAS_CAMERA_KEY, canvasPoint, parseCanvasCamera, zoomCamera, type CanvasCamera } from "@/lib/image-canvas/image-canvas-camera";
 import { resizeImage, type ImageBounds, type ImageCorner } from "@/lib/image-canvas/image-canvas-resize";
+import { shotGridSize, shotsOffset } from "@/components/prompt/storyboard-shots";
+import { storyboardLayout } from "@/lib/image-canvas/storyboard-layout";
 import { reorganizeCanvas, fitCanvas } from "@/lib/image-canvas/image-canvas-layout";
 import { getSetting, saveSetting } from "@/lib/settings";
 import { canvasMediaVisible } from "@/lib/image-canvas/image-canvas-visibility";
@@ -68,9 +70,9 @@ function ImageResizeHandles({ name, onPointerDown, onKeyDown }: {
   ));
 }
 
-export type CanvasHandle = { addFiles: (files: File[]) => Promise<string[]>; focusFile: (file: File) => void; modelPreview: (id: string) => string; deselect: (ids: string[]) => void };
+export type CanvasHandle = { addFiles: (files: File[], at?: { x: number; y: number }) => Promise<string[]>; removeItems: (ids: string[]) => void; focusFile: (file: File) => void; modelPreview: (id: string) => string; deselect: (ids: string[]) => void };
 
-export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasChange }: { ref?: Ref<CanvasHandle>; onSelectionChange?: (images: VisibleImage[]) => void; onReadyChange?: (ready: boolean) => void; onCanvasChange?: (id: string) => void }) {
+export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasChange, onStoryboardHost, onStoryboardOrigin, watchItem, onWatchedBounds }: { watchItem?: string; onWatchedBounds?: (bounds: ImageBounds | null) => void; onStoryboardHost?: (host: HTMLDivElement | null) => void; onStoryboardOrigin?: (origin: { x: number; y: number }) => void; ref?: Ref<CanvasHandle>; onSelectionChange?: (images: VisibleImage[]) => void; onReadyChange?: (ready: boolean) => void; onCanvasChange?: (id: string) => void }) {
   const viewport = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const current = useRef<VisibleImage[]>([]);
@@ -92,6 +94,18 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   const [camera, setCamera] = useState<CanvasCamera>({ x: 0, y: 0, scale: 1 });
   const [panning, setPanning] = useState(false);
   const [images, setImages] = useState<VisibleImage[]>([]);
+  // The storyboard (cast and shots) sits below the pictures, starting at their left edge.
+  const storyboardX = images.length ? Math.min(...images.map((image) => image.x)) : 0;
+  const storyboardY = images.length ? Math.max(...images.map((image) => image.y + image.height)) + 130 : 0;
+  const storyboardHost = useRef<HTMLDivElement | null>(null);
+  const storyboardRef = useCallback((element: HTMLDivElement | null) => { storyboardHost.current = element; onStoryboardHost?.(element); }, [onStoryboardHost]);
+  useEffect(() => { onStoryboardOrigin?.({ x: storyboardX, y: storyboardY }); }, [onStoryboardOrigin, storyboardX, storyboardY]);
+  // The storyboard draws an arrow to its video, so it hears where that item is as it moves.
+  const watched = images.find((image) => image.id === watchItem);
+  const watchedX = watched?.x, watchedY = watched?.y, watchedWidth = watched?.width, watchedHeight = watched?.height;
+  useEffect(() => {
+    onWatchedBounds?.(watchedX === undefined ? null : { x: watchedX, y: watchedY!, width: watchedWidth!, height: watchedHeight! });
+  }, [onWatchedBounds, watchedX, watchedY, watchedWidth, watchedHeight]);
   const [layoutUndo, setLayoutUndo] = useState<{ bounds: Map<string, ImageBounds>; camera: CanvasCamera } | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [inspectId, setInspectId] = useState<string | null>(null);
@@ -108,7 +122,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   useEffect(() => { onReadyChange?.(ready); }, [ready, onReadyChange]);
   const [helpOpen, setHelpOpen] = useState(false);
   const [deletingFiles, setDeletingFiles] = useState<string[]>([]);
-  const [characterSource, setCharacterSource] = useState<File | null>(null);
+  const [characterSource, setCharacterSource] = useState<VisibleImage[] | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [activeMedia, setActiveMedia] = useState<Set<string>>(new Set());
   const activeMediaRef = useRef(activeMedia);
@@ -390,6 +404,12 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     cleanupUnreferencedUrls();
   }
 
+  // Lets the shot nodes record their own drags in this canvas's undo history.
+  useEffect(() => {
+    storyboardLayout.record = (before) => recordCanvasHistory({ items: current.current, layout: before, type: "generic" });
+    return () => { storyboardLayout.record = undefined; };
+  });
+
   function update(next: VisibleImage[], save = true) {
     current.current = next;
     setImages(next);
@@ -400,11 +420,12 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     if (!ready) return;
     const canvasId = activeCanvas.current;
     const currentHist = canvasHistories.current.get(canvasId) ?? emptyCanvasHistory;
-    const result = undoCanvasHistory(currentHist, current.current, view.current);
+    const result = undoCanvasHistory(currentHist, current.current, view.current, storyboardLayout.read());
     if (!result) return;
     canvasHistories.current.set(canvasId, result.state);
     const restored = result.items.map(ensureRestoredUrl);
     update(restored, true);
+    if (result.layout) storyboardLayout.write(result.layout);
     if (result.camera) {
       changeView(result.camera);
     }
@@ -419,11 +440,12 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     if (!ready) return;
     const canvasId = activeCanvas.current;
     const currentHist = canvasHistories.current.get(canvasId) ?? emptyCanvasHistory;
-    const result = redoCanvasHistory(currentHist, current.current, view.current);
+    const result = redoCanvasHistory(currentHist, current.current, view.current, storyboardLayout.read());
     if (!result) return;
     canvasHistories.current.set(canvasId, result.state);
     const restored = result.items.map(ensureRestoredUrl);
     update(restored, true);
+    if (result.layout) storyboardLayout.write(result.layout);
     if (result.camera) {
       changeView(result.camera);
     }
@@ -438,6 +460,16 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     setSelected((previous) => additive ? previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id] : [id]);
   }
 
+  // Size of the storyboard once its shot nodes are back in the default grid, or null when there is none.
+  function storyboardSize() {
+    const cast = storyboardHost.current?.querySelector('section[aria-label="Cast"]')?.getBoundingClientRect();
+    const shots = storyboardHost.current?.querySelectorAll('section[aria-label^="Shot "]').length ?? 0;
+    if (!cast && !shots) return null;
+    const grid = shots ? shotGridSize(shots) : { width: 0, height: 0 };
+    const castWidth = cast ? cast.width / view.current.scale : 0;
+    return { width: shots ? (cast ? shotsOffset : 0) + grid.width : castWidth, height: Math.max(cast ? cast.height / view.current.scale : 0, grid.height) };
+  }
+
   function reorganize() {
     const element = viewport.current;
     if (!ready || !element || !current.current.length) return;
@@ -445,13 +477,21 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     const previousCamera = { ...view.current };
     setLayoutUndo({ bounds: new Map(previous.map(({ id, x, y, width, height }) => [id, { x, y, width, height }])), camera: previousCamera });
     const next = reorganizeCanvas(previous, element.clientWidth);
-    const nextCamera = fitCanvas(next, element.clientWidth, element.clientHeight);
-    if (!areCanvasItemsEqual(previous, next)) {
+    // Keep the storyboard in view: it follows the pictures, and its shot nodes go back to the default grid.
+    const size = storyboardSize();
+    // The storyboard keeps its own fixed position; Organize moves it below the new layout and resets its nodes.
+    const layout = storyboardLayout.read();
+    const nextX = Math.min(...next.map((image) => image.x)), nextY = Math.max(...next.map((image) => image.y + image.height)) + 130;
+    const layoutChanged = !!layout && (layout.shots.some(Boolean) || layout.origin?.x !== nextX || layout.origin?.y !== nextY);
+    if (layout && layoutChanged) storyboardLayout.write({ origin: { x: nextX, y: nextY }, shots: layout.shots.map(() => undefined) });
+    const nextCamera = fitCanvas(size ? [...next, { x: nextX, y: nextY, ...size }] : next, element.clientWidth, element.clientHeight);
+    if (!areCanvasItemsEqual(previous, next) || layoutChanged) {
       recordCanvasHistory({
         items: previous,
         camera: previousCamera,
         nextCamera,
         type: 'reorganize',
+        ...(layoutChanged && { layout: layout! }),
       });
     }
     update(next);
@@ -507,7 +547,8 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     return canvasPoint(view.current, clientX - rect.left, clientY - rect.top);
   }
 
-  function importFiles(files: File[], origin: { x: number; y: number }, centered = false) {
+  // `middle` centers only vertically: the point is the left edge of the file, halfway down.
+  function importFiles(files: File[], origin: { x: number; y: number }, centered = false, middle = false) {
     if (!ready) return;
     imports.current = imports.current.then(async () => {
       const failures: string[] = [];
@@ -523,7 +564,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           const image = {
             id: crypto.randomUUID(), file, url, ...size,
             x: origin.x + offset - (centered ? size.width / 2 : 0),
-            y: origin.y + offset - (centered ? size.height / 2 : 0),
+            y: origin.y + offset - (centered || middle ? size.height / 2 : 0),
           };
           recordCanvasHistory({ items: current.current, type: "generic" });
           // Track the URL only after the history step: it sweeps every tracked URL the canvas does not reference yet.
@@ -570,10 +611,13 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     const scale = Math.min(1, element.clientWidth * 0.8 / image.width, element.clientHeight * 0.6 / image.height);
     changeView({ scale, x: element.clientWidth / 2 - (image.x + image.width / 2) * scale, y: element.clientHeight * 0.35 - (image.y + image.height / 2) * scale });
     element.focus({ preventScroll: true });
-  }, async addFiles(files) {
+  }, removeItems(ids) {
+    remove(ids);
+  }, async addFiles(files, at) {
     const element = viewport.current;
     if (!ready || switching.current || !element) throw new Error("Canvas is still loading. Try again.");
-    importFiles(files, canvasPoint(view.current, element.clientWidth / 2, element.clientHeight / 2), true);
+    if (at) importFiles(files, at, false, true);
+    else importFiles(files, canvasPoint(view.current, element.clientWidth / 2, element.clientHeight / 2), true);
     await imports.current;
     const added = files.map((file) => current.current.find((image) => image.file === file));
     if (added.some((image) => !image)) throw new Error("Could not add this result to canvas. Check its format and try again.");
@@ -741,6 +785,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           className="absolute inset-0 isolate origin-top-left"
           style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})` }}
         >
+          <div ref={storyboardRef} data-canvas-interactive="" className="absolute top-0 left-0 size-0 cursor-auto overflow-visible select-text" />
           {images.map((image) => (
             <ContextMenu key={`${canvasId}:${image.id}`} open={contextMenuId === image.id} onOpenChange={(open) => setContextMenuId((id) => open ? image.id : id === image.id ? null : id)}>
             <ContextMenuTrigger
@@ -808,9 +853,9 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
             </ContextMenuTrigger>
             <ContextMenuContent data-canvas-interactive>
               <ContextMenuGroup>
-                {contextMenuFiles.length === 1 && contextMenuFiles[0].url && canvasFileKind(contextMenuFiles[0].file) === "image" && (
-                  <ContextMenuItem onClick={() => setCharacterSource(contextMenuFiles[0].file)}>
-                    <UserRoundPlusIcon /> Save as Character
+                {contextMenuFiles.length > 0 && contextMenuFiles.every(({ file, url }) => url && canvasFileKind(file) === "image") && (
+                  <ContextMenuItem onClick={() => setCharacterSource(contextMenuFiles)}>
+                    <UserRoundPlusIcon /> Save as Character{contextMenuFiles.length > 1 && ` (${contextMenuFiles.length})`}
                   </ContextMenuItem>
                 )}
                 {contextMenuFiles.length === 1 && contextMenuFiles[0].url && canvasFileKind(contextMenuFiles[0].file) === "3d" && (
@@ -869,7 +914,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
         </DialogContent>
       </Dialog>
       <Dialog open={!!preview} onOpenChange={(open) => { if (!open && (pictureEditor.current?.requestClose() ?? true)) setPreviewId(null); }}>
-        <DialogContent className="w-fit max-w-[calc(100vw-2rem)] overflow-visible sm:max-w-[calc(100vw-4rem)]" aria-describedby={undefined}>
+        <DialogContent className="w-fit max-w-[calc(100vw-2rem)] overflow-visible bg-transparent ring-0 sm:max-w-[calc(100vw-4rem)] [&>[data-slot=dialog-close]]:-top-3 [&>[data-slot=dialog-close]]:-right-3 [&>[data-slot=dialog-close]]:bg-popover [&>[data-slot=dialog-close]]:shadow-md" aria-describedby={undefined}>
           <DialogTitle className="sr-only">{preview?.file.name || "Image preview"}</DialogTitle>
           {preview && <PictureEditor ref={pictureEditor} key={preview.id} url={preview.url} name={preview.file.name} onClose={() => setPreviewId(null)} onSave={async (file) => {
             importFiles([file], { x: preview.x + preview.width + 24, y: preview.y });
@@ -879,7 +924,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           }} />}
         </DialogContent>
       </Dialog>
-      {characterSource && <CharacterDialog file={characterSource} onClose={() => setCharacterSource(null)} />}
+      {characterSource && <CharacterDialog images={characterSource} onClose={() => setCharacterSource(null)} />}
       <ConfirmDelete open={deletingFiles.length > 0} onOpenChange={(open) => { if (!open) setDeletingFiles([]); }} title="Delete canvas files?" description={`${deletingFiles.length} selected file(s) will be removed from this canvas.`} disabled={!ready} onConfirm={() => remove(deletingFiles)} />
       <CanvasMenu canvasId={canvasId} history={history} onHistory={refreshHistory} onNew={() => void openCanvas()} onOpen={(id) => void openCanvas(id)} onDelete={deleteCanvas} title={canvasId ? canvasTitle(canvasId) : 'Canvas'} scale={camera.scale} ready={ready} onZoom={zoom} onReset={() => changeView({ x: 0, y: 0, scale: 1 })} canReorganize={images.length > 0} onReorganize={reorganize} />
       <div className="absolute left-4 top-4 flex items-center gap-2 text-muted-foreground">

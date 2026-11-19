@@ -1,87 +1,61 @@
-import { ImageIcon, PlusIcon, TrashIcon } from "lucide-react";
+import { CheckIcon, ImageIcon, RefreshCwIcon, TrashIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { maxStoryCharacters, storyCharacterNotesLimit, type StoryCharacter } from "./storyboard-data";
+import { storyCharacterNotesLimit, type StoryCharacter } from "./storyboard-data";
 
-export function StoryboardCharacters({ open, onOpenChange, characters, images, status, onAdd, onEdit, onRemove, onGenerate, onStop }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+export function StoryboardCharacters({ characters, images, status, onEdit, onRemove, onGenerate, onStop }: {
   characters: StoryCharacter[];
   images: { name: string; url: string }[];
   status: string;
-  onAdd: () => void;
   onEdit: (index: number, change: Partial<StoryCharacter>) => void;
   onRemove: (index: number) => void;
   onGenerate: (index: number) => void;
   onStop: () => void;
 }) {
-  return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="flex max-h-[calc(var(--app-content-height)-2rem)] flex-col sm:max-w-2xl">
-      <DialogHeader>
-        <DialogTitle>Storyboard characters</DialogTitle>
-        <DialogDescription>Set the appearance and main reference image for each recurring character.</DialogDescription>
-      </DialogHeader>
+  return <section aria-label="Storyboard cast" className="flex flex-col gap-3">
       {status && <div className="flex items-center gap-2">
         <p role="status" className="flex-1 text-sm text-muted-foreground">{status}</p>
         <Button variant="outline" size="sm" onClick={onStop}>Stop</Button>
       </div>}
-      <ol className="flex min-h-0 flex-col gap-3 overflow-y-auto">
+      <ol className="flex flex-col divide-y">
         {characters.map((character, index) => {
           const selected = character.image === null ? undefined : images[character.image];
           const url = selected?.url ?? (character.generatedId ? `/api/storage/files/${character.generatedId}` : undefined);
           const name = character.name.trim() || `Character ${index + 1}`;
-          return <li key={index} className="grid gap-3 rounded-xl border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-            <div className="flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-muted">
+          return <li key={index} className="flex items-center gap-2 py-2 first:pt-0">
+            <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-muted-foreground">
               {url
                 // eslint-disable-next-line @next/next/no-img-element
-                ? <img src={url} alt={`Reference for ${name}`} className="size-full object-contain" />
-                : <span className="flex items-center gap-2 text-sm text-muted-foreground"><ImageIcon className="size-4" />No reference</span>}
+                ? <img src={url} alt={`Reference for ${name}`} className="size-full object-cover" />
+                : <ImageIcon aria-label="No reference" className="size-4" />}
             </div>
-            <FieldGroup className="min-w-0 gap-2">
-              <Field>
-                <FieldLabel htmlFor={`character-name-${index}`}>Name</FieldLabel>
-                <Input id={`character-name-${index}`} value={character.name} maxLength={64} disabled={!!status}
-                  onChange={(event) => onEdit(index, { name: event.target.value })} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor={`character-notes-${index}`}>Appearance</FieldLabel>
-                <Textarea id={`character-notes-${index}`} value={character.notes} maxLength={storyCharacterNotesLimit} rows={3} disabled={!!status}
-                  onChange={(event) => onEdit(index, { notes: event.target.value })} />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor={`character-image-${index}`}>Main reference</FieldLabel>
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <div className="flex items-center gap-1">
+                {character.image === null && !character.generatedId && <span className="min-w-0 flex-1 truncate px-1 text-sm font-medium">{name}</span>}
                 <Select value={character.image?.toString() ?? "none"} disabled={!!status} onValueChange={(value) => {
                   if (value !== null) onEdit(index, { image: value === "none" ? null : Number(value) });
                 }}>
-                  <SelectTrigger id={`character-image-${index}`} className="w-full">
-                    <SelectValue>{selected?.name ?? (character.approved ? "Generated reference" : character.generatedId ? "Generated preview" : "No reference")}</SelectValue>
+                  <SelectTrigger size="sm" aria-label="Main reference" className={character.image === null && !character.generatedId ? "max-w-28" : "min-w-0 flex-1"}>
+                    <SelectValue>{selected?.name ?? (character.approved ? "Generated reference" : character.generatedId ? "Generated preview" : "Select reference")}</SelectValue>
                   </SelectTrigger>
                   <SelectContent><SelectGroup>
-                    <SelectItem value="none">{character.generatedId ? "Generated image" : "No reference"}</SelectItem>
+                    {character.generatedId && <SelectItem value="none">Generated image</SelectItem>}
                     {images.map((image, position) => <SelectItem key={position} value={String(position)}>{image.name}</SelectItem>)}
                   </SelectGroup></SelectContent>
                 </Select>
-              </Field>
-              <div className="flex flex-wrap justify-between gap-2">
                 {character.image === null && !character.approved && <>
-                  {character.generatedId && <Button size="sm" disabled={!!status} onClick={() => onEdit(index, { approved: true })}>Use this reference</Button>}
-                  <Button size="sm" variant="outline" disabled={!!status || !character.name.trim()} onClick={() => onGenerate(index)}>
-                    <ImageIcon data-icon="inline-start" />{character.generatedId ? "Generate again" : "Generate reference"}
-                  </Button>
+                  <Button variant="ghost" size="icon-sm" aria-label={character.generatedId ? "Generate again" : "Generate reference"} title={character.generatedId ? "Generate again" : "Generate reference"}
+                    disabled={!!status || !character.name.trim()} onClick={() => onGenerate(index)}>{character.generatedId ? <RefreshCwIcon /> : <ImageIcon />}</Button>
+                  {character.generatedId && <Button size="icon-sm" aria-label="Use this reference" title="Use this reference" disabled={!!status} onClick={() => onEdit(index, { approved: true })}><CheckIcon /></Button>}
                 </>}
-                <Button className="ml-auto" variant="ghost" size="icon-sm" aria-label={`Remove ${name}`} disabled={!!status} onClick={() => onRemove(index)}><TrashIcon /></Button>
+                <Button variant="ghost" size="icon-sm" aria-label={`Remove ${name}`} title={`Remove ${name}`} disabled={!!status} onClick={() => onRemove(index)}><TrashIcon /></Button>
               </div>
-            </FieldGroup>
+              {character.image === null && !character.generatedId && <Textarea aria-label="Appearance" placeholder="Appearance" className="min-h-0 py-1.5" value={character.notes} maxLength={storyCharacterNotesLimit} rows={1} disabled={!!status}
+                onChange={(event) => onEdit(index, { notes: event.target.value })} />}
+            </div>
           </li>;
         })}
       </ol>
-      <Button size="sm" variant="outline" className="self-start" disabled={!!status || characters.length >= maxStoryCharacters} onClick={onAdd}>
-        <PlusIcon data-icon="inline-start" />Add character
-      </Button>
-    </DialogContent>
-  </Dialog>;
+  </section>;
 }

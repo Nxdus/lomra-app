@@ -1,7 +1,7 @@
 // @ts-expect-error Bun provides this module at test runtime.
 import { expect, test } from "bun:test";
 import { mentionedCharacters, type Character } from "@/lib/characters";
-import { characterGeneration } from "./character-references";
+import { characterGeneration, loadCharacterReferences } from "./character-references";
 import { browserImageModel, geminiVideoModel, type Generation } from "./generation";
 
 const rain: Character = { id: "rain", name: "น้องฝน", notes: "Notch in the left ear", imageType: "image/png" };
@@ -29,4 +29,26 @@ test("Gemini Browser video uses the chosen scene frame or one saved portrait", (
   expect(characterGeneration(video, [], [reference]).images).toEqual(["portrait"]);
   expect(() => characterGeneration(video, ["scene", "other"], [reference])).toThrow("first frame");
   expect(() => characterGeneration({ ...video, model: "example/video" }, [], [reference])).toThrow("Choose Gemini Browser video");
+});
+
+test("a saved Character loads all views for pictures and uses its cover for video", async () => {
+  const character = { ...rain, additionalImageTypes: ["image/jpeg"], coverIndex: 1 };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url) => {
+    if (url === "/api/storage/characters") return Response.json([{ value: character }, { value: scout }]);
+    return new Response(String(url).split("/").at(-1));
+  }) as typeof fetch;
+  try {
+    const references = await loadCharacterReferences("@น้องฝน @Café-Scout", new AbortController().signal);
+    const cover = `data:image/jpeg;base64,${btoa("rain-1")}`;
+    const first = `data:image/png;base64,${btoa("rain")}`;
+    expect(references.map(({ url }) => url)).toEqual([cover, `data:image/png;base64,${btoa("scout")}`]);
+    const result = characterGeneration(picture, [], [references[0]]);
+    expect(result.images).toEqual([cover, first]);
+    expect(result.task.prompt).toContain("Image 2 is @น้องฝน.");
+    expect(result.task.prompt.match(/Notch in the left ear/g)).toHaveLength(1);
+    expect(characterGeneration({ ...picture, category: "video", model: geminiVideoModel }, [], [references[0]]).images).toEqual([cover]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
