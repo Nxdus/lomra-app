@@ -58,6 +58,7 @@
         "to": "web/.next/static"
       }
     ],
+    "nsis": { "artifactName": "Lomra-${version}-windows-${arch}.${ext}" },
     "win": {
       "target": "nsis",
       "files": [
