@@ -5,6 +5,7 @@ export async function chatCompletion(response: Response) {
   let buffer = "";
   let content = "";
   let done = false;
+  let usage: unknown;
   const calls = new Map<number, { type: string; function: { name: string; arguments: string } }>();
   function line(value: string) {
     if (!value.startsWith("data:")) return;
@@ -13,15 +14,18 @@ export async function chatCompletion(response: Response) {
     if (!data) return;
     const chunk = JSON.parse(data);
     if (chunk.error) throw new Error("Chat stream failed");
+    if (chunk.usage && typeof chunk.usage === "object") usage = chunk.usage;
     const delta = chunk.choices?.[0]?.delta;
     if (!delta) return;
     if (typeof delta.content === "string") content += delta.content;
     for (const part of delta.tool_calls ?? []) {
-      if (!Number.isInteger(part.index) || part.index < 0 || part.index > 3) throw new Error("Invalid tool call index");
-      const call = calls.get(part.index) ?? { type: "function", function: { name: "", arguments: "" } };
+      // Some providers (Google) send each call whole and without an index.
+      const index = part.index === undefined ? calls.size : part.index;
+      if (!Number.isInteger(index) || index < 0 || index > 3) throw new Error("Invalid tool call index");
+      const call = calls.get(index) ?? { type: "function", function: { name: "", arguments: "" } };
       call.function.name += part.function?.name ?? "";
       call.function.arguments += part.function?.arguments ?? "";
-      calls.set(part.index, call);
+      calls.set(index, call);
     }
   }
   try {
@@ -37,7 +41,7 @@ export async function chatCompletion(response: Response) {
     }
     if (buffer) line(buffer.trimEnd());
     if (!done) throw new Error("Incomplete chat stream");
-    return { choices: [{ message: { role: "assistant", content, tool_calls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call) } }] };
+    return { choices: [{ message: { role: "assistant", content, tool_calls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call) } }], ...(usage ? { usage } : {}) };
   } finally {
     await reader.cancel();
     reader.releaseLock();

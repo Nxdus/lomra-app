@@ -47,6 +47,22 @@ export function multiviewError(model: string, views: ModelViews): string | undef
   if (new Set(urls).size !== urls.length) return "Use a different image for each view.";
   if (urls.reduce((sum, url) => sum + url.length, 0) > Math.ceil(20 * 1024 * 1024 / 3) * 4 + 256) return "View images exceed 20 MB. Use smaller images.";
 }
+
+export function resolveMultiview(model: string, indices: unknown, images: { url: string; name: string }[]): ModelViews {
+  const views: ModelViews = {};
+  if (indices !== undefined) {
+    if (!indices || typeof indices !== "object" || Array.isArray(indices)) throw new Error("Provide viewIndices mapping each view to its selected image index.");
+    for (const [view, index] of Object.entries(indices)) {
+      if (!modelViews.includes(view as ModelView) || typeof index !== "number" || !Number.isInteger(index) || index < 0 || !images[index]) {
+        throw new Error("Could not match the selected views. Use the selected image indices for front, back, left or right.");
+      }
+      views[view as ModelView] = images[index];
+    }
+  }
+  const error = multiviewError(model, views);
+  if (error) throw new Error(error);
+  return views;
+}
 export function multiviewInput(model: string, views: ModelViews) {
   const error = multiviewError(model, views);
   if (error) throw new Error(error);

@@ -1,6 +1,7 @@
 import { processImage, type ImageOperation } from "./image-tools";
 import { animationInput, animationFiles, rigFiles } from "./animation";
 import { localMediaTool, mediaToolModel, validateMediaTool, type MediaTool, type ToolSource } from "./media-tools";
+import { desktopAgents, desktopLocal3d, desktopSd } from "@/lib/desktop";
 import type { Provider, ProviderRequest } from "@/components/api-provider";
 
 export type Category = "picture" | "video" | "3d";
@@ -12,15 +13,34 @@ export type Generation = GenerationTask & {
   id: string; model: string; status: string; requestId?: string; files?: GeneratedFile[]; error?: string; views?: ModelViews; messageIndex?: number; summary?: string;
   motionJobs?: { rig?: string; motion?: string };
 };
-export type ConversationMessage = { role: "user" | "assistant"; content: string };
+export type ConversationMessage = { role: "user" | "assistant"; content: string; images?: { name: string; url: string }[] };
 type RequestProvider = (provider: Provider, options: ProviderRequest) => Promise<unknown>;
+
+/** Models from Google AI Studio carry this prefix; everything else is routed through OpenRouter. */
+export const modelProvider = (model: string): "google" | "openrouter" => model.startsWith("google-ai/") ? "google" : "openrouter";
+/** Models installed in Ollama run on this computer and carry this prefix. */
+export const ollamaPrefix = "ollama/";
+export const isOllamaModel = (model: string) => model.startsWith(ollamaPrefix);
+/** The provider an LLM request goes to. */
+export const llmProvider = (model: string): Provider => isOllamaModel(model) ? "ollama" : modelProvider(model);
+/** Stable Diffusion models downloaded in the desktop app make pictures on this computer and carry this prefix. */
+export const sdPrefix = "sd/";
+export const isSdModel = (model: string) => model.startsWith(sdPrefix);
+/** Models installed in the desktop app (Hunyuan3D, TripoSR) make 3D models from one picture on this computer and carry this prefix. */
+export const local3dPrefix = "local3d/";
+export const isLocal3dModel = (model: string) => model.startsWith(local3dPrefix);
+export const browserImageModel = "chatgpt-browser/create-image";
+export const geminiImageModel = "gemini-browser/create-image";
+export const geminiVideoModel = "gemini-browser/create-video";
+/** Models that run in the signed-in ChatGPT or Gemini web app instead of through an API key. */
+export const isBrowserModel = (model: string) => model === browserImageModel || model === geminiImageModel || model === geminiVideoModel;
 
 export function selectedModel(models: string[], category: string) {
   return models.find((model) => model.startsWith(`${category}:`))?.slice(category.length + 1);
 }
 
 export function requiresImage(model: string) {
-  return /(?:image-to-3d|multiview-to-3d|multi-view-to-3d|multi-image-to-3d)/.test(model)
+  return isLocal3dModel(model) || /(?:image-to-3d|multiview-to-3d|multi-view-to-3d|multi-image-to-3d)/.test(model)
     || /^fal-ai\/(?:trellis(?:-2)?|pixal3d|hunyuan3d\/v2)(?:\/|$)/.test(model);
 }
 
@@ -125,6 +145,77 @@ export async function generate(
 ): Promise<GeneratedFile[]> {
   signal.throwIfAborted();
   if (task.operation) return processImage(task.operation, images, signal);
+  if (task.category === "picture" && task.model === browserImageModel && !task.mediaTool) {
+    const bridge = desktopAgents();
+    if (!bridge?.browserImage) throw new Error("ChatGPT images require an up-to-date Lomra desktop app.");
+    const abort = () => bridge.cancelBrowserImage?.(task.id);
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      update({ status: "Generating in ChatGPT…" });
+      const result = await bridge.browserImage(task.id, { prompt: task.prompt, images, aspectRatio: task.aspectRatio });
+      if (signal.aborted) throw new Error("Stopped waiting for ChatGPT. Check your ChatGPT history for any submitted generation.");
+      if ("error" in result) throw new Error(result.error);
+      // The summary is also the result an agent reads, so it must say the image was made, not only what went wrong.
+      if (result.warning) update({ summary: `Image generated in ChatGPT and added to the canvas. Note: ${result.warning}` });
+      return [{ url: result.image, name: "Image 1", kind: "image" }];
+    } finally {
+      signal.removeEventListener("abort", abort);
+    }
+  }
+  if ((task.model === geminiImageModel || task.model === geminiVideoModel) && !task.mediaTool) {
+    const kind = task.model === geminiVideoModel ? "video" : "image";
+    const bridge = desktopAgents();
+    if (!bridge?.browserGemini) throw new Error("Gemini generation requires an up-to-date Lomra desktop app.");
+    const abort = () => bridge.cancelBrowserImage?.(task.id);
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      update({ status: "Generating in Gemini…" });
+      const result = await bridge.browserGemini(task.id, { kind, prompt: task.prompt, images: kind === "video" ? images.slice(0, 1) : images, aspectRatio: task.aspectRatio });
+      if (signal.aborted) throw new Error("Stopped waiting for Gemini. Check your Gemini activity for any submitted generation.");
+      if ("error" in result) throw new Error(result.error);
+      if (result.warning) update({ summary: `${"video" in result ? "Video" : "Image"} generated in Gemini and added to the canvas. Note: ${result.warning}` });
+      return "video" in result ? [{ url: result.video, name: "Video", kind: "video" }] : [{ url: result.image, name: "Image 1", kind: "image" }];
+    } finally {
+      signal.removeEventListener("abort", abort);
+    }
+  }
+  if (task.category === "picture" && isSdModel(task.model) && !task.mediaTool) {
+    const bridge = desktopSd();
+    if (!bridge) throw new Error("Local image models require the Lomra desktop app.");
+    if (images.length) throw new Error("Local Stable Diffusion makes pictures from text only. Deselect the images or choose another model.");
+    const abort = () => bridge.cancel(task.id);
+    signal.addEventListener("abort", abort, { once: true });
+    const stopProgress = bridge.onProgress((event) => { if (event.runId === task.id) update({ status: `Generating locally… ${event.step}/${event.total}` }); });
+    try {
+      update({ status: "Generating locally…" });
+      const result = await bridge.generate(task.id, { model: task.model.slice(sdPrefix.length), prompt: task.prompt, ...(task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}) });
+      signal.throwIfAborted();
+      if ("error" in result) throw new Error(result.error);
+      return [{ url: result.image, name: "Image 1", kind: "image" }];
+    } finally {
+      stopProgress();
+      signal.removeEventListener("abort", abort);
+    }
+  }
+  if (task.category === "3d" && isLocal3dModel(task.model) && !task.mediaTool) {
+    const bridge = desktopLocal3d();
+    if (!bridge) throw new Error("Local 3D models require the Lomra desktop app.");
+    if (!imageUrl || !/^data:image\/(?:png|jpeg|webp);base64,/.test(imageUrl)) throw new Error("Select one PNG, JPEG or WebP picture on the canvas before using a local 3D model.");
+    const abort = () => bridge.cancel(task.id);
+    signal.addEventListener("abort", abort, { once: true });
+    const labels: Record<string, string> = { loading: "Starting the 3D engine…", background: "Removing the background…", model: "Loading the model…", shape: "Making the 3D shape…", mesh: "Cleaning up the mesh…" };
+    const stopProgress = bridge.onProgress((event) => { if (event.runId === task.id && labels[event.stage]) update({ status: labels[event.stage] }); });
+    try {
+      update({ status: "Generating locally…" });
+      const result = await bridge.generate(task.id, { model: task.model.slice(local3dPrefix.length), image: imageUrl });
+      signal.throwIfAborted();
+      if ("error" in result) throw new Error(result.error);
+      return [{ url: result.model, name: "GLB", kind: "file" }];
+    } finally {
+      stopProgress();
+      signal.removeEventListener("abort", abort);
+    }
+  }
   if (task.mediaTool) {
     validateMediaTool(task.mediaTool);
     if (task.model !== mediaToolModel(task.mediaTool)) throw new Error("Invalid media tool model.");
@@ -137,7 +228,7 @@ export async function generate(
       }
     }
   }
-  const provider = task.category === "3d" || task.mediaTool ? "fal" : "openrouter";
+  const provider = task.category === "3d" || task.mediaTool ? "fal" : modelProvider(task.model);
   const call = (options: ProviderRequest) => request(provider, { ...options, model: task.model, signal });
   if (task.category === "picture" && !task.mediaTool) {
     const files = imageFiles(await call({ action: "image", input: task.prompt, images, ...(task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}) }));

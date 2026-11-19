@@ -4,12 +4,17 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { ArrowUpIcon, LoaderCircleIcon, SquareIcon, XIcon } from "lucide-react";
 import { toast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
+import { useSpeechModel } from "@/hooks/use-speech-model";
+import { useSpeechDownload } from "./speech-download";
+import { toWav } from "./wav";
 import type { MicVAD } from "@ricky0123/vad-web";
 
 export function VoiceRecorder({ onCancel, onTranscribed }: {
   onCancel: () => void;
   onTranscribed: (text: string) => void;
 }) {
+  const { model } = useSpeechModel();
+  const { ask: askDownload, dialog: downloadDialog } = useSpeechDownload();
   const canvas = useRef<HTMLCanvasElement>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const audio = useRef<Blob | null>(null);
@@ -20,8 +25,12 @@ export function VoiceRecorder({ onCancel, onTranscribed }: {
   const [error, setError] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
 
+  // Any failure shows its message and returns to the chat input.
+  const leave = useEffectEvent(onCancel);
   useEffect(() => {
-    if (error) toast.add({ title: status, type: "error" });
+    if (!error) return;
+    toast.add({ title: status, type: "error" });
+    leave();
   }, [error, status]);
 
   async function transcribe() {
@@ -38,11 +47,20 @@ export function VoiceRecorder({ onCancel, onTranscribed }: {
     setStatus("Transcribing audio…");
     try {
       const body = new FormData();
-      body.append("file", audio.current, "recording");
+      body.append("file", await toWav(audio.current), "recording.wav");
+      if (model) body.append("model", model);
       const response = await fetch("/api/transcriptions", {
         method: "POST", body, signal: controller.signal,
       });
-      if (!response.ok) throw new Error("Could not transcribe audio. Try again.");
+      if (!response.ok) {
+        const failure: unknown = await response.json().catch(() => null);
+        let message = failure && typeof failure === "object" && "message" in failure ? failure.message : undefined;
+        if (response.status === 409 && failure && typeof failure === "object" && "code" in failure && failure.code === "model-missing") {
+          const started = await askDownload(model);
+          message = started ? "The speech model is downloading, this can take a few minutes" : "Voice input needs the speech model";
+        }
+        throw new Error(typeof message === "string" ? `${message}. Try again.` : "Could not transcribe audio. Try again.");
+      }
       const result: unknown = await response.json();
       if (!result || typeof result !== "object" || !("text" in result) || typeof result.text !== "string") {
         throw new Error("Invalid transcription response. Try again.");
@@ -218,6 +236,7 @@ export function VoiceRecorder({ onCancel, onTranscribed }: {
       <Button size="icon-sm" disabled={!audioUrl || transcribing} aria-label={transcribing ? "Transcribing audio" : "Retry transcription"} onClick={() => void transcribe()}>
         {transcribing ? <LoaderCircleIcon className="animate-spin" /> : <ArrowUpIcon />}
       </Button>
+      {downloadDialog}
     </>
   );
 }

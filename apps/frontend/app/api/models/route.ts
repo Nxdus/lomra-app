@@ -1,4 +1,5 @@
 import { isMultiview } from "@/components/prompt/multiview";
+import { usd } from "./price";
 
 // Curated choices; review these IDs when replacing a flagship or budget model.
 const selections = {
@@ -15,6 +16,37 @@ const selections = {
     { id: "google/veo-3.1-lite", tier: "Economy" },
   ],
 };
+
+const rate = (value: unknown) => {
+  const number = typeof value === "string" || typeof value === "number" ? Number(value) : NaN;
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+};
+
+// Display-only price from OpenRouter's catalog (USD): undefined when the catalog gives none.
+function priceLabel(category: "llm" | "picture" | "video", item: { pricing?: Record<string, unknown>; pricing_skus?: Record<string, unknown> }) {
+  if (category === "video") {
+    const skus = Object.entries(item.pricing_skus ?? {}).flatMap(([key, value]) => {
+      const price = rate(value);
+      return price === undefined || price === 0 || /long|reference|continuation|megapixel|minimum|image_input/.test(key) ? [] : [{ key, price }];
+    });
+    const seconds = skus.filter(({ key }) => /second/.test(key) && !/token/.test(key))
+      .map(({ key, price }) => key.startsWith("cents_") ? price / 100 : price);
+    if (seconds.length) return `from ${usd(Math.min(...seconds))}/sec`;
+    const tokens = skus.filter(({ key }) => key.startsWith("video_tokens")).map(({ price }) => price * 1_000_000);
+    return tokens.length ? `from ${usd(Math.min(...tokens))}/1M tokens` : undefined;
+  }
+  const pricing = item.pricing;
+  if (!pricing) return undefined;
+  const perImage = rate(pricing.image);
+  if (category === "picture" && perImage) return `${usd(perImage)}/image`;
+  const imageTokens = rate(pricing.image_output) ?? rate(pricing.image_token);
+  if (category === "picture" && imageTokens) return `${usd(imageTokens * 1_000_000)}/1M image tokens`;
+  const input = rate(pricing.prompt);
+  const output = rate(pricing.completion);
+  if (input === undefined || output === undefined) return undefined;
+  if (!input && !output) return "Free";
+  return `${usd(input * 1_000_000)} in · ${usd(output * 1_000_000)} out /1M`;
+}
 
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
@@ -49,7 +81,8 @@ export async function GET(request: Request) {
       }));
       return Response.json({ models: catalogs.flat() });
     }
-    const response = await fetch(`https://openrouter.ai/api/v1/${category === "video" ? "videos/models" : "models"}`, {
+    const endpoint = category === "video" ? "videos/models" : category === "picture" ? "models?output_modalities=image" : "models";
+    const response = await fetch(`https://openrouter.ai/api/v1/${endpoint}`, {
       next: { revalidate: 3600 }, signal: AbortSignal.timeout(15_000), redirect: "error",
     });
     if (!response.ok) throw new Error("Catalog unavailable");
@@ -57,22 +90,20 @@ export async function GET(request: Request) {
     if (!result || typeof result !== "object" || !("data" in result) || !Array.isArray(result.data)) {
       throw new Error("Invalid catalog");
     }
-    const models: { id: string; name: string; tier: string }[] = [];
-    if (all) {
-      return Response.json({ models: result.data.filter((item) => {
-        if (typeof item?.id !== "string" || typeof item.name !== "string") return false;
-        const outputs = item.architecture?.output_modalities;
-        return category === "video" || (Array.isArray(outputs) && outputs.includes(category === "picture" ? "image" : "text"));
-      }).map((item) => ({ id: item.id, name: item.name })) });
-    }
-    for (const choice of selections[category]) {
-      const model = result.data.find((item) => item?.id === choice.id && typeof item.name === "string");
-      if (!model) continue;
-      const outputs = model.architecture?.output_modalities;
-      if (category !== "video" && (!Array.isArray(outputs) || !outputs.includes(category === "picture" ? "image" : "text"))) continue;
-      models.push({ id: model.id, name: model.name, tier: choice.tier });
-    }
-    return Response.json({ models });
+    const catalog = result.data.filter((item) => {
+      if (typeof item?.id !== "string" || typeof item.name !== "string") return false;
+      if (category === "video") return true;
+      const outputs = item.architecture?.output_modalities;
+      if (!Array.isArray(outputs) || outputs.includes("video")) return false;
+      return category === "picture" ? outputs.includes("image") : outputs.includes("text") && !outputs.includes("image");
+    }).map((item) => {
+      const price = priceLabel(category, item);
+      return { id: item.id, name: item.name, ...(price && { price }) };
+    });
+    return Response.json({ models: all ? catalog : selections[category].flatMap(({ id, tier }) => {
+      const model = catalog.find((item) => item.id === id);
+      return model ? [{ ...model, tier }] : [];
+    }) });
   } catch {
     return Response.json({ message: "Could not load models. Try again." }, { status: 502 });
   }

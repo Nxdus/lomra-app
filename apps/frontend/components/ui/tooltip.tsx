@@ -1,7 +1,9 @@
 "use client"
 
+import { useContext } from "react"
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip"
 import { cn } from "cn"
+import { PopupBoundaryContext } from "@/components/ui/popup-boundary"
 
 function TooltipProvider({
   delay = 0,
@@ -44,6 +46,7 @@ function TooltipContent({
         alignOffset={alignOffset}
         side={side}
         sideOffset={sideOffset}
+        collisionBoundary={useContext(PopupBoundaryContext)}
         className="isolate z-50"
       >
         <TooltipPrimitive.Popup

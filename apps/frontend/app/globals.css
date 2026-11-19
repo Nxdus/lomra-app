@@ -20,7 +20,7 @@
 }
 
 .canvas-help > div {
-  max-height: min(33.5rem, calc(100dvh - 7.5rem));
+  max-height: min(33.5rem, calc(var(--available-height) - 1.5rem));
   overflow-y: auto;
 }
 
@@ -74,6 +74,9 @@
 }
 
 :root {
+  --app-titlebar-height: env(titlebar-area-height, 0px);
+  --app-titlebar-space: calc(var(--app-titlebar-height) + min(var(--app-titlebar-height), 2px));
+  --app-content-height: calc(100dvh - var(--app-titlebar-space));
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
@@ -145,6 +148,38 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: var(--muted-foreground) transparent;
+  }
+  @supports selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-width: auto;
+      scrollbar-color: auto;
+    }
+    *::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    *::-webkit-scrollbar-track:vertical {
+      margin-block: 20px;
+    }
+    *::-webkit-scrollbar-thumb {
+      border-radius: 9999px;
+      background: var(--muted-foreground);
+    }
+    *::-webkit-scrollbar-button {
+      display: none;
+    }
+    [data-slot="select-content"]::-webkit-scrollbar:vertical,
+    [data-slot="select-content"] > [role="listbox"]::-webkit-scrollbar:vertical {
+      width: 12px;
+    }
+    [data-slot="select-content"]::-webkit-scrollbar-thumb:vertical,
+    [data-slot="select-content"] > [role="listbox"]::-webkit-scrollbar-thumb:vertical {
+      border-right: 6px solid transparent;
+      border-radius: 3px 9px 9px 3px / 3px;
+      background-clip: padding-box;
+    }
   }
   body {
     @apply bg-background text-foreground;
@@ -152,4 +187,9 @@
   html {
     @apply font-sans;
   }
+}
+
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  border-radius: 9999px;
+  background: var(--muted-foreground);
 }

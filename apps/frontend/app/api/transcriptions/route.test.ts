@@ -33,8 +33,25 @@ test("transcription validates uploads and calls Whisper directly", async () => {
     assert.equal(uploaded.type, file.type);
     assert.equal(await uploaded.text(), await file.text());
 
+    const withModel = (model: string) => {
+      const body = new FormData();
+      body.append("file", file);
+      body.append("model", model);
+      return new Request("http://localhost/api/transcriptions", { method: "POST", body });
+    };
+    await POST(withModel("base"));
+    assert.equal(new URL(forwardedUrl).searchParams.get("model"), "base");
+    await POST(withModel("../evil"));
+    assert.equal(new URL(forwardedUrl).searchParams.has("model"), false);
+
     globalThis.fetch = (async () => Response.json({ message: "Invalid audio" }, { status: 400 })) as typeof fetch;
     assert.equal((await POST(request(file))).status, 502);
+    globalThis.fetch = (async () => Response.json({}, { status: 409 })) as typeof fetch;
+    const missing = await POST(request(file));
+    assert.equal(missing.status, 409);
+    assert.equal((await missing.json()).code, "model-missing");
+    globalThis.fetch = (async () => Response.json({ message: "loading" }, { status: 503 })) as typeof fetch;
+    assert.equal((await POST(request(file))).status, 503);
     globalThis.fetch = (async () => Response.json({ text: 1 })) as typeof fetch;
     assert.equal((await POST(request(file))).status, 502);
     assert.equal((await POST(request(new File(["x"], "a.txt", { type: "text/plain" })))).status, 400);

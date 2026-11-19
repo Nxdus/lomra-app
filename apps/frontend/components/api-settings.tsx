@@ -1,20 +1,46 @@
 "use client";
 
+import { Tip } from "@/components/tip";
 import { ConfirmDelete } from "@/components/confirm-delete";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckIcon, DatabaseIcon, EyeIcon, EyeOffIcon, LoaderCircleIcon, PlugZapIcon, RefreshCwIcon, SaveIcon, SettingsIcon, Trash2Icon } from "lucide-react";
-import { callProvider, useApiProviders, type Provider } from "@/components/api-provider";
+import { CheckIcon, DatabaseIcon, EyeIcon, EyeOffIcon, LoaderCircleIcon, PlugZapIcon, RefreshCwIcon, SaveIcon, Trash2Icon } from "lucide-react";
+import { callProvider, useApiProviders, type KeyedProvider as Provider } from "@/components/api-provider";
+import { readGoogleUsage, type GoogleUsage } from "@/components/google-usage";
 import { toast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
 type UsageResult = { metrics: { label: string; amount: number }[] };
+const creditCache = new Map<string, { apiKey: string; at: number; metrics: UsageResult["metrics"] }>();
+const creditCacheTtl = 60_000;
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 4 });
+
+const tokens = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+
+function GoogleUsageBox() {
+  const [refresh, setRefresh] = useState(0);
+  const [usage, setUsage] = useState<GoogleUsage | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void readGoogleUsage().then((value) => { if (!cancelled) setUsage(value); }, () => { if (!cancelled) toast.add({ title: "Could not load Google usage", type: "error" }); });
+    return () => { cancelled = true; };
+  }, [refresh]);
+  return <section aria-label="Google usage" className="flex flex-col gap-1.5">
+    <h3 className="flex items-center gap-1.5 text-xs font-medium"><DatabaseIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />Usage · This month</h3>
+    <div className="flex items-center gap-3 rounded-xl bg-muted/60 px-3 py-2.5">
+      <dl className="flex min-w-0 flex-1 divide-x divide-border text-xs">
+        <div className="min-w-0 flex-1 px-3 first:pl-0"><dt className="text-muted-foreground">Requests</dt><dd className="tabular-nums">{usage?.requests ?? "…"}</dd></div>
+        <div className="min-w-0 flex-1 px-3"><dt className="text-muted-foreground">Tokens in</dt><dd className="tabular-nums">{usage ? tokens.format(usage.inputTokens) : "…"}</dd></div>
+        <div className="min-w-0 flex-1 px-3 last:pr-0"><dt className="text-muted-foreground">Tokens out</dt><dd className="tabular-nums">{usage ? tokens.format(usage.outputTokens) : "…"}</dd></div>
+      </dl>
+      <Button type="button" variant="outline" size="icon-sm" className="rounded-lg" aria-label="Refresh Google usage" onClick={() => setRefresh((value) => value + 1)}><RefreshCwIcon aria-hidden="true" /></Button>
+    </div>
+  </section>;
+}
 
 function CreditUsage({ provider, apiKey }: { provider: Provider; apiKey: string }) {
   const [refresh, setRefresh] = useState(0);
@@ -27,13 +53,32 @@ function CreditUsage({ provider, apiKey }: { provider: Provider; apiKey: string 
   useEffect(() => {
     let cancelled = false;
     const actions = provider === "fal" ? ["credits", "usage"] as const : ["usage"] as const;
-    void Promise.allSettled(actions.map((action) => callProvider(provider, apiKey, { action }))).then((responses) => {
+    const force = refresh > 0;
+    void Promise.allSettled(actions.map(async (action) => {
+      const cacheKey = `${provider}:${action}`;
+      const cached = creditCache.get(cacheKey);
+      const last = cached?.apiKey === apiKey ? cached : undefined;
+      if (last && !force && Date.now() - last.at < creditCacheTtl) return { metrics: last.metrics };
+      try {
+        const metrics = ((await callProvider(provider, apiKey, { action })) as UsageResult).metrics;
+        creditCache.set(cacheKey, { apiKey, at: Date.now(), metrics });
+        return { metrics };
+      } catch (error) {
+        // Keep showing the last good value; only surface the error when the user asked to refresh.
+        const message = error instanceof Error ? error.message : "Could not load credit usage";
+        if (last) return { metrics: last.metrics, error: force ? message : undefined };
+        throw new Error(message);
+      }
+    })).then((responses) => {
       if (cancelled) return;
       const metrics: UsageResult["metrics"] = [];
       const errors: string[] = [];
       responses.forEach((response) => {
-        if (response.status === "fulfilled") metrics.push(...(response.value as UsageResult).metrics);
-        else errors.push(response.reason instanceof Error ? response.reason.message : "Could not load credit usage");
+        if (response.status === "rejected") errors.push(response.reason instanceof Error ? response.reason.message : "Could not load credit usage");
+        else {
+          metrics.push(...response.value.metrics);
+          if (response.value.error) errors.push(response.value.error);
+        }
       });
       [...new Set(errors)].forEach((title) => toast.add({ title, type: "error" }));
       setResult({ refresh, metrics });
@@ -80,7 +125,7 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
     try {
       await setKey(provider, value);
       setDraft(value.trim());
-      toast.add({ title: value.trim() ? 'Saved to database' : 'Key removed', type: 'success' });
+      toast.add({ title: value.trim() ? 'API key saved' : 'Key removed', type: 'success' });
     } catch (error) {
       toast.add({ title: error instanceof Error ? error.message : 'Could not save key', type: 'error' });
     } finally { setSaving(false); }
@@ -130,7 +175,7 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
         </div>
       </div>
     </div> : <>
-    {saved && <CreditUsage key={keys[provider]} provider={provider} apiKey={keys[provider]} />}
+    {saved && (provider === "google" ? <GoogleUsageBox /> : <CreditUsage key={keys[provider]} provider={provider} apiKey={keys[provider]} />)}
     <Field className="gap-3" data-invalid={verification === "error" || undefined}>
     <FieldLabel htmlFor={`${provider}-key`} className="items-center gap-1.5 text-xs font-medium"><DatabaseIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />API Key</FieldLabel>
     <InputGroup className="h-11">
@@ -152,11 +197,11 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
     </InputGroupAddon>
     </InputGroup>
     <div className="flex flex-wrap items-center gap-2">
-      {(draft || keys[provider]) && <Button type="button" variant="destructive" size="icon-sm" disabled={!keysReady || saving} aria-label={`Remove ${name} API key`} title={`Remove ${name} API key`} onClick={() => setDeletingKey(true)}><Trash2Icon aria-hidden="true" /></Button>}
+      {(draft || keys[provider]) && <Tip label={`Remove ${name} API key`}><Button type="button" variant="destructive" size="icon-sm" disabled={!keysReady || saving} aria-label={`Remove ${name} API key`} onClick={() => setDeletingKey(true)}><Trash2Icon aria-hidden="true" /></Button></Tip>}
       <div className="ml-auto flex flex-wrap gap-2">
-      <Button type="button" variant="outline" size="icon-sm" disabled={!draft.trim() || checking} aria-label={checking ? `Checking ${name} connection` : `Test ${name} connection`} title={checking ? "Checking…" : "Test connection"} onClick={verify}>
+      <Tip label={checking ? "Checking…" : "Test connection"}><Button type="button" variant="outline" size="icon-sm" disabled={!draft.trim() || checking} aria-label={checking ? `Checking ${name} connection` : `Test ${name} connection`} onClick={verify}>
         {checking ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <PlugZapIcon aria-hidden="true" />}
-      </Button>
+      </Button></Tip>
       <Button type="button" size="sm" disabled={!keysReady || saving || !draft.trim() || saved} onClick={() => void saveKey(draft)}>{saved ? <CheckIcon aria-hidden="true" data-icon="inline-start" /> : <SaveIcon aria-hidden="true" data-icon="inline-start" />}{saving ? "Saving…" : saved ? "Saved" : "Save key"}</Button>
       </div>
     </div>
@@ -168,20 +213,12 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
   </section>;
 }
 
-export function ApiSettings() {
-  return <Dialog>
-    <DialogTrigger render={<Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover text-popover-foreground shadow-sm" />} aria-label="Settings" title="Settings">
-      <SettingsIcon />
-    </DialogTrigger>
-    <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-3xl p-5 sm:p-6">
-      <DialogHeader className="gap-2 pr-8">
-        <DialogTitle>API Settings</DialogTitle>
-      </DialogHeader>
-      <FieldGroup className="gap-6">
-        <ProviderSettings provider="openrouter" name="OpenRouter" href="https://openrouter.ai/settings/keys" />
-        <Separator />
-        <ProviderSettings provider="fal" name="Fal.AI" href="https://fal.ai/dashboard/keys" />
-      </FieldGroup>
-    </DialogContent>
-  </Dialog>;
+export function ApiKeysPanel() {
+  return <FieldGroup className="gap-6">
+    <ProviderSettings provider="openrouter" name="OpenRouter" href="https://openrouter.ai/settings/keys" />
+    <Separator />
+    <ProviderSettings provider="fal" name="Fal.AI" href="https://fal.ai/dashboard/keys" />
+    <Separator />
+    <ProviderSettings provider="google" name="Google AI" href="https://aistudio.google.com/apikey" />
+  </FieldGroup>;
 }

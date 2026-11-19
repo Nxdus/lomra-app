@@ -1,13 +1,11 @@
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dataDir } from '@/lib/local-store/data-dir';
 import { handleLocal } from './local';
-
-/** Workspace folder; the desktop app sets LOMRA_DATA_DIR. */
-const dataDir = () => process.env.LOMRA_DATA_DIR ?? join(homedir(), 'Documents', 'Lomra');
 
 async function handle(request: Request, context: { params: Promise<{ path?: string[] }> }) {
   if (request.headers.get('sec-fetch-site') === 'cross-site') return new Response(null, { status: 403 });
-  if (request.method !== 'GET' && request.headers.get('origin') !== new URL(request.url).origin) {
+  // Compare with the Host header: Next may report the request URL as localhost while the app is served from 127.0.0.1.
+  const origin = request.headers.get('origin');
+  if (request.method !== 'GET' && (!origin || new URL(origin).host !== request.headers.get('host'))) {
     return Response.json({ message: 'Invalid origin' }, { status: 403 });
   }
   const { path = [] } = await context.params;

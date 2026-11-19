@@ -1,9 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { generate, type Generation } from "./generation";
-import { isMultiview, modelViews, multiviewError, multiviewInput, multiviewRequirements, type ModelViews } from "./multiview";
+import { isMultiview, modelViews, multiviewError, multiviewInput, multiviewRequirements, resolveMultiview, type ModelViews } from "./multiview";
 
 const views: ModelViews = Object.fromEntries(modelViews.map((view, i) => [view, { url: `data:image/png;base64,${["YQ==", "Yg==", "Yw==", "ZA=="][i]}`, name: view }]));
+
+test("selected image indices are resolved before any Multi-view submission", () => {
+  const model = "fal-ai/hunyuan3d/v2/multi-view";
+  const images = [views.back!, views.left!, views.front!];
+  assert.deepEqual(resolveMultiview(model, { front: 2, back: 0, left: 1 }, images), { front: views.front, back: views.back, left: views.left });
+  assert.throws(() => resolveMultiview(model, { front: 2, back: 0 }, images), /Add left view/);
+  assert.throws(() => resolveMultiview(model, { front: 2, back: 0, left: 0 }, images), /different image/);
+  for (const indices of [{ front: "2" }, { front: 3 }, { top: 1 }, [2, 0, 1]]) {
+    assert.throws(() => resolveMultiview(model, indices, images), /selected views|viewIndices/);
+  }
+});
 
 test("all supported multiview endpoints submit their own input schema and load the result", async () => {
   const cases: [string, ModelViews, object][] = [

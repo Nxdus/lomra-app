@@ -1,9 +1,10 @@
 "use client";
 
 import { ConfirmDelete } from "@/components/confirm-delete";
+import { CharacterDialog } from "@/components/character-dialog";
 
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref } from "react";
-import { ArrowDownToLineIcon, ArrowUpToLineIcon, CopyIcon, DownloadIcon, GripVerticalIcon, InfoIcon, PencilIcon, PlusIcon, ScanIcon, Trash2Icon } from "lucide-react";
+import { ArrowDownToLineIcon, ArrowUpToLineIcon, CopyIcon, DownloadIcon, GripVerticalIcon, InfoIcon, PencilIcon, PlusIcon, ScanIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
 import { CanvasMedia } from "@/components/canvas-media";
 import dynamic from "next/dynamic";
 import { PictureEditor, type PictureEditorHandle } from "@/components/picture-editor";
@@ -67,7 +68,7 @@ function ImageResizeHandles({ name, onPointerDown, onKeyDown }: {
   ));
 }
 
-export type CanvasHandle = { addFiles: (files: File[]) => Promise<void>; focusFile: (file: File) => void; modelPreview: (id: string) => string };
+export type CanvasHandle = { addFiles: (files: File[]) => Promise<string[]>; focusFile: (file: File) => void; modelPreview: (id: string) => string; deselect: (ids: string[]) => void };
 
 export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasChange }: { ref?: Ref<CanvasHandle>; onSelectionChange?: (images: VisibleImage[]) => void; onReadyChange?: (ready: boolean) => void; onCanvasChange?: (id: string) => void }) {
   const viewport = useRef<HTMLDivElement>(null);
@@ -98,8 +99,8 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   const pictureEditor = useRef<PictureEditorHandle>(null);
   const preview = images.find((image) => image.id === previewId);
   const [ready, setReady] = useState(false);
-  const [canvasId, setCanvasId] = useState('default');
-  const activeCanvas = useRef('default');
+  const [canvasId, setCanvasId] = useState("");
+  const activeCanvas = useRef("");
   const switching = useRef(false);
   const [history, setHistory] = useState<CanvasHistoryItem[]>([]);
   const cameraKey = () => activeCanvas.current === 'default' ? 'camera' : `camera-${activeCanvas.current}`;
@@ -107,6 +108,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   useEffect(() => { onReadyChange?.(ready); }, [ready, onReadyChange]);
   const [helpOpen, setHelpOpen] = useState(false);
   const [deletingFiles, setDeletingFiles] = useState<string[]>([]);
+  const [characterSource, setCharacterSource] = useState<File | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [activeMedia, setActiveMedia] = useState<Set<string>>(new Set());
   const activeMediaRef = useRef(activeMedia);
@@ -202,7 +204,12 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   useEffect(() => {
     mounted.current = true;
     let cancelled = false;
-    Promise.all([canvasStorage(undefined, activeCanvas.current, true), getSetting<CanvasCamera>(cameraKey(), activeCanvas.current === 'default' ? CANVAS_CAMERA_KEY : undefined)]).then(([stored, savedCamera]) => {
+    const id = activeCanvas.current ||= createNewCanvasId();
+    Promise.all([canvasStorage(undefined, id, true).catch((error: unknown) => {
+      // A canvas ID that hasn't been saved yet (new blank canvas) is not an error.
+      if (error instanceof Error && error.message === 'Canvas no longer exists') return [] as typeof current.current;
+      throw error;
+    }), getSetting<CanvasCamera>(cameraKey(), id === 'default' ? CANVAS_CAMERA_KEY : undefined)]).then(([stored, savedCamera]) => {
       if (cancelled) return;
       current.current = stored.map((image) => {
         const url = isCanvasFilePending(image.file) ? "" : URL.createObjectURL(image.file);
@@ -227,6 +234,8 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       });
     }).finally(() => {
       if (cancelled) return;
+      setCanvasId(id);
+      onCanvasChange?.(id);
       setReady(true);
     });
     const activeUrls = urls.current;
@@ -236,7 +245,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       activeUrls.forEach((url) => URL.revokeObjectURL(url));
       activeUrls.clear();
     };
-  }, [loadAttempt]);
+  }, [loadAttempt, onCanvasChange]);
 
   useEffect(() => {
     const element = viewport.current!;
@@ -282,6 +291,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
 
   function persist(next: VisibleImage[]) {
     if (!storageAvailable.current) return;
+    if (!next.length) return; // Don't save empty canvases to history.
     const snapshot = next.map(({ id, file, x, y, width, height }) => ({ id, file, x, y, width, height }));
     const id = activeCanvas.current;
     saves.current = saves.current.then(async () => {
@@ -301,17 +311,18 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     try {
       await imports.current;
       await saves.current;
-      await canvasStorage(current.current.map(({ id, file, x, y, width, height }) => ({ id, file, x, y, width, height })), activeCanvas.current);
+      // Only save the outgoing canvas if it has images.
+      if (current.current.length) {
+        await canvasStorage(current.current.map(({ id, file, x, y, width, height }) => ({ id, file, x, y, width, height })), activeCanvas.current);
+      }
       clearTimeout(cameraSave.current);
       await cameraSaves.current;
       await saveSetting(cameraKey(), view.current);
       const nextId = id ?? createNewCanvasId();
-      if (!id) await canvasStorage([], nextId);
-      else await canvasStorage(undefined, nextId, true);
+      // For an existing canvas, load its layout. For a new blank canvas, don't create a storage entry yet.
+      if (id) await canvasStorage(undefined, nextId, true);
       activeCanvas.current = nextId;
       setLayoutUndo(null);
-      setCanvasId(nextId);
-      onCanvasChange?.(nextId);
       setSelected([]);
       finishPan();
       drag.current = null;
@@ -457,10 +468,11 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     const previous = current.current;
     const copies = contextMenuFiles.map((image) => {
       const url = URL.createObjectURL(image.file);
-      urls.current.add(url);
       return { ...image, id: crypto.randomUUID(), url, x: image.x + 24, y: image.y + 24 };
     });
     recordCanvasHistory({ items: previous, type: 'generic' });
+    // Track the new URLs only after the history step, which revokes tracked URLs the canvas does not reference yet.
+    copies.forEach((copy) => urls.current.add(copy.url));
     update([...previous, ...copies]);
     setSelected(copies.map((image) => image.id));
   }
@@ -505,16 +517,17 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
         const error = canvasFileError(file);
         if (error) { failures.push(`${file.name}: ${error}`); continue; }
         const url = URL.createObjectURL(file);
-        urls.current.add(url);
         try {
           const size = await canvasFileSize(file, url);
-          if (!mounted.current) { URL.revokeObjectURL(url); urls.current.delete(url); return; }
+          if (!mounted.current) { URL.revokeObjectURL(url); return; }
           const image = {
             id: crypto.randomUUID(), file, url, ...size,
             x: origin.x + offset - (centered ? size.width / 2 : 0),
             y: origin.y + offset - (centered ? size.height / 2 : 0),
           };
           recordCanvasHistory({ items: current.current, type: "generic" });
+          // Track the URL only after the history step: it sweeps every tracked URL the canvas does not reference yet.
+          urls.current.add(url);
           update([...current.current, image]);
           setSelected([image.id]);
           offset += 24;
@@ -542,7 +555,9 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     }
   }
 
-  useImperativeHandle(ref, () => ({ modelPreview(id) {
+  useImperativeHandle(ref, () => ({ deselect(ids) {
+    setSelected((previous) => previous.filter((id) => !ids.includes(id)));
+  }, modelPreview(id) {
     const item = Array.from(viewport.current?.querySelectorAll<HTMLElement>("[data-canvas-image]") ?? []).find((element) => element.dataset.canvasImage === id);
     const viewer = item?.querySelector("model-viewer") as (HTMLElement & { loaded: boolean; toDataURL: (type: string) => string }) | null;
     if (!viewer?.loaded) throw new Error("Wait for the selected 3D model to finish loading, then try again.");
@@ -557,10 +572,13 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     element.focus({ preventScroll: true });
   }, async addFiles(files) {
     const element = viewport.current;
-    if (!ready || !element) throw new Error("Canvas is still loading. Try again.");
+    if (!ready || switching.current || !element) throw new Error("Canvas is still loading. Try again.");
     importFiles(files, canvasPoint(view.current, element.clientWidth / 2, element.clientHeight / 2), true);
     await imports.current;
-    if (files.some((file) => !current.current.some((image) => image.file === file))) throw new Error("Could not add this result to canvas. Check its format and try again.");
+    const added = files.map((file) => current.current.find((image) => image.file === file));
+    if (added.some((image) => !image)) throw new Error("Could not add this result to canvas. Check its format and try again.");
+    await saves.current;
+    return added.flatMap((image) => image ? [image.id] : []);
   } }));
 
   function startResize(event: PointerEvent<HTMLButtonElement>, image: VisibleImage, corner: ImageCorner) {
@@ -790,6 +808,11 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
             </ContextMenuTrigger>
             <ContextMenuContent data-canvas-interactive>
               <ContextMenuGroup>
+                {contextMenuFiles.length === 1 && contextMenuFiles[0].url && canvasFileKind(contextMenuFiles[0].file) === "image" && (
+                  <ContextMenuItem onClick={() => setCharacterSource(contextMenuFiles[0].file)}>
+                    <UserRoundPlusIcon /> Save as Character
+                  </ContextMenuItem>
+                )}
                 {contextMenuFiles.length === 1 && contextMenuFiles[0].url && canvasFileKind(contextMenuFiles[0].file) === "3d" && (
                   <ContextMenuItem onClick={() => setInspectId(contextMenuFiles[0].id)}>
                     <ScanIcon /> Inspect model
@@ -840,13 +863,13 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       </ContextMenuContent>
       </ContextMenu>
       <Dialog open={!!inspected} onOpenChange={open => { if (!open) setInspectId(null); }}>
-        <DialogContent className="max-h-[90dvh] gap-3 overflow-y-auto sm:max-w-5xl" aria-describedby={undefined}>
+        <DialogContent className="max-h-[calc(var(--app-content-height)*0.9)] gap-3 sm:max-w-5xl" aria-describedby={undefined}>
           <DialogTitle className="truncate pr-10"><span className="sr-only">Inspect model · </span>{inspected?.file.name}</DialogTitle>
           {inspected && <ModelInspector key={inspected.id} src={inspected.url} file={inspected.file} />}
         </DialogContent>
       </Dialog>
       <Dialog open={!!preview} onOpenChange={(open) => { if (!open && (pictureEditor.current?.requestClose() ?? true)) setPreviewId(null); }}>
-        <DialogContent className="w-fit max-w-[calc(100vw-2rem)] sm:max-w-[calc(100vw-4rem)]" aria-describedby={undefined}>
+        <DialogContent className="w-fit max-w-[calc(100vw-2rem)] overflow-visible sm:max-w-[calc(100vw-4rem)]" aria-describedby={undefined}>
           <DialogTitle className="sr-only">{preview?.file.name || "Image preview"}</DialogTitle>
           {preview && <PictureEditor ref={pictureEditor} key={preview.id} url={preview.url} name={preview.file.name} onClose={() => setPreviewId(null)} onSave={async (file) => {
             importFiles([file], { x: preview.x + preview.width + 24, y: preview.y });
@@ -856,8 +879,9 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           }} />}
         </DialogContent>
       </Dialog>
+      {characterSource && <CharacterDialog file={characterSource} onClose={() => setCharacterSource(null)} />}
       <ConfirmDelete open={deletingFiles.length > 0} onOpenChange={(open) => { if (!open) setDeletingFiles([]); }} title="Delete canvas files?" description={`${deletingFiles.length} selected file(s) will be removed from this canvas.`} disabled={!ready} onConfirm={() => remove(deletingFiles)} />
-      <CanvasMenu canvasId={canvasId} history={history} onHistory={refreshHistory} onNew={() => void openCanvas()} onOpen={(id) => void openCanvas(id)} onDelete={deleteCanvas} title={canvasTitle(canvasId)} scale={camera.scale} ready={ready} onZoom={zoom} onReset={() => changeView({ x: 0, y: 0, scale: 1 })} canReorganize={images.length > 0} onReorganize={reorganize} />
+      <CanvasMenu canvasId={canvasId} history={history} onHistory={refreshHistory} onNew={() => void openCanvas()} onOpen={(id) => void openCanvas(id)} onDelete={deleteCanvas} title={canvasId ? canvasTitle(canvasId) : 'Canvas'} scale={camera.scale} ready={ready} onZoom={zoom} onReset={() => changeView({ x: 0, y: 0, scale: 1 })} canReorganize={images.length > 0} onReorganize={reorganize} />
       <div className="absolute left-4 top-4 flex items-center gap-2 text-muted-foreground">
         <input ref={fileInput} type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,.glb" className="hidden" aria-label="Add canvas files" onChange={(event) => {
           const files = Array.from(event.target.files ?? []);
