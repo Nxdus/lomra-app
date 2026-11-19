@@ -1,17 +1,17 @@
 "use client";
 
 import { Tip } from "@/components/tip";
-import { useEffect, useId, useRef, useState } from "react";
-import { ArrowUpIcon, BoxIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, Loader2Icon, MessageCircleIcon, MicIcon, PauseIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, TrashIcon } from "lucide-react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { createPortal } from "react-dom";
+import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, Loader2Icon, MessageCircleIcon, MicIcon, PauseIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, TrashIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { chatStorage, persistentUrl, restoreGenerations, type Chat } from "./chat-storage";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList, ComboboxTrigger } from "@/components/ui/combobox";
 import { Textarea } from "@/components/ui/textarea";
-import { Field, FieldLabel } from "@/components/ui/field";
 import { EffortPicker } from "./effort-picker";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 import { imagePreview, MAX_MEDIA_ITEMS, promptContent, type MediaPart } from "./media";
@@ -24,56 +24,63 @@ import { ModelSelector } from "./model-selector";
 import { toast } from "@/components/ui/toast";
 import { useApiProviders } from "@/components/api-provider";
 import { multiviewRequirements, resolveMultiview } from "./multiview";
-import { canvasResults, generate, llmProvider as providerOf, modelProvider, type Category, selectedModel, isMultiview, isSdModel, requiresImage, isLocal3dModel, type ConversationMessage, type GeneratedFile, type Generation, type GenerationTask } from "./generation";
+import { canvasResults, generate, llmProvider as providerOf, modelProvider, type Category, selectedModel, isMultiview, isSdModel, requiresImage, isLocal3dModel, videoStartImage, type ConversationMessage, type GeneratedFile, type Generation, type GenerationTask } from "./generation";
 import type { VisibleImage } from "@/components/image-canvas";
 import { CanvasModelViewer } from "@/components/canvas-model-viewer";
 import { canvasFileError, canvasFileKind } from "@/lib/image-canvas/image-canvas-storage";
 import { getSetting, saveSetting } from "@/lib/settings";
+import { characterNameKey, type Character } from "@/lib/characters";
 import { isRemoteOllama } from "@/lib/ollama-url";
-import { desktopAgents, desktopOllama, type AgentToolResult } from "@/lib/desktop";
+import { desktopAgents, desktopOllama, desktopVideo, type AgentToolResult, type DesktopVideoApi } from "@/lib/desktop";
 import { swipeDeleteThreshold, useSwipeToDelete } from "@/hooks/use-swipe-to-delete";
 import { agentEfforts, agentLabels, localAgentModel, runAgentChat } from "./agent-chat";
 import { saveAgentLimits } from "./agent-limits";
-import { draftedShots, draftShotsInstruction, draftStoryInstruction, maxStoryCharacters, mergeStoryCharacters, shotImagePrompt, storyCharacterNotesLimit, storyLimit, storyReply, type Shot, type Storyboard, type StoryCharacter } from "./storyboard-data";
-import { StoryboardShots } from "./storyboard-shots";
+import { draftedShots, draftShotsInstruction, draftStoryInstruction, mergeStoryCharacters, shotImagePrompt, storyCharacterNotesLimit, storyLimit, storyReply, type Shot, type Storyboard, type StoryCharacter } from "./storyboard-data";
+import { storyboardLayout } from "@/lib/image-canvas/storyboard-layout";
+import { StoryboardShots, defaultSpot, shotsFrame, shotsOffset } from "./storyboard-shots";
 import { StoryboardCharacters } from "./storyboard-characters";
+import { characterMarker, promptText, PromptBadgeText, setStoryboardCaret, storyboardMarker, StoryboardInput } from "./storyboard-input";
 import { storageFile } from "@/lib/storage";
-import { CharacterPicker } from "./character-picker";
-import { characterContext, characterGeneration, loadCharacterReferences } from "./character-references";
+import { characterContext, characterGeneration, listCharacters, loadCharacterReferences } from "./character-references";
 
 function notifyError(title: string) { toast.add({ title, type: "error" }); }
 const storyboardCommand = "/storyboard";
-// A single invisible character lets the textarea delete the badge with native editing keys.
-const storyboardMarker = "\u2060";
 
-export function FloatingPrompt({ canvasId = "default", loading = false, onAddToCanvas, onFocusFile, selection = [], onModelPreview, onDeselect }: { canvasId?: string; loading?: boolean; onAddToCanvas?: (files: File[]) => Promise<string[]>; onFocusFile?: (file: File) => void; selection?: VisibleImage[]; onModelPreview?: (id: string) => string; onDeselect?: (ids: string[]) => void }) {
+export function FloatingPrompt({ canvasId = "default", loading = false, onAddToCanvas, onFocusFile, selection = [], onModelPreview, onDeselect, storyboardHost, storyboardOrigin = { x: 0, y: 0 }, videoBounds, onVideoItem, onRemoveFromCanvas }: { videoBounds?: { x: number; y: number; width: number; height: number } | null; onVideoItem?: (id: string | undefined) => void; onRemoveFromCanvas?: (ids: string[]) => void; storyboardHost?: HTMLElement | null; storyboardOrigin?: { x: number; y: number }; canvasId?: string; loading?: boolean; onAddToCanvas?: (files: File[], at?: { x: number; y: number }) => Promise<string[]>; onFocusFile?: (file: File) => void; selection?: VisibleImage[]; onModelPreview?: (id: string) => string; onDeselect?: (ids: string[]) => void }) {
   const panel = useRef<HTMLElement>(null);
   const promptInput = useRef<HTMLTextAreaElement>(null);
-  const commandsId = useId();
-  const storyboardOptionId = `${commandsId}-storyboard`;
-  const storyboardOverlay = useRef<HTMLDivElement>(null);
+  const storyboardInput = useRef<HTMLDivElement>(null);
+  const promptAnchor = useRef<HTMLDivElement>(null);
+  const suggestionsId = useId();
+  const storyboardOptionId = `${suggestionsId}-storyboard`;
   const drag = useRef<{ pointerId: number; x: number; y: number } | null>(null);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
   const [chatBottom, setChatBottom] = useState<number | null>(null);
   const [voiceMode, setVoiceMode] = useState(false);
-  const [prompt, setPrompt] = useState("");
+  const [draft, setDraft] = useState("");
+  const storyboardQueued = draft.includes(storyboardMarker);
+  const hasPromptBadges = storyboardQueued || draft.includes(characterMarker);
+  const prompt = promptText(draft);
   const [promptFocused, setPromptFocused] = useState(false);
-  const [commandsDismissed, setCommandsDismissed] = useState(false);
+  const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
+  const [promptCaret, setPromptCaret] = useState<number | null>(null);
+  const [characterOptions, setCharacterOptions] = useState<Character[] | false | null>(null);
+  const [characterIndex, setCharacterIndex] = useState(0);
   const [models, setModels] = useState<string[]>([]);
   const llm = selectedModel(models, "llm");
   const localEngine = localAgentModel(llm);
   const threeDModel = selectedModel(models, "3d") ?? "";
   const multiview = isMultiview(threeDModel);
-  const selectedCharacterImage = selection.length === 1 && canvasFileKind(selection[0].file) === "image" ? selection[0].file : undefined;
   const [history, setHistory] = useState<ConversationMessage[]>([]);
   const [storyboard, setStoryboard] = useState<Storyboard>();
-  const [storyboardQueued, setStoryboardQueued] = useState(false);
-  const [shotsOpen, setShotsOpen] = useState(false);
-  const [charactersOpen, setCharactersOpen] = useState(false);
-  const storyImages = history[0]?.images ?? [];
-  const canChooseStoryboard = !storyboard && !storyboardQueued;
-  const promptPlaceholder = storyboard || storyboardQueued ? "What story would you like to tell or revise?" : "Describe what you want to generate...";
-  const isStoryboardShortcut = canChooseStoryboard && prompt.startsWith("/") && storyboardCommand.startsWith(prompt.trim().toLowerCase());
+  const [editingStory, setEditingStory] = useState(false);
+  const [storyDraft, setStoryDraft] = useState<string | null>(null);
+  // Where the storyboard is while its section is being dragged; committed (and recorded for Undo) on release.
+  const [moving, setMoving] = useState<{ x: number; y: number } | null>(null);
+  // The storyboard belongs to the canvas, not to the open chat: it stays on the canvas while another chat is open.
+  // Its pictures, and the chat it was written in (which stores it), travel with it.
+  const [storyImages, setStoryImages] = useState<NonNullable<ConversationMessage["images"]>>([]);
+  const [boardOwner, setBoardOwner] = useState<string>();
   const [generations, setGenerations] = useState<Generation[]>([]);
   const [status, setStatus] = useState("");
   const [agentText, setAgentText] = useState("");
@@ -87,10 +94,29 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const [chatExpanded, setChatExpanded] = useState<string[]>([]);
   const [chats, setChats] = useState<Chat[]>([]);
   const [chatId, setChatId] = useState("");
-  const commandsOpen = isStoryboardShortcut && !!chatId && promptFocused && !commandsDismissed && !status && !voiceMode;
+  // The storyboard of the open chat; the story text and the prompt only work on this one.
+  const chatStoryboard = storyboard && boardOwner === chatId ? storyboard : undefined;
+  const promptPlaceholder = `${chatStoryboard ? "What story would you like to tell or revise?" : "Describe what you want to generate."} Use @ for Characters or / for commands…`;
+  const suggestionsAllowed = promptFocused && !suggestionsDismissed && !status && !voiceMode;
+  const caret = promptCaret;
+  const textBeforeCaret = caret === null ? "" : draft.slice(0, caret);
+  const command = /\/[a-z]*$/i.exec(textBeforeCaret);
+  const commandsOpen = suggestionsAllowed && !!chatId && !!command && storyboardCommand.startsWith(command[0].toLowerCase());
+  const mention = /@([\p{L}\p{M}\p{N}_-]*)$/u.exec(textBeforeCaret);
+  const characterMenuOpen = suggestionsAllowed && !!mention;
+  const characterQuery = mention ? characterNameKey(mention[1]) : "";
+  const matchingCharacters = characterMenuOpen && characterOptions
+    ? characterOptions.filter(({ name }) => characterNameKey(name).startsWith(characterQuery))
+    : [];
+  const activeCharacterIndex = Math.min(characterIndex, matchingCharacters.length - 1);
+  const activeCharacter = matchingCharacters[activeCharacterIndex];
+  const activeOptionId = commandsOpen ? storyboardOptionId
+    : characterMenuOpen && activeCharacter ? `${suggestionsId}-${activeCharacter.id}` : undefined;
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [deleting, setDeleting] = useState<Chat | null>(null);
+  const [redrafting, setRedrafting] = useState(false);
+  const [videoPlan, setVideoPlan] = useState<{ clips: number; pictures: number; model: string; toolBytes: number } | null>(null);
   const { swipe, bind: bindSwipe } = useSwipeToDelete();
   const [storageError, setStorageError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -106,6 +132,80 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const mounted = useRef(true);
   const positionLoaded = useRef(false);
 
+  // The canvas reads and restores shot node positions for Organize canvas and Undo.
+  const latestStoryboard = useRef(storyboard);
+  // The Cast card only shows while a character still needs a reference; the shots then start at its left edge.
+  const castShown = !!storyboard?.characters?.some((character) => character.image === null && !character.approved);
+  useEffect(() => { latestStoryboard.current = storyboard; });
+  const origin = moving ?? storyboard?.origin ?? storyboardOrigin;
+  const videoItemId = storyboard?.videoItemId;
+  useEffect(() => { onVideoItem?.(videoItemId); }, [onVideoItem, videoItemId]);
+
+  // Dragging the section title moves the whole storyboard (cast card and shots) and pins it there.
+  function startMove(event: PointerEvent<HTMLElement>) {
+    if (event.button !== 0 || !event.isPrimary || !latestStoryboard.current) return;
+    const target = event.currentTarget;
+    const scale = target.getBoundingClientRect().width / target.offsetWidth || 1;
+    const from = { x: event.clientX, y: event.clientY };
+    const start = latestStoryboard.current.origin ?? storyboardOrigin;
+    let latest = start;
+    let moved = false;
+    target.setPointerCapture(event.pointerId);
+    function move(next: globalThis.PointerEvent) {
+      if (!moved && Math.hypot(next.clientX - from.x, next.clientY - from.y) < 3) return;
+      moved = true;
+      latest = { x: start.x + (next.clientX - from.x) / scale, y: start.y + (next.clientY - from.y) / scale };
+      setMoving(latest);
+    }
+    function end() {
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", end);
+      target.removeEventListener("pointercancel", end);
+      setMoving(null);
+      if (!moved) return;
+      const layout = storyboardLayout.read();
+      if (layout) storyboardLayout.record?.(layout);
+      setStoryboard((current) => current ? { ...current, origin: latest } : current);
+    }
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", end);
+    target.addEventListener("pointercancel", end);
+  }
+  // Pin a new storyboard where the canvas had room for it, once the canvas is ready, so it no longer follows the pictures.
+  if (!loading && storyboard && !storyboard.origin) setStoryboard({ ...storyboard, origin: storyboardOrigin });
+  useEffect(() => {
+    storyboardLayout.read = () => latestStoryboard.current
+      ? { origin: latestStoryboard.current.origin, shots: latestStoryboard.current.shots?.map((shot) => shot.position) ?? [] } : null;
+    storyboardLayout.write = (layout) => setStoryboard((current) => {
+      if (!current) return current;
+      const next = { ...current, origin: layout.origin };
+      if (!next.origin) delete next.origin;
+      if (current.shots?.length === layout.shots.length) {
+        next.shots = current.shots.map((shot, index) => {
+          const moved = { ...shot, position: layout.shots[index] };
+          if (!moved.position) delete moved.position;
+          return moved;
+        });
+      }
+      return next;
+    });
+    return () => { storyboardLayout.read = () => null; storyboardLayout.write = () => {}; };
+  }, []);
+
+  useEffect(() => {
+    if (!characterMenuOpen) return;
+    let cancelled = false;
+    void listCharacters().then(
+      (items) => { if (!cancelled) setCharacterOptions(items); },
+      () => { if (!cancelled) setCharacterOptions(false); },
+    );
+    return () => { cancelled = true; };
+  }, [characterMenuOpen]);
+
+  useEffect(() => {
+    if (activeOptionId) document.getElementById(activeOptionId)?.scrollIntoView({ block: "nearest" });
+  }, [activeOptionId]);
+
   useEffect(() => {
     const list = transcript.current;
     if (waitingForReply && list) list.scrollTop = list.scrollHeight;
@@ -115,22 +215,29 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     if (storageError) toast.add({ id: "chat-storage-error", title: storageError, type: "error" });
   }, [storageError]);
 
+  // A chat that holds a storyboard puts it on the canvas; any other chat leaves the one already there.
+  function showStoryboard(chat: Chat) {
+    setStoryboard(chat.storyboard);
+    setBoardOwner(chat.id);
+    setStoryImages(chat.history[0]?.images ?? []);
+  }
+
   function openChat(chat?: Chat) {
-    setChatId(chat?.id ?? crypto.randomUUID());
+    const id = chat?.id ?? crypto.randomUUID();
+    setChatId(id);
     setHistory(chat?.history ?? []);
-    setStoryboard(chat?.storyboard);
-    setStoryboardQueued(false);
-    setShotsOpen(false);
-    setCharactersOpen(false);
+    if (chat?.storyboard) showStoryboard(chat);
+    setEditingStory(false);
     setGenerations(restoreGenerations(chat?.generations ?? []));
     setAgentSession(chat?.agentSession);
     setAgentText("");
     if (chat) setModels(chat.models);
-    setPrompt("");
+    setDraft("");
     setCanvasFiles({});
     setExpanded([]);
     setChatExpanded(chat ? ["chat"] : []);
     setHistoryOpen(false);
+    return id;
   }
 
   useEffect(() => {
@@ -154,10 +261,15 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       if (cancelled) return;
       setChats(saved);
       openChat(); // Always start with a new chat when opening a canvas.
+      // The canvas keeps showing the storyboard it last had, whichever chat is open.
+      const latest = saved.filter((chat) => chat.storyboard).sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      if (latest) showStoryboard(latest);
       if (savedPosition) moveTo(savedPosition.x, savedPosition.y);
       positionLoaded.current = true;
     }).catch(() => { if (!cancelled) setStorageError("Could not load chat history. Reload to retry; existing chats have not been changed."); });
     return () => { cancelled = true; };
+    // Runs once per canvas; openChat only sets state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasId]);
 
   useEffect(() => {
@@ -170,7 +282,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
 
   useEffect(() => {
     if (!chatId || !history.length) return;
-    const chat: Chat = { id: chatId, canvasId, title: history.find((message) => message.role === "user")?.content.slice(0, 80) || "New chat", updatedAt: Date.now(), history, generations, models, storyboard, ...(agentSession && { agentSession }) };
+    const chat: Chat = { id: chatId, canvasId, title: history.find((message) => message.role === "user")?.content.slice(0, 80) || "New chat", updatedAt: Date.now(), history, generations, models, storyboard: chatStoryboard, ...(agentSession && { agentSession }) };
     let cancelled = false;
     saves.current = saves.current.then(async () => {
       if (!cancelled) setSaving(true);
@@ -178,7 +290,17 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       if (!cancelled) { setChats(saved); setStorageError(""); }
     }).catch(() => { setStorageError("Could not save chat history to database. Keep this tab open and check the backend connection before retrying."); }).finally(() => { if (!cancelled) setSaving(false); });
     return () => { cancelled = true; };
-  }, [chatId, canvasId, history, generations, models, agentSession, storyboard]);
+  }, [chatId, canvasId, history, generations, models, agentSession, chatStoryboard]);
+
+  // Edits made while another chat is open are saved into the chat that stores the storyboard, read fresh so nothing else in it is overwritten.
+  useEffect(() => {
+    if (!storyboard || !boardOwner || boardOwner === chatId || !positionLoaded.current) return;
+    saves.current = saves.current.then(async () => {
+      const owner = (await chatStorage(undefined, canvasId)).find(({ id }) => id === boardOwner);
+      if (!owner || JSON.stringify(owner.storyboard) === JSON.stringify(storyboard)) return;
+      setChats(await chatStorage({ ...owner, storyboard }, canvasId));
+    }).catch(() => { setStorageError("Could not save the storyboard. Keep this tab open and check the backend connection before retrying."); });
+  }, [storyboard, boardOwner, chatId, canvasId]);
 
   async function deleteChat() {
     if (!deleting || status || saving) return;
@@ -186,12 +308,13 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       const saved = await chatStorage(deleting.id, canvasId);
       setChats(saved);
       if (deleting.id === chatId) openChat();
+      if (deleting.id === boardOwner) { setStoryboard(undefined); setBoardOwner(undefined); setStoryImages([]); }
       setDeleting(null);
       setStorageError("");
     } catch { setStorageError("Could not delete this chat. Please try again."); }
   }
 
-  async function addToCanvas(file: GeneratedFile, files: GeneratedFile[] = [], signal?: AbortSignal) {
+  async function addToCanvas(file: GeneratedFile, files: GeneratedFile[] = [], signal?: AbortSignal, at?: { x: number; y: number }) {
     if (!mounted.current || !onAddToCanvas || importing.current) return;
     importing.current = true;
     setAdding(file.url);
@@ -209,7 +332,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       if (invalid) throw new Error(invalid);
       if (!mounted.current) return;
       signal?.throwIfAborted();
-      const [id] = await onAddToCanvas([imported]);
+      const [id] = await onAddToCanvas([imported], at);
       setCanvasFiles((current) => ({ ...current, [file.url]: imported }));
       return id;
     } catch (cause) {
@@ -322,9 +445,9 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       images.push({ name: file.name.slice(0, 512), url: await imagePreview(file, signal) });
     }
     signal.throwIfAborted();
-    const message: ConversationMessage = { role: "user", content: prompt.trim(), ...(images.length > 0 && { images }) };
+    const message: ConversationMessage = { role: "user", content: prompt.trim(), ...(hasPromptBadges && { display: draft.trim() }), ...(images.length > 0 && { images }) };
     setHistory((current) => [...current, message]);
-    setPrompt("");
+    setDraft("");
     onDeselect?.(selection.map(({ id }) => id));
     return message;
   }
@@ -399,7 +522,19 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   }
 
   async function storyboardCompletion(instruction: string, text: string, images: typeof storyImages, signal: AbortSignal, prior: ConversationMessage[] = []) {
-    if (!llm || localEngine) throw new Error("Select an OpenRouter, Google, or Ollama LLM for Storyboard.");
+    if (!llm) throw new Error("Select an LLM for Storyboard.");
+    if (localEngine) {
+      // Agent CLIs answer in plain text, so the JSON contract is requested in the prompt and parsed like an LLM reply.
+      const { engine, modelId } = localEngine;
+      const transcript = prior.slice(-20).map(({ role, content }) => `${role}: ${content}`).join("\n\n");
+      const names = images.map((image, index) => `Selected image ${index}: ${image.name}`).join("\n");
+      const message = `${instruction}\n\nDo not call any tools. Reply with only the JSON object, no other text.`
+        + (transcript ? `\n\nConversation so far:\n${transcript}` : "")
+        + (names ? `\n\n${names}\n(Images are not attached here; use their names and indices only.)` : "")
+        + `\n\n${text}`;
+      const reply = await runAgentChat(engine, message, { modelId, effort: efforts[engine], signal });
+      return { choices: [{ message: { content: reply.text } }] };
+    }
     const provider = providerOf(llm);
     if (provider === "ollama") {
       await startLocalLlm(signal);
@@ -432,18 +567,19 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
         return { name: character.name, notes: character.notes.slice(0, storyCharacterNotesLimit), image };
       });
       if (images.length > MAX_MEDIA_ITEMS) throw new Error(`A storyboard can use up to ${MAX_MEDIA_ITEMS} selected images and @Character references combined.`);
-      const cast = mergeStoryCharacters(storyboard?.characters ?? [], imported);
-      const input = JSON.stringify({ userRequest: text, currentDraft: storyboard?.story ?? "", cast: cast.map(({ name, notes, image }) => ({ name, notes, image })) });
+      const cast = mergeStoryCharacters(chatStoryboard?.characters ?? [], imported);
+      const input = JSON.stringify({ userRequest: text, currentDraft: chatStoryboard?.story ?? "", cast: cast.map(({ name, notes, image }) => ({ name, notes, image })) });
       const reply = storyReply(await storyboardCompletion(draftStoryInstruction, input, images, signal, prior), images.length);
       signal.throwIfAborted();
-      if (storyboardQueued && (history.length || generations.length)) openChat();
-      setStoryboardQueued(false);
+      const owner = storyboardQueued && (history.length || generations.length) ? openChat() : chatId;
       setChatExpanded(["chat"]);
-      const conversation: ConversationMessage[] = [...prior, { role: "user", content: text }, { role: "assistant", content: reply.reply }];
+      const conversation: ConversationMessage[] = [...prior, { role: "user", content: text, ...(hasPromptBadges && { display: draft.trim() }) }, { role: "assistant", content: reply.reply }];
       if (images.length) conversation[0] = { ...conversation[0], images };
       setHistory(conversation);
-      setStoryboard({ story: reply.story, characters: mergeStoryCharacters(cast, reply.characters) });
-      setPrompt("");
+      setStoryboard({ ...chatStoryboard, story: reply.story, characters: mergeStoryCharacters(cast, reply.characters) });
+      setBoardOwner(owner);
+      setStoryImages(images);
+      setDraft("");
       if (references.length) onDeselect?.(references.map(({ id }) => id));
     });
   }
@@ -456,13 +592,20 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       const shots = draftedShots(await storyboardCompletion(draftShotsInstruction, input, storyImages, signal), storyImages.length, characters);
       signal.throwIfAborted();
       setStoryboard({ ...story, shots });
-      setShotsOpen(true);
     });
   }
 
   function editShot(index: number, change: Partial<Shot>) {
     setStoryboard((current) => current?.shots ? {
-      ...current, shots: current.shots.map((shot, position) => position === index ? { ...shot, ...change } : shot),
+      ...current, shots: current.shots.map((shot, position) => {
+        if (position !== index) return shot;
+        const next = { ...shot, ...change };
+        if (!next.position) delete next.position;
+        if (!next.videoId) delete next.videoId;
+        // A clip made from an older picture or description is no longer this shot's.
+        if (!("videoId" in change) && ("description" in change || "image" in change || "generatedId" in change)) delete next.videoId;
+        return next;
+      }),
     } : current);
   }
 
@@ -480,6 +623,16 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     } : current);
   }
 
+  // Storyboard pictures and clips live on their cast and shot nodes, not on the canvas, so they are saved as plain workspace files.
+  async function saveStoryboardFile(file: GeneratedFile, name: string, signal: AbortSignal) {
+    const response = await fetch(file.url, { credentials: file.url.startsWith("/api/storage/files/") ? "same-origin" : "omit", signal });
+    if (!response.ok) throw new Error("Could not download the generated file.");
+    const blob = await response.blob();
+    const id = crypto.randomUUID();
+    await storageFile(id, new File([blob], name, { type: blob.type }));
+    return id;
+  }
+
   async function renderStoryboardImage(name: string, prompt: string, images: string[], signal: AbortSignal) {
     const model = selectedModel(models, "picture");
     if (!model) throw new Error("Select an image model in the prompt toolbar first.");
@@ -489,9 +642,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       signal.throwIfAborted();
       const file = files.find((file) => file.kind === "image");
       if (!file) throw new Error("The image model did not return a picture.");
-      const id = await addToCanvas({ ...file, name }, files, signal);
-      if (!id) throw new Error("Could not add the image to the canvas.");
-      return id;
+      return await saveStoryboardFile(file, name, signal);
     } finally {
       files.forEach(({ url }) => { if (url.startsWith("blob:")) URL.revokeObjectURL(url); });
     }
@@ -505,54 +656,238 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     });
   }
 
+  /** Draws the picture of one shot from its description, its characters and the references. Returns the saved file id. */
+  async function renderShot(index: number, story: Storyboard, signal: AbortSignal) {
+    const shot = story.shots![index];
+    const model = selectedModel(models, "picture");
+    if (!model) throw new Error("Select an image model in the prompt toolbar first.");
+    const useImages = !isSdModel(model) && modelProvider(model) !== "google";
+    const references: string[] = [];
+    const details: string[] = [];
+    for (const position of shot.characters ?? []) {
+      const character = story.characters![position];
+      let url = useImages && character.image !== null ? storyImages[character.image].url : undefined;
+      if (useImages && !url && character.approved && character.generatedId) {
+        const blob = await storageFile(character.generatedId);
+        if (!blob) throw new Error(`Could not load the reference for ${character.name}.`);
+        url = await imagePreview(new File([blob], character.name), signal);
+      }
+      const image = url ? (references.includes(url) ? references.indexOf(url) + 1 : references.push(url)) : undefined;
+      details.push(`${character.name.trim() || `Character ${position + 1}`}: ${character.notes}${image ? ` (reference image ${image})` : ""}`);
+    }
+    if (useImages) for (const index of shot.references) {
+      const url = storyImages[index].url;
+      if (references.length < MAX_MEDIA_ITEMS && !references.includes(url)) references.push(url);
+    }
+    const prompt = shotImagePrompt(shot.description, story.story, details);
+    const generatedId = await renderStoryboardImage(`Storyboard shot ${index + 1}`, prompt, references, signal);
+    return generatedId;
+  }
+
   async function generateShot(index: number, story: Storyboard) {
     const shot = story.shots?.[index];
     if (!shot?.description.trim() || shot.image !== null || shot.generatedId) return;
     await runStoryboard(`Generating image for shot ${index + 1}…`, async (signal) => {
-      const model = selectedModel(models, "picture");
-      if (!model) throw new Error("Select an image model in the prompt toolbar first.");
-      const useImages = !isSdModel(model) && modelProvider(model) !== "google";
-      const references: string[] = [];
-      const details: string[] = [];
-      for (const position of shot.characters ?? []) {
-        const character = story.characters![position];
-        let url = useImages && character.image !== null ? storyImages[character.image].url : undefined;
-        if (useImages && !url && character.approved && character.generatedId) {
-          const blob = await storageFile(character.generatedId);
-          if (!blob) throw new Error(`Could not load the reference for ${character.name}.`);
-          url = await imagePreview(new File([blob], character.name), signal);
+      editShot(index, { generatedId: await renderShot(index, story, signal) });
+    });
+  }
+
+  /** The picture of a shot as a data URL, the first frame of its clip. */
+  async function shotPicture(shot: Shot, signal: AbortSignal) {
+    if (shot.generatedId) {
+      const blob = await storageFile(shot.generatedId);
+      if (!blob) throw new Error("Could not load a shot image.");
+      return imagePreview(new File([blob], "Shot"), signal);
+    }
+    return storyImages[shot.image!].url;
+  }
+
+  // Asks before spending anything: every missing clip is one video generation, and the video tool is a one-time download.
+  async function planStoryboardVideo(story: Storyboard) {
+    const model = selectedModel(models, "video");
+    if (!model) return notifyError("Select a video model in the prompt toolbar first.");
+    if (!videoStartImage(model)) return notifyError("This video model cannot start from a picture. Choose Gemini Create video or an OpenRouter video model.");
+    const bridge = desktopVideo();
+    if (!bridge) return notifyError("Joining clips into one video needs the Lomra desktop app.");
+    try {
+      const tool = await bridge.status();
+      if (!tool.supported) return notifyError("Joining clips into one video is not available on this computer yet.");
+      const shots = story.shots ?? [];
+      setVideoPlan({ clips: shots.filter((shot) => !shot.videoId).length, pictures: shots.filter((shot) => shot.image === null && !shot.generatedId).length, model, toolBytes: tool.installed ? 0 : tool.bytes });
+    } catch { notifyError("Could not reach the video tool."); }
+  }
+
+  async function ensureVideoTool(bridge: DesktopVideoApi, signal: AbortSignal) {
+    if ((await bridge.status()).installed) return;
+    if (!(await bridge.download())) throw new Error("Could not start downloading the video tool.");
+    const stop = () => void bridge.cancelDownload();
+    signal.addEventListener("abort", stop, { once: true });
+    try {
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        signal.throwIfAborted();
+        const tool = await bridge.status();
+        if (tool.installed) return;
+        if (tool.error) throw new Error(tool.error);
+        if (!tool.downloading) throw new Error("The video tool did not finish downloading.");
+        setStatus(`Downloading the video tool · ${Math.round((tool.downloading.received / Math.max(1, tool.downloading.total)) * 100)}%`);
+      }
+    } finally {
+      signal.removeEventListener("abort", stop);
+    }
+  }
+
+  // One clip per shot from its picture, then one video from all the clips. Finished pictures and clips stay on their shots, so a stopped run resumes.
+  async function makeStoryboardVideo(story: Storyboard) {
+    const bridge = desktopVideo();
+    const model = selectedModel(models, "video");
+    if (!bridge || !model || !story.shots) return;
+    await runStoryboard("Preparing video…", async (signal) => {
+      await ensureVideoTool(bridge, signal);
+      const shots = [...story.shots!];
+      for (const [index, first] of shots.entries()) {
+        signal.throwIfAborted();
+        const label = `Shot ${index + 1} of ${shots.length}`;
+        let shot = first;
+        if (shot.image === null && !shot.generatedId) {
+          if (!shot.description.trim()) throw new Error(`Shot ${index + 1} needs a description.`);
+          setStatus(`${label} · drawing the picture…`);
+          const generatedId = await renderShot(index, { ...story, shots }, signal);
+          editShot(index, { generatedId });
+          shot = shots[index] = { ...shot, generatedId };
         }
-        const image = url ? (references.includes(url) ? references.indexOf(url) + 1 : references.push(url)) : undefined;
-        details.push(`${character.name.trim() || `Character ${position + 1}`}: ${character.notes}${image ? ` (reference image ${image})` : ""}`);
+        if (shot.videoId) continue;
+        const prompt = `${shot.description}
+
+Animate this shot from the starting image with natural, subtle motion and camera movement. Keep the characters and the setting exactly as in the image. No text or subtitles.`;
+        const task: Generation = { id: crypto.randomUUID(), category: "video", model, status: "Waiting", prompt, aspectRatio: "16:9", startImage: true };
+        setStatus(`${label} · making the clip…`);
+        const files = await generate(task, request, signal, ({ status }) => { if (status) setStatus(`${label} · ${status}`); }, undefined, [await shotPicture(shot, signal)]);
+        try {
+          const file = files.find((item) => item.kind === "video");
+          if (!file) throw new Error("The video model did not return a video.");
+          const videoId = await saveStoryboardFile(file, `Storyboard clip ${index + 1}`, signal);
+          editShot(index, { videoId });
+          shots[index] = { ...shot, videoId };
+        } finally {
+          files.forEach(({ url }) => { if (url.startsWith("blob:")) URL.revokeObjectURL(url); });
+        }
       }
-      if (useImages) for (const index of shot.references) {
-        const url = storyImages[index].url;
-        if (references.length < MAX_MEDIA_ITEMS && !references.includes(url)) references.push(url);
+      setStatus("Joining clips…");
+      const clips: { data: Uint8Array; seconds: number }[] = [];
+      for (const shot of shots) {
+        const blob = await storageFile(shot.videoId!);
+        if (!blob) throw new Error("Could not load a clip. Make the video again.");
+        clips.push({ data: new Uint8Array(await blob.arrayBuffer()), seconds: shot.seconds });
       }
-      const prompt = shotImagePrompt(shot.description, story.story, details);
-      const generatedId = await renderStoryboardImage(`Storyboard shot ${index + 1}`, prompt, references, signal);
-      editShot(index, { generatedId });
+      const runId = crypto.randomUUID();
+      const stopListening = bridge.onProgress((event) => { if (event.runId === runId) setStatus(`Joining clips · ${Math.round((event.seconds / Math.max(1, event.total)) * 100)}%`); });
+      const cancel = () => bridge.cancel(runId);
+      signal.addEventListener("abort", cancel, { once: true });
+      try {
+        const result = await bridge.stitch(runId, { clips, aspectRatio: "16:9" });
+        if ("error" in result) throw new Error(result.error);
+        const url = URL.createObjectURL(new Blob([result.video as BlobPart], { type: "video/mp4" }));
+        try {
+          // The video sits at the end of the flow, to the right of the shots; making it again replaces the last one.
+          const previous = latestStoryboard.current?.videoItemId;
+          if (previous) onRemoveFromCanvas?.([previous]);
+          const frame = shotsFrame(shots.map((shot, index) => shot.position ?? defaultSpot(index)));
+          const base = { x: origin.x + (castShown ? shotsOffset : 0), y: origin.y };
+          const itemId = await addToCanvas({ url, name: "Storyboard", kind: "video" }, [], signal, { x: base.x + frame.left + frame.width + 100, y: base.y + frame.anchorY });
+          setStoryboard((current) => current ? { ...current, videoItemId: itemId } : current);
+        } finally { URL.revokeObjectURL(url); }
+      } finally {
+        stopListening();
+        signal.removeEventListener("abort", cancel);
+      }
+    });
+  }
+
+  function focusPromptAt(offset: number) {
+    requestAnimationFrame(() => {
+      const editor = storyboardInput.current;
+      if (editor) {
+        editor.focus();
+        setStoryboardCaret(editor, offset);
+      } else {
+        promptInput.current?.focus();
+        promptInput.current?.setSelectionRange(offset, offset);
+      }
     });
   }
 
   function chooseStoryboard() {
     if (!chatId || active.current) return;
-    setStoryboardQueued(true);
-    if (isStoryboardShortcut) setPrompt("");
-    requestAnimationFrame(() => {
-      const input = promptInput.current;
-      if (!input) return;
-      input.focus();
-      input.setSelectionRange(input.value.length, input.value.length);
-    });
+    const onlyCommand = prompt.trim().toLowerCase() === storyboardCommand;
+    const start = onlyCommand ? 0 : command?.index;
+    const end = onlyCommand ? draft.length : caret;
+    if (start === undefined || end === null) return;
+    const before = draft.slice(0, start).replace(storyboardMarker, "");
+    const after = draft.slice(end).replace(storyboardMarker, "");
+    const badge = chatStoryboard ? "" : storyboardMarker;
+    setDraft(before + badge + after);
+    setSuggestionsDismissed(true);
+    focusPromptAt(before.length + badge.length);
   }
+
+  function chooseCharacter(name: string) {
+    if (!mention || caret === null) return;
+    const prefix = draft.slice(0, mention.index);
+    const before = `${prefix}${/[@\p{L}\p{M}\p{N}_]$/u.test(promptText(prefix)) ? " " : ""}${characterMarker}@${name}${characterMarker}`;
+    const after = draft.slice(caret);
+    const space = !after || /^[@\p{L}\p{M}\p{N}_-]/u.test(promptText(after)) ? " " : "";
+    const next = before + space + after;
+    if (promptText(next).length > 8000) return;
+    setDraft(next);
+    setSuggestionsDismissed(true);
+    focusPromptAt(before.length + Number(!!space || after.startsWith(" ")));
+  }
+
+  function editPrompt(value: string, offset: number | null) {
+    setSuggestionsDismissed(false);
+    setPromptCaret(offset);
+    setCharacterIndex(0);
+    setDraft(value);
+    if (hasPromptBadges && !value.includes(storyboardMarker) && !value.includes(characterMarker)) focusPromptAt(offset ?? value.length);
+  }
+
+  function handlePromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement | HTMLDivElement>) {
+    if (event.nativeEvent.isComposing) return;
+    if ((commandsOpen || characterMenuOpen) && event.key === "Escape") {
+      event.preventDefault();
+      setSuggestionsDismissed(true);
+      return;
+    }
+    if ((commandsOpen || characterMenuOpen) && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      const count = matchingCharacters.length;
+      if (count) setCharacterIndex((activeCharacterIndex + (event.key === "ArrowDown" ? 1 : count - 1)) % count);
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      if (characterMenuOpen) {
+        if (activeCharacter) chooseCharacter(activeCharacter.name);
+      } else void send();
+    }
+  }
+
+  const promptAttributes = {
+    "aria-label": "Prompt",
+    "aria-controls": commandsOpen || characterMenuOpen ? suggestionsId : undefined,
+    "aria-activedescendant": activeOptionId,
+    onFocus: () => setPromptFocused(true),
+    onBlur: () => setPromptFocused(false),
+    onKeyDown: handlePromptKeyDown,
+  };
 
   async function send() {
     if (active.current || !chatId || !prompt.trim()) return;
-    if (commandsOpen || (canChooseStoryboard && prompt.trim().toLowerCase() === storyboardCommand)) { chooseStoryboard(); return; }
+    if (commandsOpen || prompt.trim().toLowerCase() === storyboardCommand) { chooseStoryboard(); return; }
     setChatExpanded(["chat"]);
-    if (storyboardQueued || storyboard) {
-      if (!storyboard?.shots) await refineStory();
+    if (storyboardQueued || chatStoryboard) {
+      await refineStory();
       return;
     }
     if (localEngine) return sendToAgent(localEngine);
@@ -696,10 +1031,10 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       <Accordion value={chatExpanded} onValueChange={changeChatExpanded} className="shrink-0 rounded-none border-0">
       <AccordionItem value="chat" className="data-open:bg-transparent">
       <div className="flex items-center gap-2 px-2">
-        <div className="min-w-0 flex-1">
-          <AccordionTrigger className="items-center gap-2 px-1 py-2" disabled={!history.length && !generations.length && !status}>
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <AccordionTrigger className="w-full min-w-0 items-center gap-2 px-1 py-2" disabled={!history.length && !generations.length && !status}>
             <MessageCircleIcon className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">{status || chats.find((chat) => chat.id === chatId)?.title || (storyboard ? "Storyboard chat" : "Chat with canvas")}</span>
+            <span className="min-w-0 flex-1 truncate">{status || history.find((message) => message.role === "user")?.content || chats.find((chat) => chat.id === chatId)?.title || (chatStoryboard ? "Storyboard chat" : "Chat with canvas")}</span>
           </AccordionTrigger>
         </div>
         {saving && <span role="status" className="flex size-8 shrink-0 items-center justify-center text-muted-foreground" title="Saving…"><CloudUploadIcon aria-hidden="true" className="size-4 motion-safe:animate-pulse" /><span className="sr-only">Saving…</span></span>}
@@ -725,12 +1060,43 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
             </ComboboxList>
           </ComboboxContent>
         </Combobox>
-        {storyboard && <Button variant="ghost" size="sm" onClick={() => setCharactersOpen(true)}>Cast ({storyboard.characters?.length ?? 0})</Button>}
-        {storyboard?.shots && <Button variant="ghost" size="sm" onClick={() => setShotsOpen(true)}>
-          <PanelsTopLeftIcon data-icon="inline-start" />View storyboard
-        </Button>}
         <Tip label="New chat"><Button variant="ghost" size="icon-sm" aria-label="New chat" disabled={!chatId || !!status || saving || !!adding || voiceMode || !!storageError} onClick={() => openChat()}><PlusIcon /></Button></Tip>
       </div>
+      <Dialog open={!!videoPlan} onOpenChange={(open) => { if (!open) setVideoPlan(null); }}>
+        {videoPlan && <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Make video?</DialogTitle>
+            <DialogDescription>
+              {videoPlan.clips > 0
+                ? `Lomra will make ${videoPlan.clips} clip${videoPlan.clips === 1 ? "" : "s"} with ${videoPlan.model}${videoPlan.pictures > 0 ? ` (after drawing ${videoPlan.pictures} missing shot image${videoPlan.pictures === 1 ? "" : "s"})` : ""}, then join them into one video on the canvas. Each clip uses your video model's credits or limits.`
+                : "Every shot already has its clip. Lomra will join them into one video on the canvas."}
+              {videoPlan.toolBytes > 0 && ` Joining needs a small video tool (about ${Math.round(videoPlan.toolBytes / 1_000_000)} MB), downloaded once.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVideoPlan(null)}>Cancel</Button>
+            <Button onClick={() => { setVideoPlan(null); if (storyboard) void makeStoryboardVideo(storyboard); }}>Make video</Button>
+          </DialogFooter>
+        </DialogContent>}
+      </Dialog>
+      <Dialog open={storyDraft !== null} onOpenChange={(open) => { if (!open) setStoryDraft(null); }}>
+        {storyDraft !== null && <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit story</DialogTitle>
+            <DialogDescription>Changing the story does not change the shots. Use Redraft shots to rebuild them from the new story.</DialogDescription>
+          </DialogHeader>
+          <Textarea aria-label="Story" rows={8} maxLength={storyLimit} value={storyDraft} onChange={(event) => setStoryDraft(event.target.value)} />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStoryDraft(null)}>Cancel</Button>
+            <Button disabled={!storyDraft.trim()} onClick={() => { setStoryboard((current) => current ? { ...current, story: storyDraft } : current); setStoryDraft(null); }}>Save</Button>
+          </DialogFooter>
+        </DialogContent>}
+      </Dialog>
+      <Dialog open={redrafting} onOpenChange={setRedrafting}>
+        <DialogContent><DialogHeader><DialogTitle>Redraft shots?</DialogTitle><DialogDescription>Your shot edits and generated shot images will be replaced.</DialogDescription></DialogHeader>
+          <DialogFooter><Button variant="outline" onClick={() => setRedrafting(false)}>Cancel</Button><Button onClick={() => { setRedrafting(false); if (storyboard) void makeShots(storyboard); }}>Redraft shots</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={!!deleting} onOpenChange={(open) => { if (!open) setDeleting(null); }}>
         <DialogContent><DialogHeader><DialogTitle>Delete chat?</DialogTitle><DialogDescription>“{deleting?.title}” will be permanently deleted. Files already on the canvas will stay.</DialogDescription></DialogHeader>
           <DialogFooter><Button variant="outline" onClick={() => setDeleting(null)}>Cancel</Button><Button variant="destructive" onClick={() => void deleteChat()}>Delete chat</Button></DialogFooter>
@@ -739,7 +1105,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       {(history.length > 0 || generations.length > 0 || status) && <AccordionContent className="border-b pb-2">
       <div ref={transcript} className="flex max-h-[40dvh] flex-col gap-3 overflow-y-auto overscroll-contain py-2 [&>*]:shrink-0" aria-label="Generation results" aria-busy={!!status}>
         {chatTimeline(history, generations).map(({ message, tasks }, index) => <div key={index} className="flex flex-col gap-1">
-        {message && <div className={message.role === "user" ? "ml-auto flex max-w-[85%] flex-col items-end gap-1 px-3" : "flex flex-col gap-1 px-3"}>
+        {message && !(chatStoryboard && message.role === "assistant") && <div className={message.role === "user" ? "ml-auto flex max-w-[85%] flex-col items-end gap-1 px-3" : "flex flex-col gap-1 px-3"}>
           <span className="text-xs text-muted-foreground">{message.role === "user" ? "You" : "Lomra"}</span>
           {!!message.images?.length && <div className={message.role === "user" ? "flex max-w-full gap-2 overflow-x-auto py-1" : "flex gap-2 overflow-x-auto py-1"} aria-label="Attached images">
             {message.images.map(({ name, url }, index) => (
@@ -747,7 +1113,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
               <img key={index} src={url} alt={name || "Attached image"} className="size-24 shrink-0 rounded-xl border bg-muted object-contain" />
             ))}
           </div>}
-          {message.role === "user" ? <p className="whitespace-pre-wrap break-words rounded-2xl bg-muted px-3 py-1.5 text-sm">{message.content}</p> : <MarkdownMessage>{message.content}</MarkdownMessage>}
+          {message.role === "user" ? <p className="whitespace-pre-wrap break-words rounded-2xl bg-muted px-3 py-1.5 text-sm">{message.display ? <PromptBadgeText value={message.display} /> : message.content}</p> : <MarkdownMessage>{message.content}</MarkdownMessage>}
         </div>}
         {tasks.length > 0 && <Accordion value={expanded} onValueChange={setExpanded} multiple className="rounded-none border-0">
         {tasks.map((task) => <AccordionItem key={task.id} value={task.id} className="relative data-open:bg-transparent">
@@ -796,25 +1162,48 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           <span className="text-xs">Lomra</span>
           <span className="flex items-center gap-2 text-sm"><Loader2Icon aria-hidden="true" className="size-4 motion-safe:animate-spin" />{status}</span>
         </div>}
+      {chatStoryboard && <section aria-label="Storyboard" className="flex flex-col gap-4 px-3">
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Lomra</span>
+          {editingStory && !chatStoryboard.shots
+            ? <Textarea aria-label="Story draft" rows={6} maxLength={storyLimit} value={chatStoryboard.story} disabled={!!status}
+              onChange={(event) => setStoryboard({ ...chatStoryboard, story: event.target.value })} />
+            : <MarkdownMessage>{chatStoryboard.story}</MarkdownMessage>}
+          {/* Once the shots exist the story is a record; Make video, Redraft and Edit story live on the canvas. */}
+          {!chatStoryboard.shots && <div className="flex gap-1 self-end">
+            <Tooltip>
+              <TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label={editingStory ? "Done" : "Edit"} disabled={!!status} onClick={() => setEditingStory(!editingStory)} />}>
+              {editingStory ? <CheckIcon /> : <PencilIcon />}
+            </TooltipTrigger>
+              <TooltipContent>{editingStory ? "Done" : "Edit"}</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger render={<Button size="icon-sm" aria-label="Use this story" disabled={!!status || !chatStoryboard.story.trim()} onClick={() => { setEditingStory(false); void makeShots(chatStoryboard); }} />}>
+              <ClapperboardIcon />
+            </TooltipTrigger>
+              <TooltipContent>Use this story</TooltipContent>
+            </Tooltip>
+          </div>}
+        </div>
+      </section>}
       </div>
       </AccordionContent>}
       </AccordionItem>
       </Accordion>
-      {storyboard && <StoryboardCharacters open={charactersOpen} onOpenChange={setCharactersOpen}
-        characters={storyboard.characters ?? []} images={storyImages} status={status}
-        onAdd={() => setStoryboard((current) => current && (current.characters?.length ?? 0) < maxStoryCharacters
-          ? { ...current, characters: [...(current.characters ?? []), { name: "", notes: "", image: null }] } : current)}
-        onEdit={editCharacter} onRemove={removeCharacter}
-        onGenerate={(index) => void generateCharacter(index, storyboard.characters![index], storyboard.story)}
-        onStop={() => active.current?.abort()} />}
-      {storyboard?.shots && <StoryboardShots open={shotsOpen} onOpenChange={setShotsOpen} shots={storyboard.shots} images={storyImages} characters={storyboard.characters ?? []}
-        busy={!!status} status={status} onEdit={editShot} onGenerate={(index) => void generateShot(index, storyboard)} onStop={() => active.current?.abort()} />}
-      {storyboard && !storyboard.shots && <Field className="gap-2 px-3">
-        <FieldLabel htmlFor="story-draft">Story draft</FieldLabel>
-        <Textarea id="story-draft" rows={4} maxLength={storyLimit} value={storyboard.story} disabled={!!status}
-          onChange={(event) => setStoryboard({ ...storyboard, story: event.target.value })} />
-        <Button size="sm" className="self-end" disabled={!!status || !storyboard.story.trim()} onClick={() => void makeShots(storyboard)}>Use this story</Button>
-      </Field>}
+      {storyboard && storyboardHost && createPortal(<>
+        {castShown && <section aria-label="Cast" className="absolute flex w-[460px] flex-col gap-2 rounded-3xl border bg-background p-4 shadow-lg" style={{ left: origin.x, top: origin.y }}>
+          <h3 onPointerDown={startMove} title="Drag to move the storyboard" className="w-fit cursor-grab touch-none text-sm font-medium select-none active:cursor-grabbing">Cast</h3>
+        <StoryboardCharacters characters={storyboard.characters ?? []} images={storyImages} status={status}
+          onEdit={editCharacter} onRemove={removeCharacter}
+          onGenerate={(index) => void generateCharacter(index, storyboard.characters![index], storyboard.story)}
+          onStop={() => active.current?.abort()} />
+        </section>}
+        {storyboard.shots && <div className="absolute top-0 left-0" style={{ transform: `translate(${origin.x + (castShown ? shotsOffset : 0)}px, ${origin.y}px)` }}>
+        <StoryboardShots shots={storyboard.shots} images={storyImages} characters={storyboard.characters ?? []}
+          busy={!!status} status={status} onEdit={editShot} onGenerate={(index) => void generateShot(index, storyboard)} onStop={() => active.current?.abort()}
+          video={videoBounds && { ...videoBounds, x: videoBounds.x - origin.x - (castShown ? shotsOffset : 0), y: videoBounds.y - origin.y }} onMoveStart={startMove} onMakeVideo={() => void planStoryboardVideo(storyboard)} onEditStory={() => setStoryDraft(storyboard.story)} onRedraft={() => setRedrafting(true)} />
+        </div>}
+      </>, storyboardHost)}
       {!storyboard && selection.some(({ file }) => !storyboardQueued || canvasFileKind(file) === "image") && <div aria-label="Selected canvas items" className="flex max-h-36 gap-2 overflow-x-auto px-3 py-2">
         {selection.filter(({ file }) => !storyboardQueued || canvasFileKind(file) === "image").map((item) => <div key={item.id} title={item.file.name} className="flex size-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted">
           {canvasFileKind(item.file) === "image" ? (
@@ -828,65 +1217,61 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       {voiceMode && <VoiceRecorder
         onCancel={() => setVoiceMode(false)}
         onTranscribed={(text) => {
-          setPrompt((current) => current ? `${current.trimEnd()} ${text}` : text);
+          setDraft((current) => current ? `${current.trimEnd()} ${text}` : text);
           setVoiceMode(false);
         }}
       />}
       <div className={voiceMode ? "hidden" : "flex w-full min-w-0 flex-col gap-2"}>
-      {!storyboard?.shots && <div className="relative min-w-0">
-      {storyboardQueued && <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div ref={storyboardOverlay} className="relative mx-3 mt-2 h-5 text-base leading-5 md:text-sm">
-          <Badge variant="secondary" className="absolute top-0 left-0">storyboard</Badge>
-          {!prompt && <span className="ml-21 block truncate text-muted-foreground">{promptPlaceholder}</span>}
-        </div>
-      </div>}
-      <Textarea
+      <div ref={promptAnchor} className="relative min-w-0">
+      {hasPromptBadges ? <StoryboardInput
+        {...promptAttributes}
+        inputRef={storyboardInput}
+        value={draft}
+        disabled={!!status}
+        aria-description="Use Backspace or Delete to remove a badge."
+        onEdit={editPrompt}
+        onCaretChange={setPromptCaret}
+        className="min-h-9 max-h-[min(8.5rem,calc(100dvh-5rem))] w-full min-w-0 overflow-y-auto px-3 py-2 text-base leading-5 wrap-break-word whitespace-pre-wrap outline-none aria-disabled:opacity-50 md:text-sm"
+      /> : <Textarea
+        {...promptAttributes}
         ref={promptInput}
-        value={storyboardQueued ? storyboardMarker + prompt : prompt}
-        onChange={(event) => {
-          const value = event.target.value;
-          setCommandsDismissed(false);
-          setPrompt(storyboardQueued ? value.replace(storyboardMarker, "") : value);
-          if (storyboardQueued && !value.startsWith(storyboardMarker)) setStoryboardQueued(false);
-        }}
-        onFocus={() => setPromptFocused(true)}
-        onBlur={() => setPromptFocused(false)}
-        onScroll={(event) => {
-          if (storyboardOverlay.current) storyboardOverlay.current.style.translate = `0 -${event.currentTarget.scrollTop}px`;
+        value={draft}
+        onChange={(event) => editPrompt(promptText(event.target.value), event.target.selectionStart)}
+        onSelect={(event) => {
+          const { selectionStart, selectionEnd } = event.currentTarget;
+          setPromptCaret(selectionStart === selectionEnd ? selectionStart : null);
         }}
         disabled={!!status}
-        maxLength={8000 + Number(storyboardQueued)}
-        onKeyDown={(event) => {
-          if (event.nativeEvent.isComposing) return;
-          if (commandsOpen && (event.key === "ArrowDown" || event.key === "Escape")) {
-            event.preventDefault();
-            if (event.key === "Escape") setCommandsDismissed(true);
-            return;
-          }
-          if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            void send();
-          }
-        }}
-        aria-label="Prompt"
-        aria-controls={commandsOpen ? commandsId : undefined}
-        aria-activedescendant={commandsOpen ? storyboardOptionId : undefined}
-        aria-description={storyboardQueued ? "Storyboard command selected. Delete the badge at the start to cancel." : undefined}
+        maxLength={8000}
         placeholder={promptPlaceholder}
         rows={1}
-        className={`min-h-9 max-h-[min(8.5rem,calc(100dvh-5rem))] w-full min-w-0 resize-none overflow-y-auto rounded-none border-0 bg-transparent px-3 py-2 leading-5 shadow-none field-sizing-content focus-visible:border-transparent focus-visible:ring-0${storyboardQueued ? " indent-21" : ""}`}
-      />
-      <Popover open={commandsOpen} onOpenChange={(open) => { if (!open) setCommandsDismissed(true); }}>
-        <PopoverContent anchor={promptInput} side="top" align="start" initialFocus={false} finalFocus={false}
-          id={commandsId} role="listbox" aria-label="Commands" className="w-max max-w-(--available-width) gap-0 p-1">
-          <div className="px-3 py-2 text-xs text-muted-foreground" aria-hidden="true">Commands</div>
+        className="min-h-9 max-h-[min(8.5rem,calc(100dvh-5rem))] w-full min-w-0 resize-none overflow-y-auto rounded-none border-0 bg-transparent px-3 py-2 leading-5 shadow-none field-sizing-content focus-visible:border-transparent focus-visible:ring-0"
+      />}
+      <Popover open={commandsOpen || characterMenuOpen} onOpenChange={(open) => { if (!open) setSuggestionsDismissed(true); }}>
+        <PopoverContent anchor={promptAnchor} side="top" align="start" initialFocus={false} finalFocus={false}
+          id={suggestionsId} role="listbox" aria-label={characterMenuOpen ? "Characters" : "Commands"} className="w-max min-w-48 max-w-(--available-width) gap-0 p-1">
+          <div className="px-3 py-2 text-xs text-muted-foreground" aria-hidden="true">{characterMenuOpen ? "Characters" : "Commands"}</div>
+          {characterMenuOpen ? matchingCharacters.length ? matchingCharacters.map(({ id, name }, index) => (
+            <Button key={id} type="button" variant={index === activeCharacterIndex ? "secondary" : "ghost"} size="sm"
+              role="option" aria-selected={index === activeCharacterIndex} id={`${suggestionsId}-${id}`}
+              tabIndex={-1} onPointerDown={(event) => event.preventDefault()} onClick={() => chooseCharacter(name)} className="justify-start">
+              <span className="truncate">@{name}</span>
+            </Button>
+          )) : <div role="option" aria-selected="false" aria-disabled="true" className="px-3 py-2 text-sm text-muted-foreground">
+            {characterOptions === null ? "Loading…" : characterOptions === false ? "Could not load Characters." : "No matching Characters."}
+          </div> :
           <Button type="button" variant="secondary" size="sm" role="option" aria-selected="true" id={storyboardOptionId}
-            tabIndex={-1} onPointerDown={(event) => event.preventDefault()} onClick={chooseStoryboard} className="justify-start">
-            <PanelsTopLeftIcon data-icon="inline-start" /><span className="font-mono">{storyboardCommand}</span><span className="text-muted-foreground">Draft a storyboard</span>
-          </Button>
+            tabIndex={-1} onPointerDown={(event) => event.preventDefault()} onClick={chooseStoryboard}
+            className="h-auto items-start justify-start gap-2 rounded-xl py-2 text-left">
+            <PanelsTopLeftIcon data-icon="inline-start" className="mt-0.5" />
+            <span className="flex flex-col">
+              <span className="font-mono">{storyboardCommand}</span>
+              <span className="text-xs text-muted-foreground">Draft a storyboard</span>
+            </span>
+          </Button>}
         </PopoverContent>
       </Popover>
-      </div>}
+      </div>
       <div className="flex w-full min-w-0 flex-wrap items-center gap-2">
           <Button
             type="button"
@@ -934,29 +1319,21 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
         <span>{multiview ? multiviewRequirements(threeDModel) : requiresImage(threeDModel) ? "1 image" : "Text only"}</span>
       </div>}
           <div className="ml-auto flex min-w-0 items-center gap-2">
-          {!storyboard?.shots && <CharacterPicker disabled={!!status} selectedImage={selectedCharacterImage} onPick={(name) => {
-            setPrompt((current) => {
-              const text = current.replace(/(^|\s)@[\p{L}\p{M}\p{N}_-]*$/u, "$1").trimEnd();
-              const next = `${text}${text ? " " : ""}@${name} `;
-              return next.length <= 8000 ? next : current;
-            });
-            requestAnimationFrame(() => promptInput.current?.focus());
-          }} />}
           {localEngine && agentEfforts[localEngine.engine] && <EffortPicker levels={agentEfforts[localEngine.engine] ?? []} value={efforts[localEngine.engine]}
             onChange={(level) => changeEffort(localEngine.engine, level)} disabled={!!status} />}
           <ModelSelector models={models} onModelsChange={setModels} disabled={!!status} />
-          {!storyboard?.shots && <SpeechMenu><Button variant="ghost" size="icon-sm" aria-label="Record audio" title="Record audio · right-click for speech models" disabled={!!status} onClick={() => setVoiceMode(true)}>
+          <SpeechMenu><Button variant="ghost" size="icon-sm" aria-label="Record audio" title="Record audio · right-click for speech models" disabled={!!status} onClick={() => setVoiceMode(true)}>
             <MicIcon />
-          </Button></SpeechMenu>}
+          </Button></SpeechMenu>
           <span role="status" className="sr-only">{status}</span>
-          {(!storyboard?.shots || status) && <Tip label={status ? `${status} · Stop generation` : "Send prompt"}><Button
+          <Tip label={status ? `${status} · Stop generation` : "Send prompt"}><Button
             size="icon-sm"
             disabled={!chatId || (!status && !prompt.trim())}
             aria-label={status ? "Stop generation" : "Send prompt"}
             onClick={() => status ? active.current?.abort() : void send()}
           >
             {status ? <PauseIcon /> : <ArrowUpIcon />}
-          </Button></Tip>}
+          </Button></Tip>
           </div>
       </div>
       </div>

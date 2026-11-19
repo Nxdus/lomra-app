@@ -7,17 +7,20 @@ import type { Provider, ProviderRequest } from "@/components/api-provider";
 export type Category = "picture" | "video" | "3d";
 import { isMultiview, multiviewInput, type ModelView, type ModelViews } from "./multiview";
 export { modelViews, isMultiview, multiviewError, type ModelView, type ModelViews } from "./multiview";
-export type GenerationTask = { category: Category; prompt: string; aspectRatio?: string; texture?: boolean; viewIndices?: Partial<Record<ModelView, number>>; operation?: ImageOperation; mediaTool?: MediaTool };
+export type GenerationTask = { category: Category; prompt: string; aspectRatio?: string; startImage?: boolean; duration?: number; texture?: boolean; viewIndices?: Partial<Record<ModelView, number>>; operation?: ImageOperation; mediaTool?: MediaTool };
 export type GeneratedFile = { url: string; name: string; kind: "image" | "video" | "file" };
 export type Generation = GenerationTask & {
   id: string; model: string; status: string; requestId?: string; files?: GeneratedFile[]; error?: string; views?: ModelViews; messageIndex?: number; summary?: string;
   motionJobs?: { rig?: string; motion?: string };
 };
-export type ConversationMessage = { role: "user" | "assistant"; content: string; images?: { name: string; url: string }[] };
+/** `display` is the user's prompt with badge markers (commands and @Characters) so history can show them again. */
+export type ConversationMessage = { role: "user" | "assistant"; content: string; display?: string; images?: { name: string; url: string }[] };
 type RequestProvider = (provider: Provider, options: ProviderRequest) => Promise<unknown>;
 
 /** Models from Google AI Studio carry this prefix; everything else is routed through OpenRouter. */
 export const modelProvider = (model: string): "google" | "openrouter" => model.startsWith("google-ai/") ? "google" : "openrouter";
+/** Whether a video model can start from a picture. Google's Veo API takes text only; Gemini Create video and OpenRouter models take a first frame. */
+export const videoStartImage = (model: string) => modelProvider(model) !== "google";
 /** Models installed in Ollama run on this computer and carry this prefix. */
 export const ollamaPrefix = "ollama/";
 export const isOllamaModel = (model: string) => model.startsWith(ollamaPrefix);
@@ -254,7 +257,7 @@ export async function generate(
         toolInput = { image_url: url, ...(task.mediaTool.name === "upscale_image" ? { scale: task.mediaTool.scale } : {}), output_format: "png" };
       }
       // Keep submission alive until its ID arrives so Stop can cancel the actual job.
-      const submitted = await request(provider, { model: task.model, signal: provider === "fal" ? AbortSignal.timeout(60_000) : signal, action: task.category === "video" ? "video" : "submit", input: toolInput ?? (task.category === "video" ? task.prompt : multi ? viewInput : imageInput ? { image_url: imageUrl } : { prompt: task.prompt }) }) as { id?: string; request_id?: string };
+      const submitted = await request(provider, { model: task.model, signal: provider === "fal" ? AbortSignal.timeout(60_000) : signal, action: task.category === "video" ? "video" : "submit", ...(task.category === "video" && task.startImage ? { images: images.slice(0, 1), ...(task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}), ...(task.duration ? { duration: task.duration } : {}) } : {}), input: toolInput ?? (task.category === "video" ? task.prompt : multi ? viewInput : imageInput ? { image_url: imageUrl } : { prompt: task.prompt }) }) as { id?: string; request_id?: string };
       requestId = task.category === "video" ? submitted.id : submitted.request_id;
       if (!requestId || !/^[a-zA-Z0-9_-]{1,100}$/.test(requestId)) throw new Error("Provider returned no valid job ID");
       update({ requestId, status: "Queued" });

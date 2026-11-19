@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { claudeWindows, codexWindows } from './limits.mjs';
+import { claudeLiveWindows, claudeWindows, codexWindows } from './limits.mjs';
 
 test('Claude windows become percentages', () => {
   expect(claudeWindows({ unifiedWindows: { five_hour: { utilization: 0.16, resetsAt: 10 }, seven_day: { utilization: 0.54, resetsAt: 20 }, bad: {} } })).toEqual([
@@ -24,4 +24,15 @@ test('Codex windows come from the newest session log that has them', () => {
     { id: '10080', label: 'Weekly', usedPercent: 78, resetsAt: 99 },
   ]);
   expect(codexWindows(join(home, 'missing'))).toEqual([]);
+});
+
+test('live Claude usage is read from the usage endpoint', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'claude-'));
+  mkdirSync(join(home, '.claude'));
+  writeFileSync(join(home, '.claude', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'x' } }));
+  const body = { five_hour: { utilization: 27, resets_at: '2026-11-19T16:00:00+00:00' }, seven_day: { utilization: 76, resets_at: '2026-11-22T18:00:00+00:00' } };
+  const windows = await claudeLiveWindows(home, async () => ({ ok: true, json: async () => body }));
+  expect(windows.map((window) => [window.id, window.usedPercent])).toEqual([['five_hour', 27], ['seven_day', 76]]);
+  expect(await claudeLiveWindows(home, async () => ({ ok: false }))).toEqual([]);
+  expect(await claudeLiveWindows(mkdtempSync(join(tmpdir(), 'none-')))).toEqual([]);
 });

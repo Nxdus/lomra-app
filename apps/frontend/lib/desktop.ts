@@ -125,6 +125,34 @@ export function desktopSd(): DesktopSdApi | undefined {
   return (window as unknown as { lomra?: { sd?: DesktopSdApi } }).lomra?.sd;
 }
 
+export type VideoToolStatus = {
+  /** False on a computer the video tool has no build for. */
+  supported: boolean;
+  installed: boolean;
+  /** Download size in bytes. */
+  bytes: number;
+  downloading: { received: number; total: number } | null;
+  /** Why the last download failed, ready to show. */
+  error: string | null;
+};
+
+/** Joins the clips of a storyboard into one video (ffmpeg, downloaded after the user agrees) in the desktop app. */
+export type DesktopVideoApi = {
+  status(): Promise<VideoToolStatus>;
+  /** Download the video tool in the background; the caller asks the user first. Resolves false if it could not start. */
+  download(): Promise<boolean>;
+  cancelDownload(): Promise<void>;
+  remove(): Promise<boolean>;
+  /** Join clips (1-12, each at most 100 MB) into one MP4; each is cut or held to `seconds`. `runId` is a UUID. */
+  stitch(runId: string, input: { clips: { data: Uint8Array; seconds: number }[]; aspectRatio?: string }): Promise<{ video: Uint8Array } | { error: string }>;
+  cancel(runId: string): void;
+  onProgress(callback: (event: { runId: string; seconds: number; total: number }) => void): () => void;
+};
+
+export function desktopVideo(): DesktopVideoApi | undefined {
+  return (window as unknown as { lomra?: { video?: DesktopVideoApi } }).lomra?.video;
+}
+
 export type Local3dModel = {
   id: string; name: string; quality: string; note: string; license: string; bytes: number; recommended: boolean; installed: boolean;
   /** The graphics card has enough memory for this model. */

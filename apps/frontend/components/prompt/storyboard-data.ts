@@ -6,11 +6,15 @@ export type Shot = {
   image: number | null;
   references: number[];
   generatedId?: string;
+  // The clip made from this shot's picture (a workspace file), joined with the others into the final video.
+  videoId?: string;
   characters?: number[];
+  position?: { x: number; y: number };
 };
 
 export type StoryCharacter = { name: string; notes: string; image: number | null; generatedId?: string; approved?: boolean };
-export type Storyboard = { story: string; shots?: Shot[]; characters?: StoryCharacter[] };
+// origin: where the storyboard sits on the canvas, fixed once shown so other pictures cannot push it around.
+export type Storyboard = { story: string; shots?: Shot[]; characters?: StoryCharacter[]; origin?: { x: number; y: number }; videoItemId?: string };
 
 export const storyLimit = 6000;
 export const shotLimit = 1600;
@@ -54,6 +58,8 @@ export function validStoryboard(value: unknown, imageCount: number): value is St
     items.every((index) => inRange(index, count)) && new Set(items).size === items.length;
   const fileId = (id: unknown) => typeof id === "string" && /^[\w-]{1,128}$/.test(id);
   const characters = value.characters;
+  if (value.videoItemId !== undefined && !fileId(value.videoItemId)) return false;
+  if (value.origin !== undefined && !(record(value.origin) && [value.origin.x, value.origin.y].every((axis) => typeof axis === "number" && Number.isFinite(axis) && Math.abs(axis) <= 1e9))) return false;
   if (characters !== undefined && (!Array.isArray(characters) || characters.length > maxStoryCharacters ||
     !characters.every((item: unknown) => record(item) && boundedText(item.name, 64) &&
       boundedText(item.notes, storyCharacterNotesLimit) && (item.image === null || inRange(item.image, imageCount)) &&
@@ -65,15 +71,21 @@ export function validStoryboard(value: unknown, imageCount: number): value is St
         typeof shot.seconds === "number" && shot.seconds >= 1 && shot.seconds <= 60 &&
         (shot.image === null || inRange(shot.image, imageCount)) && indices(shot.references, imageCount) &&
         (shot.characters === undefined || indices(shot.characters, characters?.length ?? 0)) &&
-        (shot.generatedId === undefined || fileId(shot.generatedId))))));
+        (shot.generatedId === undefined || fileId(shot.generatedId)) &&
+        (shot.videoId === undefined || fileId(shot.videoId)) &&
+        (shot.position === undefined || (record(shot.position) && [shot.position.x, shot.position.y].every((axis) => typeof axis === "number" && Number.isFinite(axis) && Math.abs(axis) <= 1e9)))))));
 }
 
 function responseObject(result: unknown): unknown {
   const content = (result as { choices?: { message?: { content?: unknown } }[] } | null)?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new Error("The LLM returned no text. Try another model.");
   const json = content.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, "$1");
-  try { return JSON.parse(json); }
-  catch { throw new Error("The LLM returned invalid storyboard JSON. Try again or choose another model."); }
+  // Agent CLIs may wrap the object in a sentence, so fall back to the outermost braces.
+  const start = json.indexOf("{"), end = json.lastIndexOf("}");
+  for (const candidate of [json, start >= 0 && end > start ? json.slice(start, end + 1) : ""]) {
+    try { return JSON.parse(candidate); } catch { /* try the next candidate */ }
+  }
+  throw new Error("The LLM returned invalid storyboard JSON. Try again or choose another model.");
 }
 
 export function storyReply(result: unknown, imageCount = 0) {

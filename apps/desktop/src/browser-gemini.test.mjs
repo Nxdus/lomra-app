@@ -9,8 +9,8 @@ const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypmp42'), 
 const node = (name, role = 'button') => ({ backendDOMNodeId: 1, name: { value: name }, role: { value: role } });
 
 // A page whose controls appear as the flow progresses: sending a prompt moves it into a conversation with the result.
-function run(kind, present, bytes, noMenu = false, picker = true) {
-  if (picker) present.push(['Open mode picker, currently Flash-Lite']);
+function run(kind, present, bytes, noMenu = false, picker = 'Open mode picker, currently Flash-Lite', auto = 'Auto') {
+  if (picker) present.push([picker]);
   const calls = [];
   let current = home;
   const result = generateGeminiMedia({ kind, prompt: 'A blue circle', images: [], aspectRatio: '16:9' }, new AbortController().signal, async () => ({
@@ -24,7 +24,7 @@ function run(kind, present, bytes, noMenu = false, picker = true) {
         current = url;
         present.push([kind === 'video' ? 'Download video' : 'Download full size image'], ['Open menu for conversation actions']);
       }
-      if (name.startsWith('Open mode picker')) present.push(['Auto', 'menuitemradio']);
+      if (name === picker) present.push([auto, 'menuitemradio']);
       if (name === 'Open menu for conversation actions' && !noMenu) present.push(['Delete', 'menuitem']);
       if (name === 'Delete' && control.role.value === 'menuitem') present.push(['Delete', 'button']);
       if (name === 'Delete' && control.role.value === 'button') current = home;
@@ -50,6 +50,20 @@ test('Gemini creates an image with the tool chip and downloads it', async () => 
   expect(calls).toEqual(['Open mode picker, currently Flash-Lite', 'Auto', 'Upload & tools', 'Create image', 'Plain', 'Send message', 'Open menu for conversation actions', 'Delete', 'Delete', 'Close']);
 });
 
+test('Gemini selects Auto from the model picker before sending an image prompt', async () => {
+  const picker = 'Open model picker, currently selected: Flash-Lite';
+  const { result, calls } = run('image', [['Ask Gemini', 'textbox'], ['Send message']], Buffer.from(png, 'base64'), false, picker, 'Gemini Auto');
+  expect(await result).toEqual({ image: `data:image/png;base64,${png}` });
+  expect(calls.slice(0, 4)).toEqual([picker, 'Gemini Auto', 'Prefixed', 'Send message']);
+});
+
+test('Gemini keeps Auto when it is already selected', async () => {
+  const picker = 'Open model picker, currently selected: Gemini Auto';
+  const { result, calls } = run('image', [['Ask Gemini', 'textbox'], ['Send message']], Buffer.from(png, 'base64'), false, picker);
+  expect(await result).toEqual({ image: `data:image/png;base64,${png}` });
+  expect(calls.slice(0, 2)).toEqual(['Prefixed', 'Send message']);
+});
+
 test('Gemini creates a video, prefixing the prompt when the tool is missing, and rejects non-video downloads', async () => {
   const page = () => [['Ask Gemini', 'textbox'], ['Send message']];
   const { result, calls } = run('video', page(), mp4);
@@ -66,7 +80,20 @@ test('Gemini still returns the media, with a warning, when the chat cannot be de
 test('Gemini warns when it cannot find the model picker', async () => {
   const { result } = run('image', [['Ask Gemini', 'textbox'], ['Send message']], Buffer.from(png, 'base64'), false, false);
   const { warning } = await result;
-  expect(warning).toContain('model picker');
+  expect(warning).toContain('Settings → Usage limits → Auto model selection');
+}, 20_000);
+
+test('Gemini stops waiting when it replies with a usage limit instead of a video', async () => {
+  const message = 'ขออภัย ขณะนี้มีปริมาณการสร้างวิดีโอสูงผิดปกติและระบบถึงขีดจำกัดด้านประสิทธิภาพแล้ว โปรดลองอีกครั้งในภายหลัง';
+  let current = home;
+  const refused = generateGeminiMedia({ kind: 'video', prompt: 'A blue circle', images: [] }, new AbortController().signal, async () => ({
+    async state() {
+      return { url: current, nodes: current === home ? [node('Ask Gemini', 'textbox'), node('Send message')] : [node(message, 'StaticText')] };
+    },
+    async click(control) { if (control.name.value === 'Send message') current = url; },
+    async clear() {}, async fill() {}, close() {},
+  }));
+  await expect(refused).rejects.toThrow('could not create the video');
 }, 20_000);
 
 test('Gemini rejects invalid requests before opening a page', async () => {

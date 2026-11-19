@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { RefreshCwIcon } from "lucide-react";
 import { AgentIcon } from "@/components/agent-icon";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useDisabledAgents } from "@/hooks/use-disabled-agents";
 import { toast } from "@/components/ui/toast";
@@ -26,7 +28,9 @@ export function AgentSettings() {
   const [emails, setEmails] = useState<Record<string, string>>({});
   const [limits, setLimits] = useState<Record<string, AgentLimit[]>>({});
   const [stats, setStats] = useState<AgentStats | null>(null);
-  const [now] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  const [refresh, setRefresh] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const { disabled, setEnabled } = useDisabledAgents();
 
   useEffect(() => {
@@ -43,14 +47,19 @@ export function AgentSettings() {
       }
     }, () => { if (!cancelled) setAgents([]); });
     void bridge.stats?.("opencode").then((value) => { if (!cancelled) setStats(value); }, () => {});
-    void Promise.all([bridge.limits("codex"), readClaudeLimits()]).then(([codex, claude]) => {
-      if (!cancelled) setLimits({ codex, claude: claude?.windows ?? [] });
-    }, () => {});
+    void Promise.all([bridge.limits("codex"), bridge.limits("claude"), readClaudeLimits()]).then(([codex, live, saved]) => {
+      if (!cancelled) { setLimits({ codex, claude: live.length ? live : saved?.windows ?? [] }); setNow(Date.now()); }
+    }, () => {}).finally(() => { if (!cancelled) setRefreshing(false); });
     return () => { cancelled = true; };
-  }, [bridge]);
+  }, [bridge, refresh]);
 
   return <section aria-labelledby="agents-heading" className="flex flex-col gap-3">
-    <h2 id="agents-heading" className="text-sm font-medium">Local agents</h2>
+    <div className="flex items-center justify-between gap-2">
+      <h2 id="agents-heading" className="text-sm font-medium">Local agents</h2>
+      {bridge && <Button type="button" variant="outline" size="icon-sm" className="rounded-lg" aria-label="Refresh local agents" disabled={refreshing} onClick={() => { setRefreshing(true); setRefresh((value) => value + 1); }}>
+        <RefreshCwIcon aria-hidden="true" className={refreshing ? "animate-spin" : undefined} />
+      </Button>}
+    </div>
     {!bridge ? <p role="status" className="text-xs text-muted-foreground">Local agents are available in the desktop app only.</p>
       : !agents ? <p role="status" className="text-xs text-muted-foreground">Looking for installed agents…</p>
       : <ul className="flex flex-col gap-2">

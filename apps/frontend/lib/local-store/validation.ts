@@ -1,6 +1,6 @@
 import { parseOllamaUrl } from '../ollama-url';
 import { validStoryboard } from '../../components/prompt/storyboard-data';
-import { characterImageType, characterNameLimit, characterNamePattern, characterNotesLimit } from '../characters';
+import { characterImageLimit, characterImageType, characterNameLimit, characterNamePattern, characterNotesLimit } from '../characters';
 
 export class StoreError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -82,6 +82,7 @@ function validChat(id: string, value: unknown) {
   return (chat.storyboard === undefined || validStoryboard(chat.storyboard, Array.isArray(chat.history[0]?.images) ? chat.history[0].images.length : 0)) &&
     chat.models.every((entry) => typeof entry === 'string') &&
     chat.history.every((message) => message && ['user', 'assistant'].includes(message.role) && typeof message.content === 'string' &&
+      (message.display === undefined || (message.role === 'user' && typeof message.display === 'string' && message.display.length <= 8100)) &&
       (message.images === undefined || (message.role === 'user' && Array.isArray(message.images) && message.images.length <= 10 &&
         message.images.every((image: unknown) => record(image) && typeof image.name === 'string' && image.name.length <= 512 &&
           typeof image.url === 'string' && image.url.length <= 1024 * 1024 && /^data:image\/jpeg;base64,(?:[A-Za-z0-9+/]+={0,2})$/.test(image.url))))) &&
@@ -94,8 +95,15 @@ function validChat(id: string, value: unknown) {
 }
 
 function validCharacter(id: string, value: unknown) {
+  if (!record(value)) return false;
+  const { additionalImageTypes, coverIndex } = value;
+  if (additionalImageTypes !== undefined && (!Array.isArray(additionalImageTypes) ||
+    additionalImageTypes.length >= characterImageLimit ||
+    !additionalImageTypes.every(type => typeof type === 'string' && characterImageType.test(type)))) return false;
+  if (coverIndex !== undefined && (typeof coverIndex !== 'number' || !Number.isInteger(coverIndex) ||
+    coverIndex < 0 || coverIndex >= 1 + (additionalImageTypes?.length ?? 0))) return false;
   return /^character-[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/.test(id) &&
-    record(value) && value.id === id &&
+    value.id === id &&
     typeof value.name === 'string' && value.name.length <= characterNameLimit && characterNamePattern.test(value.name) &&
     typeof value.notes === 'string' && value.notes.length <= characterNotesLimit &&
     typeof value.imageType === 'string' && characterImageType.test(value.imageType);

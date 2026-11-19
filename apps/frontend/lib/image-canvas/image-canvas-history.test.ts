@@ -324,3 +324,14 @@ test("isNativeTextEditingTarget: identifies interactive inputs and textareas", (
   assert.equal(isNativeTextEditingTarget({ isContentEditable: true }), true);
   assert.equal(isNativeTextEditingTarget({ tagName: "DIV", closest: (s: string) => s.includes("data-canvas-interactive") ? {} : null }), true);
 });
+
+test("undo and redo carry storyboard node positions", () => {
+  const items = [makeItem("a", 0, 0, 10, 10)];
+  const dragged = { origin: { x: 1, y: 2 }, shots: [{ x: 5, y: 6 }, undefined] };
+  let history = pushCanvasHistory(emptyCanvasHistory, { items, layout: dragged, type: "generic" }, items);
+  assert.equal(history.past.length, 1);
+  const undone = undoCanvasHistory(history, items, undefined, { origin: { x: 9, y: 9 }, shots: [undefined, undefined] });
+  assert.deepEqual(undone?.layout, dragged);
+  history = undone!.state;
+  assert.deepEqual(redoCanvasHistory(history, items, undefined, dragged)?.layout, { origin: { x: 9, y: 9 }, shots: [undefined, undefined] });
+});

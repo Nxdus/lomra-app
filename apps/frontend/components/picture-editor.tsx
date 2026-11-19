@@ -231,7 +231,7 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
     <div className="relative mx-auto w-fit max-w-full">
       {/* Local blob URLs need no Next.js image optimization. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={url} alt={name || "Image preview"} className="block max-h-[min(80dvh,calc(var(--app-content-height)-5rem))] max-w-full object-contain" />
+      <img src={url} alt={name || "Image preview"} className="block max-h-[min(80dvh,calc(var(--app-content-height)-5rem))] max-w-full rounded-4xl object-contain" />
       <canvas ref={overlay} tabIndex={painting ? 0 : -1} aria-label={tool === "Markup" ? "Draw on image" : tool === "Erase" ? "Mark areas to remove" : undefined} aria-hidden={!painting} className={cn("absolute inset-0 size-full outline-none", painting && !busy ? "touch-none cursor-crosshair" : "pointer-events-none", tool === "Markup" && drawingTool === "select" && "cursor-default", tool === "Erase" && "opacity-50")}
         onPointerDown={event => {
           if (!ready || busy || !painting || !event.isPrimary || event.button !== 0 || textDraft) return;

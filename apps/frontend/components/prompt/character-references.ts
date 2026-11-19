@@ -1,4 +1,4 @@
-import { mentionedCharacters, type Character } from "@/lib/characters";
+import { characterImageId, mentionedCharacters, type Character } from "@/lib/characters";
 import { storage, storageFile } from "@/lib/storage";
 import { geminiVideoModel, isSdModel, modelProvider, type Generation } from "./generation";
 import { imagePreview, MAX_MEDIA_BYTES, MAX_MEDIA_ITEMS, promptContent } from "./media";
@@ -8,22 +8,32 @@ export async function listCharacters(): Promise<Character[]> {
   return rows.map(({ value }) => value).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-type Reference = { character: Character; url: string };
+type Reference = { character: Character; url: string; additionalUrls?: string[] };
 
 export async function loadCharacterReferences(prompt: string, signal: AbortSignal, previews = false): Promise<Reference[]> {
   if (!prompt.includes("@")) return [];
   const characters = mentionedCharacters(prompt, await listCharacters());
-  if (characters.length > MAX_MEDIA_ITEMS) throw new Error(`Use at most ${MAX_MEDIA_ITEMS} Characters per prompt.`);
   if (!characters.length) return [];
-  const sources = await Promise.all(characters.map(async (character) => {
-    const blob = await storageFile(character.id).catch(() => undefined);
+  const groups = characters.map(character => {
+    const images = [character.imageType, ...(character.additionalImageTypes ?? [])]
+      .map((type, index) => ({ id: characterImageId(character.id, index), type, character }));
+    const [cover] = images.splice(character.coverIndex ?? 0, 1);
+    return previews ? [cover] : [cover, ...images];
+  });
+  const files = groups.flat();
+  if (files.length > MAX_MEDIA_ITEMS) throw new Error(`Use at most ${MAX_MEDIA_ITEMS} Character reference images per prompt.`);
+  const sources = await Promise.all(files.map(async ({ id, type, character }) => {
+    const blob = await storageFile(id).catch(() => undefined);
     if (!blob) throw new Error(`Could not load the reference for @${character.name}. Try again or save a new Character.`);
-    return { id: character.id, file: new File([blob], character.name, { type: character.imageType }) };
+    return { id, file: new File([blob], character.name, { type }) };
   }));
   if (previews) return Promise.all(sources.map(async ({ file }, index) => ({ character: characters[index], url: await imagePreview(file, signal) })));
   const content = await promptContent("", sources, signal);
-  const images = typeof content === "string" ? [] : content.filter((part) => part.type === "image_url");
-  return characters.map((character, index) => ({ character, url: images[index].image_url.url }));
+  const urls = typeof content === "string" ? [] : content.filter(part => part.type === "image_url").map(part => part.image_url.url);
+  return groups.map(group => {
+    const [url, ...additionalUrls] = urls.splice(0, group.length);
+    return { character: group[0].character, url, additionalUrls };
+  });
 }
 
 export function characterContext(references: Reference[], includeNotes = true) {
@@ -48,11 +58,12 @@ export function characterGeneration(task: Generation, images: string[], referenc
     throw new Error("The selected image model cannot use Character references. Choose a model that supports reference images.");
   }
   const allImages = [...images];
-  const labels = references.map(({ character, url }) => {
-    const index = allImages.indexOf(url);
-    const number = index < 0 ? allImages.push(url) : index + 1;
-    return `Image ${number} is @${character.name}.`;
-  });
+  const labels = references.flatMap(({ character, url, additionalUrls = [] }) =>
+    [...new Set([url, ...additionalUrls])].map(referenceUrl => {
+      const index = allImages.indexOf(referenceUrl);
+      const number = index < 0 ? allImages.push(referenceUrl) : index + 1;
+      return `Image ${number} is @${character.name}.`;
+    }));
   if (allImages.length > MAX_MEDIA_ITEMS || allImages.reduce((size, url) => size + url.length, 0) > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + MAX_MEDIA_ITEMS * 64) {
     throw new Error("The combined images exceed the prompt limit. Use fewer or smaller images.");
   }

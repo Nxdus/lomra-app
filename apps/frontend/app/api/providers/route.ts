@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     return json({ message: "Expected JSON" }, 400);
   }
   if (!body || typeof body !== "object") return json({ message: "Invalid request" }, 400);
-  const { provider, action, model, input, requestId, images, aspectRatio } = body;
+  const { provider, action, model, input, requestId, images, aspectRatio, duration } = body;
   if (provider !== "openrouter" && provider !== "fal" && provider !== "google" && provider !== "ollama") {
     return json({ message: "Unknown provider" }, 400);
   }
@@ -113,11 +113,13 @@ export async function POST(request: Request) {
       if (google && images?.length) return json({ message: "Google models do not support reference images yet" }, 400);
       if (typeof input !== "string" || !input.trim() || input.length > 8000) return json({ message: "A generation prompt is required" }, 400);
       url = google ? (action === "video" ? `${GOOGLE_API}/models/${upstreamModel}:predictLongRunning` : `${GOOGLE_API}/openai/images/generations`) : `https://openrouter.ai/api/v1/${action === "image" ? "images" : "videos"}`;
-      if (images !== undefined && (action !== "image" || !Array.isArray(images) || images.length > MAX_MEDIA_ITEMS ||
+      // Video takes at most one picture, the first frame; images take up to ten references.
+      if (images !== undefined && (!Array.isArray(images) || images.length > (action === "video" ? 1 : MAX_MEDIA_ITEMS) ||
         images.some((url: unknown) => typeof url !== "string" || !/^data:image\/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/.test(url) || url.split(",")[1].length % 4 !== 0) ||
-        images.reduce((sum: number, url: string) => sum + url.length, 0) > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + MAX_MEDIA_ITEMS * 64)) return json({ message: "Invalid reference images (up to 10 images, 20 MB total)" }, 400);
-      if (aspectRatio !== undefined && (action !== "image" || typeof aspectRatio !== "string" || !["1:1", "3:4", "9:16", "4:3", "16:9"].includes(aspectRatio))) return json({ message: "Invalid image aspect ratio" }, 400);
-      payload = google ? (action === "video" ? { instances: [{ prompt: input }] } : { model: upstreamModel, prompt: input, n: 1, response_format: "b64_json" }) : { model, prompt: input, ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}), ...(images?.length ? { input_references: images.map((url: string) => ({ type: "image_url", image_url: { url } })) } : {}) };
+        images.reduce((sum: number, url: string) => sum + url.length, 0) > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + MAX_MEDIA_ITEMS * 64)) return json({ message: action === "video" ? "Invalid first frame image" : "Invalid reference images (up to 10 images, 20 MB total)" }, 400);
+      if (duration !== undefined && (action !== "video" || typeof duration !== "number" || !Number.isInteger(duration) || duration < 1 || duration > 30)) return json({ message: "Invalid video duration" }, 400);
+      if (aspectRatio !== undefined && (typeof aspectRatio !== "string" || !["1:1", "3:4", "9:16", "4:3", "16:9"].includes(aspectRatio))) return json({ message: "Invalid image aspect ratio" }, 400);
+      payload = google ? (action === "video" ? { instances: [{ prompt: input }] } : { model: upstreamModel, prompt: input, n: 1, response_format: "b64_json" }) : { model, prompt: input, ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}), ...(duration ? { duration } : {}), ...(images?.length && action === "video" ? { frame_images: [{ type: "image_url", image_url: { url: images[0] }, frame_type: "first_frame" }] } : {}), ...(images?.length && action === "image" ? { input_references: images.map((url: string) => ({ type: "image_url", image_url: { url } })) } : {}) };
     } else if (provider !== "fal" && (action === "video-status" || action === "video-content")) {
       if (typeof requestId !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(requestId)) return json({ message: "A valid request ID is required" }, 400);
       if (google && !VEO_MODEL.test(upstreamModel)) return json({ message: "A valid Google Veo model ID is required" }, 400);

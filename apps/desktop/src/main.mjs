@@ -7,8 +7,9 @@ import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAgentSessions, isTrustedSender } from './agents.mjs';
-import { codexWindows } from './limits.mjs';
+import { claudeLiveWindows, codexWindows } from './limits.mjs';
 import { createOllama } from './ollama.mjs';
+import { createFfmpeg } from './ffmpeg.mjs';
 import { createSd } from './sd.mjs';
 import { createLocal3d } from './local3d.mjs';
 import { createToolBridge, toolConfig } from './tool-bridge.mjs';
@@ -28,6 +29,8 @@ let mainWindow;
 let quitting = false;
 const ollama = createOllama();
 // Local image generation (stable-diffusion.cpp); created on first use because userData is only known once the app is ready.
+let ffmpegInstance;
+const ffmpeg = () => ffmpegInstance ??= createFfmpeg({ dir: join(app.getPath('userData'), 'ffmpeg') });
 let sdInstance;
 const sd = () => sdInstance ??= createSd({ dir: join(app.getPath('userData'), 'stable-diffusion') });
 let local3dInstance;
@@ -93,7 +96,7 @@ function serverCommand(port) {
 }
 
 /**
- * Local speech-to-text for voice input, so users need no Docker. It listens on a free local port and
+ * Local speech-to-text for voice input, so users need no external service. It listens on a free local port and
  * downloads its model into userData on first run. A WHISPER_URL set by the user is used instead.
  */
 async function startWhisper() {
@@ -282,6 +285,21 @@ ipcMain.handle('sd:generate', async (event, runId, input) => {
   }
 });
 ipcMain.on('sd:cancel', (event, runId) => { if (trusted(event) && typeof runId === 'string') sd().cancel(runId); });
+
+// Joining the clips of a storyboard into one video. The app asks before downloading ffmpeg; the renderer sends clip bytes only, never a path or a command.
+ipcMain.handle('video:status', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return ffmpeg().status(); });
+ipcMain.handle('video:download', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return ffmpeg().download(); });
+ipcMain.handle('video:cancelDownload', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); ffmpeg().cancelDownload(); });
+ipcMain.handle('video:remove', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return ffmpeg().remove(); });
+ipcMain.handle('video:stitch', async (event, runId, input) => {
+  if (!trusted(event)) throw new Error('Untrusted sender');
+  try {
+    return { video: await ffmpeg().stitch(runId, input, (progress) => { if (!event.sender.isDestroyed()) event.sender.send('video:progress', { runId, ...progress }); }) };
+  } catch (cause) {
+    return { error: cause instanceof Error && cause.name !== 'AbortError' ? cause.message : 'Stopped.' };
+  }
+});
+ipcMain.on('video:cancel', (event, runId) => { if (trusted(event) && typeof runId === 'string') ffmpeg().cancel(runId); });
 // Local 3D generation. The app asks before installing (components/local3d-settings.tsx); the renderer only names a model and passes a picture.
 ipcMain.handle('local3d:status', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return local3d().status(); });
 ipcMain.handle('local3d:install', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return typeof id === 'string' && local3d().install(id); });
@@ -307,7 +325,7 @@ ipcMain.handle('ollama:install', async (event) => {
 });
 ipcMain.handle('ollama:uninstall', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return ollama.uninstall(); });
 ipcMain.handle('ollama:start', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return ollama.start(); });
-ipcMain.handle('agent:limits', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return id === 'codex' ? codexWindows() : []; });
+ipcMain.handle('agent:limits', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return id === 'codex' ? codexWindows() : id === 'claude' ? claudeLiveWindows() : []; });
 ipcMain.handle('agent:stats', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return agents.stats(id); });
 ipcMain.handle('agent:start', (event, id, cols, rows) => { if (!trusted(event)) throw new Error('Untrusted sender'); return agents.start(id, cols, rows); });
 ipcMain.on('agent:write', (event, id, data) => { if (trusted(event)) agents.write(id, data); });
@@ -389,6 +407,6 @@ app.on('before-quit', () => {
   server?.kill();
   whisper?.kill();
   ollama.stop();
-  sdInstance?.stop(); local3dInstance?.stop();
+  sdInstance?.stop(); local3dInstance?.stop(); ffmpegInstance?.stop();
 });
-process.on('exit', () => { if (!quitting) { server?.kill(); whisper?.kill(); ollama.stop(); sdInstance?.stop(); local3dInstance?.stop(); } });
+process.on('exit', () => { if (!quitting) { server?.kill(); whisper?.kill(); ollama.stop(); sdInstance?.stop(); local3dInstance?.stop(); ffmpegInstance?.stop(); } });

@@ -209,7 +209,7 @@ export function OllamaSettings() {
               {pull.percent !== null && <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{pull.percent}%</span>}
               <Tip label="Stop download"><Button type="button" variant="ghost" size="icon-xs" aria-label="Stop download" onClick={cancel}><XIcon aria-hidden="true" /></Button></Tip>
             </div>
-            <Progress value={pull.percent} aria-label={`Installing ${pull.model}`} />
+            <Progress value={pull.percent} aria-label={`Downloading ${pull.model}`} />
           </li>}
           {models.map((model) => <li key={model.id} className={rowClass}>
             <div className="min-w-0 flex-1">
@@ -224,7 +224,7 @@ export function OllamaSettings() {
         </ul>
       </section>
 
-      <section aria-label="Install a model" className="flex flex-col gap-3">
+      <section aria-label="Download a model" className="flex flex-col gap-3">
         {recommended.length > 0 && <div className="flex flex-col gap-1.5">
           <h3 className="text-xs font-medium text-muted-foreground">Recommended</h3>
           <ul className="divide-y">
@@ -233,15 +233,15 @@ export function OllamaSettings() {
                 <div className="truncate">{model.name} <span className="text-xs text-muted-foreground">{model.size}</span></div>
                 <div className="truncate text-xs text-muted-foreground">{model.note}</div>
               </div>
-              <Tip label="Install"><Button type="button" variant="ghost" size="icon-sm" disabled={busy} aria-label={`Install ${model.name}`} onClick={() => void download(model.id)}><DownloadIcon aria-hidden="true" /></Button></Tip>
+              <Tip label="Download"><Button type="button" variant="ghost" size="icon-sm" disabled={busy} aria-label={`Download ${model.name}`} onClick={() => void download(model.id)}><DownloadIcon aria-hidden="true" /></Button></Tip>
             </li>)}
           </ul>
         </div>}
         <form ref={searchBar} onSubmit={(event) => { event.preventDefault(); const name = custom.trim(); if (name && !busy) { setCustom(""); void download(name); } }}>
           <Combobox items={suggestions} value={null} inputValue={custom} onInputValueChange={setCustom} onValueChange={(value) => { if (typeof value === "string") setCustom(value); }} disabled={busy}>
-            <ComboboxInput className="h-11" showTrigger={false} placeholder="Search or enter an Ollama model" aria-label="Ollama model to install" autoComplete="off" spellCheck={false} maxLength={128} disabled={busy}>
+            <ComboboxInput className="h-11" showTrigger={false} placeholder="Search or enter an Ollama model" aria-label="Ollama model to download" autoComplete="off" spellCheck={false} maxLength={128} disabled={busy}>
               <InputGroupAddon align="inline-end">
-                <InputGroupButton type="submit" size="icon-sm" aria-label="Install model" disabled={busy || !custom.trim()}><DownloadIcon aria-hidden="true" /></InputGroupButton>
+                <InputGroupButton type="submit" size="icon-sm" aria-label="Download model" disabled={busy || !custom.trim()}><DownloadIcon aria-hidden="true" /></InputGroupButton>
               </InputGroupAddon>
             </ComboboxInput>
             <ComboboxContent anchor={searchBar} side="top">
