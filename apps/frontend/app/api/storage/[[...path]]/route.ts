@@ -12,4 +12,4 @@ async function handle(request: Request, context: { params: Promise<{ path?: stri
   return handleLocal(request, path, dataDir());
 }
 
-export { handle as GET, handle as PUT, handle as DELETE };
+export { handle as GET, handle as PUT, handle as DELETE, handle as POST };

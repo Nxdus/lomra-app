@@ -4,7 +4,7 @@ import { StoreError, kinds, type Kind } from '@/lib/local-store/validation';
 const MAX_FILE = 100 * 1024 * 1024;
 const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
 
-export async function fileBody(request: Request) {
+export async function fileBody(request: Request, maxBytes = MAX_FILE) {
   const reader = request.body?.getReader();
   if (!reader) return new Uint8Array(0);
   const chunks: Uint8Array[] = [];
@@ -13,9 +13,9 @@ export async function fileBody(request: Request) {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > MAX_FILE) {
+    if (size > maxBytes) {
       await reader.cancel();
-      throw new RangeError('File exceeds 100 MB');
+      throw new RangeError(maxBytes > MAX_FILE ? 'Archive exceeds 600 MB' : 'File exceeds 100 MB');
     }
     chunks.push(value);
   }
@@ -30,6 +30,27 @@ export async function handleLocal(request: Request, path: string[], root: string
   const [kind, id] = path;
   try {
     const store = await localStore(root);
+    if (kind === 'export') {
+      if (path.length !== 2) return new Response(null, { status: 404 });
+      if (request.method !== 'GET') return new Response(null, { status: 404 });
+      const { filename, archive } = await store.exportProject(id);
+      const asciiName = filename.replace(/[^\x20-\x7E]|["\\]/g, '_');
+      const encodedName = encodeURIComponent(filename);
+      return new Response(Buffer.from(archive), {
+        headers: {
+          ...headers,
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`,
+        },
+      });
+    }
+    if (kind === 'import') {
+      if (path.length !== 1) return new Response(null, { status: 404 });
+      if (request.method !== 'POST' && request.method !== 'PUT') return new Response(null, { status: 404 });
+      const archive = await fileBody(request, 600 * 1024 * 1024);
+      const result = await store.importProject(archive);
+      return Response.json(result, { headers });
+    }
     if (kind === 'files') {
       if (path.length !== 2) return new Response(null, { status: 404 });
       if (request.method === 'GET') {
@@ -55,7 +76,7 @@ export async function handleLocal(request: Request, path: string[], root: string
     return new Response(null, { status: 404 });
   } catch (error) {
     if (error instanceof StoreError) return Response.json({ message: error.message }, { status: error.status, headers });
-    if (error instanceof RangeError) return Response.json({ message: 'File exceeds 100 MB' }, { status: 413, headers });
+    if (error instanceof RangeError) return Response.json({ message: error.message || 'File exceeds 100 MB' }, { status: 413, headers });
     if (error instanceof SyntaxError) return Response.json({ message: 'Invalid JSON' }, { status: 400, headers });
     return Response.json({ message: 'Local storage unavailable. Please retry.' }, { status: 500, headers });
   }
