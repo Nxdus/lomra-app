@@ -2,9 +2,9 @@
 
 import { Tip } from "@/components/tip";
 import { SettingsIcon } from "lucide-react";
-import { AboutSettings } from "@/components/about-settings";
 import { AgentSettings } from "@/components/agent-settings";
 import { ApiKeysPanel } from "@/components/api-settings";
+import { AppVersionFooter } from "@/components/app-version-footer";
 import { OllamaSettings } from "@/components/ollama-settings";
 import { SdSettings } from "@/components/sd-settings";
 import { Local3dSettings } from "@/components/local3d-settings";
@@ -25,19 +25,15 @@ export function SettingsDialog() {
       <SettingsIcon />
       {updateAvailable && <span aria-hidden="true" className="absolute top-2.5 right-2.5 size-2 rounded-full bg-primary ring-2 ring-popover" />}
     </DialogTrigger></Tip>
-    <DialogContent className="flex flex-col overflow-hidden rounded-3xl p-5 pb-0 sm:p-6 sm:pb-0">
-      <DialogHeader className="shrink-0 gap-2 pr-8">
+    <DialogContent className="flex flex-col gap-0 overflow-hidden rounded-3xl p-5 pb-0 sm:p-6 sm:pb-0">
+      <DialogHeader className="mb-5 shrink-0 gap-2 pr-8">
         <DialogTitle>Settings</DialogTitle>
       </DialogHeader>
-      <Tabs defaultValue="api" className="min-h-0 gap-5">
+      <Tabs defaultValue="api" className="min-h-0 flex-1 gap-5">
         <TabsList className="w-full shrink-0">
           <TabsTrigger value="api">API keys</TabsTrigger>
           <TabsTrigger value="local">Local models</TabsTrigger>
           <TabsTrigger value="agents">Agents</TabsTrigger>
-          <TabsTrigger value="about">
-            About
-            {updateAvailable && <span aria-hidden="true" className="size-1.5 rounded-full bg-primary" />}
-          </TabsTrigger>
         </TabsList>
         <TabsContent value="api" className={panelClassName}><ApiKeysPanel /></TabsContent>
         <TabsContent value="local" className={`${panelClassName} flex flex-col gap-5`}>
@@ -48,10 +44,8 @@ export function SettingsDialog() {
           <Local3dSettings />
         </TabsContent>
         <TabsContent value="agents" className={panelClassName}><AgentSettings /></TabsContent>
-        <TabsContent value="about" className={panelClassName}>
-          <AboutSettings />
-        </TabsContent>
       </Tabs>
+      <AppVersionFooter />
     </DialogContent>
   </Dialog>;
 }
