@@ -18,6 +18,40 @@ const KNOWN_VEO = [
 ];
 
 export const VEO_MODEL = /^veo-[a-z0-9.-]+$/;
+/** Gemini Omni makes video through the Interactions API (one synchronous call), not `predictLongRunning`. */
+export const OMNI_MODEL = /^gemini-omni-[a-z0-9.-]+$/;
+
+/** Interactions request for an Omni video; the output is delivered as a Files API URI so it can be polled and downloaded. */
+export function omniRequest(model: string, prompt: string, image?: string, aspectRatio?: string, duration?: number) {
+  const frame = image ? /^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/.exec(image) : null;
+  return {
+    model,
+    input: frame ? [{ type: "text", text: prompt }, { type: "image", data: frame[2], mime_type: frame[1] }] : prompt,
+    response_format: {
+      type: "video",
+      // Omni offers only 16:9 and 9:16.
+      aspect_ratio: aspectRatio === "9:16" || aspectRatio === "3:4" ? "9:16" : "16:9",
+      ...(duration ? { duration: `${Math.min(15, Math.max(3, duration))}s` } : {}),
+      delivery: "uri",
+    },
+  };
+}
+
+/** The Files API id of the video in a finished Omni interaction. */
+export function omniFileId(result: unknown): string | undefined {
+  const steps = (result as { steps?: unknown })?.steps;
+  if (!Array.isArray(steps)) return undefined;
+  for (const step of steps) {
+    if (step?.type !== "model_output" || !Array.isArray(step.content)) continue;
+    for (const part of step.content) {
+      const uri: unknown = part?.type === "video" ? part.uri : undefined;
+      if (typeof uri !== "string" || !uri.startsWith(`${GOOGLE_API}/files/`)) continue;
+      const id = uri.slice(`${GOOGLE_API}/files/`.length).split(/[:?/]/)[0];
+      if (/^[a-zA-Z0-9_-]{1,100}$/.test(id)) return id;
+    }
+  }
+  return undefined;
+}
 
 /** Usable chat, image and Veo video models from the native `models.list` response. */
 export function googleModels(result: unknown) {
@@ -33,8 +67,12 @@ export function googleModels(result: unknown) {
       models.push({ id, name: label, category: "video" });
       continue;
     }
+    if (OMNI_MODEL.test(id)) {
+      models.push({ id, name: label, category: "video" });
+      continue;
+    }
     if (!/^gemini-[a-z0-9.-]+$/.test(id) || !Array.isArray(methods) || !methods.includes("generateContent")) continue;
-    if (/(tts|audio|live|embedding|robotics|computer-use|dialog|transcribe|omni|video)/.test(id)) continue;
+    if (/(tts|audio|live|embedding|robotics|computer-use|dialog|transcribe|video)/.test(id)) continue;
     models.push({ id, name: label, category: /image|nano-banana/.test(id) ? "picture" : "llm" });
   }
   // Cap per category: a global cap would cut off Veo (sorted last) whenever many Gemini models exist.

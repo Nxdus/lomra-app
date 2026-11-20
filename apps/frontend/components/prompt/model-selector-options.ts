@@ -1,7 +1,7 @@
 export type ModelCategory = "llm" | "picture" | "video" | "3d";
 export type CatalogStatus = "loading" | "ready" | "error";
 export type Capability = "text-to-3d" | "image-to-3d" | "multi-view-to-3d";
-export type CatalogModel = { id: string; name: string; capabilities?: Capability[]; price?: string };
+export type CatalogModel = { id: string; name: string; capabilities?: Capability[]; price?: string; vision?: boolean };
 export type AgentProviderEntry = { id: string; name: string; models: CatalogModel[] | null; error?: boolean };
 export type ProviderOption = { id: string; name: string };
 

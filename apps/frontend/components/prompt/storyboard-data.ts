@@ -1,26 +1,70 @@
 import { characterNameKey, characterNotesLimit } from "@/lib/characters";
+import { validStoryboardTimeline, type StoryboardTimelineEdit } from "./storyboard-timeline-data";
 
 export type Shot = {
+  id?: string;
+  scene?: string;
+  dialogue?: string;
+  sound?: string;
+  camera?: string;
   description: string;
   seconds: number;
   image: number | null;
   references: number[];
   generatedId?: string;
-  // The clip made from this shot's picture (a workspace file), joined with the others into the final video.
+  // Workspace file for the selected clip, also used by older storyboards.
   videoId?: string;
+  takes?: ShotTake[];
+  selectedTakeId?: string;
+  pendingTake?: PendingShotTake;
   characters?: number[];
   position?: { x: number; y: number };
 };
 
+export type ShotTakeSource = { frame: string | null; prompt: string };
+export type ShotTake = { fileId: string; source: ShotTakeSource; model?: string };
+export type PendingShotTake = { requestId: string; source: ShotTakeSource; model: string; aspectRatio: string };
+export const maxShotTakes = 8;
+
 export type StoryCharacter = { name: string; notes: string; image: number | null; generatedId?: string; approved?: boolean };
 // origin: where the storyboard sits on the canvas, fixed once shown so other pictures cannot push it around.
-export type Storyboard = { story: string; shots?: Shot[]; characters?: StoryCharacter[]; origin?: { x: number; y: number }; videoItemId?: string };
+export type Storyboard = { story: string; shots?: Shot[]; characters?: StoryCharacter[]; origin?: { x: number; y: number }; videoItemId?: string; timeline?: StoryboardTimelineEdit };
 
 export const storyLimit = 6000;
 export const shotLimit = 1600;
+export const shotTextLimits = { scene: 120, dialogue: shotLimit, sound: 400, camera: 400 };
+const shotTextFields = ["scene", "dialogue", "sound", "camera"] as const;
+const shotIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const maxShots = 12;
 export const maxStoryCharacters = 8;
 export const storyCharacterNotesLimit = characterNotesLimit;
+
+export function ensureShotIds(board: Storyboard): Storyboard {
+  const shots = board.shots;
+  if (!shots || shots.every((shot) => shot.id !== undefined)) return board;
+  const assigned = new Set(shots.flatMap(({ id }) => id === undefined ? [] : [id.toLowerCase()]));
+  return {
+    ...board,
+    shots: shots.map((shot) => {
+      if (shot.id !== undefined) return shot;
+      let id: string;
+      do {
+        id = crypto.randomUUID();
+      } while (assigned.has(id));
+      assigned.add(id);
+      return { ...shot, id };
+    }),
+  };
+}
+
+export function moveShot(shots: Shot[], from: number, to: number): Shot[] {
+  if (from === to || !Number.isInteger(from) || !Number.isInteger(to) ||
+    from < 0 || to < 0 || from >= shots.length || to >= shots.length) return shots;
+  const moved = [...shots];
+  moved.splice(from, 1);
+  moved.splice(to, 0, shots[from]);
+  return moved;
+}
 
 export function mergeStoryCharacters(current: StoryCharacter[], incoming: StoryCharacter[]) {
   const merged = [...current];
@@ -53,10 +97,28 @@ function boundedText(value: unknown, limit: number): value is string {
 
 export function validStoryboard(value: unknown, imageCount: number): value is Storyboard {
   if (!record(value) || !boundedText(value.story, storyLimit)) return false;
+  if (value.timeline !== undefined && !validStoryboardTimeline(value.timeline)) return false;
   const inRange = (index: unknown, count: number) => typeof index === "number" && Number.isInteger(index) && index >= 0 && index < count;
   const indices = (items: unknown, count: number) => Array.isArray(items) && items.length <= count &&
     items.every((index) => inRange(index, count)) && new Set(items).size === items.length;
   const fileId = (id: unknown) => typeof id === "string" && /^[\w-]{1,128}$/.test(id);
+  const takeSource = (source: unknown) => record(source) &&
+    (source.frame === null || boundedText(source.frame, 140)) && boundedText(source.prompt, 5000);
+  function validTakes(shot: Record<string, unknown>) {
+    const { takes, selectedTakeId, pendingTake } = shot;
+    if (takes !== undefined) {
+      if (!Array.isArray(takes) || takes.length > maxShotTakes || !takes.every((take: unknown) =>
+        record(take) && fileId(take.fileId) && takeSource(take.source) &&
+        (take.model === undefined || boundedText(take.model, 256)))) return false;
+      if (new Set(takes.map((take) => take.fileId)).size !== takes.length) return false;
+    }
+    if (selectedTakeId !== undefined && (!fileId(selectedTakeId) || !Array.isArray(takes) ||
+      !takes.some((take) => take.fileId === selectedTakeId) ||
+      (shot.videoId !== undefined && shot.videoId !== selectedTakeId))) return false;
+    return pendingTake === undefined || (record(pendingTake) && takeSource(pendingTake.source) &&
+      typeof pendingTake.requestId === "string" && /^[\w-]{1,100}$/.test(pendingTake.requestId) &&
+      boundedText(pendingTake.model, 256) && boundedText(pendingTake.aspectRatio, 16));
+  }
   const characters = value.characters;
   if (value.videoItemId !== undefined && !fileId(value.videoItemId)) return false;
   if (value.origin !== undefined && !(record(value.origin) && [value.origin.x, value.origin.y].every((axis) => typeof axis === "number" && Number.isFinite(axis) && Math.abs(axis) <= 1e9))) return false;
@@ -65,14 +127,26 @@ export function validStoryboard(value: unknown, imageCount: number): value is St
       boundedText(item.notes, storyCharacterNotesLimit) && (item.image === null || inRange(item.image, imageCount)) &&
       (item.generatedId === undefined || fileId(item.generatedId)) &&
       (item.approved === undefined || (typeof item.approved === "boolean" && fileId(item.generatedId)))))) return false;
+  const assigned = new Set<string>();
+  function validShotId(id: unknown) {
+    if (id === undefined) return true;
+    if (typeof id !== "string" || !shotIdPattern.test(id)) return false;
+    const normalized = id.toLowerCase();
+    if (assigned.has(normalized)) return false;
+    assigned.add(normalized);
+    return true;
+  }
   return (
     (value.shots === undefined || (Array.isArray(value.shots) && value.shots.length > 0 && value.shots.length <= maxShots &&
       value.shots.every((shot: unknown) => record(shot) && boundedText(shot.description, shotLimit) &&
+        validShotId(shot.id) &&
+        shotTextFields.every((field) => shot[field] === undefined || boundedText(shot[field], shotTextLimits[field])) &&
         typeof shot.seconds === "number" && shot.seconds >= 1 && shot.seconds <= 60 &&
         (shot.image === null || inRange(shot.image, imageCount)) && indices(shot.references, imageCount) &&
         (shot.characters === undefined || indices(shot.characters, characters?.length ?? 0)) &&
         (shot.generatedId === undefined || fileId(shot.generatedId)) &&
         (shot.videoId === undefined || fileId(shot.videoId)) &&
+        validTakes(shot) &&
         (shot.position === undefined || (record(shot.position) && [shot.position.x, shot.position.y].every((axis) => typeof axis === "number" && Number.isFinite(axis) && Math.abs(axis) <= 1e9)))))));
 }
 

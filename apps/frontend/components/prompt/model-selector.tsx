@@ -144,9 +144,10 @@ type Group = typeof categories[number] & {
   error: boolean;
 };
 
-export function ModelSelector({ models, onModelsChange, disabled = false }: {
+export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, disabled = false }: {
   models: string[];
   onModelsChange: Dispatch<SetStateAction<string[]>>;
+  onCatalogInfoChange?: (info: { prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean> }) => void;
   disabled?: boolean;
 }) {
   const { keys, keysReady } = useApiProviders();
@@ -310,10 +311,14 @@ export function ModelSelector({ models, onModelsChange, disabled = false }: {
       }
       // Prices come from the full catalog so saved models are priced too; a failed lookup just hides prices.
       const prices = new Map<string, string>();
+      const vision = new Map<string, boolean>();
       await Promise.all(categories.filter((category) => category.value !== "3d").map(async (category) => {
         try {
           const response = await fetch(`/api/models?category=${category.value}&all=true`, { signal: controller.signal });
-          if (response.ok) for (const item of (await response.json()).models as CatalogModel[]) if (item.price) prices.set(`${category.value}:${item.id}`, item.price);
+          if (response.ok) for (const item of (await response.json()).models as CatalogModel[]) {
+            if (item.price) prices.set(`${category.value}:${item.id}`, item.price);
+            if (category.value === "llm" && typeof item.vision === "boolean") vision.set(item.id, item.vision);
+          }
         } catch { /* Prices are optional. */ }
       }));
       const results = await Promise.all(categories.map(async (category): Promise<Group> => {
@@ -347,6 +352,7 @@ export function ModelSelector({ models, onModelsChange, disabled = false }: {
         if (controller.signal.aborted) return;
         for (const group of results) for (const model of group.models) model.price = group.value === "3d" ? falPriced.get(model.value.slice(3)) : prices.get(model.value);
         setGroups(results);
+        onCatalogInfoChange?.({ prices, vision });
         setHiddenModels(hidden ?? []);
         const useSavedSelection = !preferencesReady.current;
         preferencesReady.current = true;
@@ -363,7 +369,7 @@ export function ModelSelector({ models, onModelsChange, disabled = false }: {
     }
     void load();
     return () => controller.abort();
-  }, [attempt, onModelsChange, keysReady, falKey]);
+  }, [attempt, onModelsChange, onCatalogInfoChange, keysReady, falKey]);
 
   useEffect(() => {
     if (!preferencesReady.current) return;

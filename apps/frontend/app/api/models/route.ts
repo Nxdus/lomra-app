@@ -98,7 +98,9 @@ export async function GET(request: Request) {
       return category === "picture" ? outputs.includes("image") : outputs.includes("text") && !outputs.includes("image");
     }).map((item) => {
       const price = priceLabel(category, item);
-      return { id: item.id, name: item.name, ...(price && { price }) };
+      const inputs = item.architecture?.input_modalities;
+      return { id: item.id, name: item.name, ...(price && { price }),
+        ...(category === "llm" && Array.isArray(inputs) && { vision: inputs.includes("image") }) };
     });
     return Response.json({ models: all ? catalog : selections[category].flatMap(({ id, tier }) => {
       const model = catalog.find((item) => item.id === id);

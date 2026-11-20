@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { validateValue } from "@/lib/local-store/validation";
-import { draftedShots, mergeStoryCharacters, shotImagePrompt, storyReply, validStoryboard } from "./storyboard-data";
+import { draftedShots, ensureShotIds, mergeStoryCharacters, moveShot, shotImagePrompt, shotTextLimits, storyReply, validStoryboard, type Storyboard } from "./storyboard-data";
 
 const completion = (content: string) => ({ choices: [{ message: { content } }] });
 const shot = { description: "Wide shot of a lighthouse", seconds: 4, image: null, references: [0] };
@@ -30,7 +30,7 @@ test("keeps reviewed appearance, validates shot cast indices, and prioritizes co
 });
 
 test("keeps ordered shots, validates references, and ignores model-supplied file IDs", () => {
-  const first = { ...shot, image: 0, generatedId: "not-from-the-canvas" };
+  const first = { ...shot, image: 0, generatedId: "not-from-the-canvas", id: crypto.randomUUID() };
   assert.deepEqual(draftedShots(completion(JSON.stringify({ shots: [first, shot] })), 1), [{ ...shot, image: 0 }, shot]);
   for (const invalid of [{ ...shot, image: 1 }, { ...shot, references: [0, 0] }, { ...shot, seconds: 0 }]) {
     assert.throws(() => draftedShots(completion(JSON.stringify({ shots: [invalid] })), 1));
@@ -58,4 +58,40 @@ test("accepts finite shot positions only", () => {
   assert.equal(at({ x: -120.5, y: 40 }), true);
   assert.equal(at({ x: Infinity, y: 0 }), false);
   assert.equal(at({ x: 0 }), false);
+});
+
+test("assigns IDs to legacy shots once and validates optional shot details", () => {
+  const identified = { ...shot, id: crypto.randomUUID(), scene: "Lighthouse", dialogue: "Come in", sound: "Wind", camera: "Pan" };
+  const original = { story: "", shots: [shot, identified, shot] };
+  assert.equal(validStoryboard(original, 1), true);
+  const upgraded = ensureShotIds(original);
+  assert.equal(validStoryboard(upgraded, 1), true);
+  assert.equal(upgraded.shots?.[1], identified);
+  assert.equal(ensureShotIds(upgraded), upgraded);
+  assert.equal(new Set(upgraded.shots?.map(({ id }) => id)).size, 3);
+  const withoutShots: Storyboard = { story: "" };
+  assert.equal(ensureShotIds(withoutShots), withoutShots);
+  assert.equal(validStoryboard({ story: "", shots: [identified, { ...shot, id: identified.id.toUpperCase() }] }, 1), false);
+  assert.equal(validStoryboard({ story: "", shots: [{ ...shot, id: "../shot" }] }, 1), false);
+  for (const [field, limit] of Object.entries(shotTextLimits)) {
+    const withValue = (value: unknown) => validStoryboard({ story: "", shots: [{ ...shot, [field]: value }] }, 1);
+    assert.equal(withValue("x".repeat(limit)), true);
+    assert.equal(withValue("x".repeat(limit + 1)), false);
+    assert.equal(withValue(null), false);
+  }
+});
+
+test("moves whole shots to their final indices and preserves identity", () => {
+  const first = { ...shot, id: crypto.randomUUID(), image: 0, position: { x: 50, y: 100 }, videoId: "clip" };
+  const second = { ...shot, description: "Second" };
+  const third = { ...shot, description: "Third" };
+  const shots = [first, second, third];
+  const moved = moveShot(shots, 0, 2);
+  assert.deepEqual(moved, [second, third, first]);
+  assert.equal(moved[2], first);
+  assert.deepEqual(moveShot(moved, 2, 0), shots);
+  assert.deepEqual(shots, [first, second, third]);
+  for (const [from, to] of [[0, 0], [-1, 0], [0, 3], [0.5, 1], [1, NaN]]) {
+    assert.equal(moveShot(shots, from, to), shots);
+  }
 });

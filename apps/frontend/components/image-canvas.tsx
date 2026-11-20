@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { canvasHistory, canvasTitle, canvasStorage, isCanvasFilePending, deleteCanvasStorage, canvasFileError, canvasFileKind, canvasFileSize, type CanvasImage, type CanvasHistoryItem } from "@/lib/image-canvas/image-canvas-storage";
 import { CANVAS_CAMERA_KEY, canvasPoint, parseCanvasCamera, zoomCamera, type CanvasCamera } from "@/lib/image-canvas/image-canvas-camera";
 import { resizeImage, type ImageBounds, type ImageCorner } from "@/lib/image-canvas/image-canvas-resize";
-import { shotGridSize, shotsOffset } from "@/components/prompt/storyboard-shots";
+import { shotGridSize } from "@/components/prompt/storyboard-shots";
 import { storyboardLayout } from "@/lib/image-canvas/storyboard-layout";
 import { reorganizeCanvas, fitCanvas } from "@/lib/image-canvas/image-canvas-layout";
 import { getSetting, saveSetting } from "@/lib/settings";
@@ -96,7 +96,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   const [images, setImages] = useState<VisibleImage[]>([]);
   // The storyboard (cast and shots) sits below the pictures, starting at their left edge.
   const storyboardX = images.length ? Math.min(...images.map((image) => image.x)) : 0;
-  const storyboardY = images.length ? Math.max(...images.map((image) => image.y + image.height)) + 130 : 0;
+  const storyboardY = images.length ? Math.max(...images.map((image) => image.y + image.height)) + 130 : 100;
   const storyboardHost = useRef<HTMLDivElement | null>(null);
   const storyboardRef = useCallback((element: HTMLDivElement | null) => { storyboardHost.current = element; onStoryboardHost?.(element); }, [onStoryboardHost]);
   useEffect(() => { onStoryboardOrigin?.({ x: storyboardX, y: storyboardY }); }, [onStoryboardOrigin, storyboardX, storyboardY]);
@@ -462,12 +462,8 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
 
   // Size of the storyboard once its shot nodes are back in the default grid, or null when there is none.
   function storyboardSize() {
-    const cast = storyboardHost.current?.querySelector('section[aria-label="Cast"]')?.getBoundingClientRect();
     const shots = storyboardHost.current?.querySelectorAll('section[aria-label^="Shot "]').length ?? 0;
-    if (!cast && !shots) return null;
-    const grid = shots ? shotGridSize(shots) : { width: 0, height: 0 };
-    const castWidth = cast ? cast.width / view.current.scale : 0;
-    return { width: shots ? (cast ? shotsOffset : 0) + grid.width : castWidth, height: Math.max(cast ? cast.height / view.current.scale : 0, grid.height) };
+    return shots ? shotGridSize(shots) : null;
   }
 
   function reorganize() {

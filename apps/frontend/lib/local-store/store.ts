@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { Storyboard } from '../../components/prompt/storyboard-data';
 import { StoreError, validId, validateValue, type Kind } from './validation';
 
 const MAX_FILE = 100 * 1024 * 1024;
@@ -65,13 +66,17 @@ export function createLocalStore(root: string, secret: Buffer) {
     await atomicWrite(jsonPath(kind, id), JSON.stringify(stored));
   }
 
-  // Pictures generated for storyboard cast and shots are workspace files that no canvas item owns.
+  // Storyboard pictures, takes and timeline audio are workspace files owned by the chat.
   async function removeStoryboardFiles(chats: unknown[]) {
     for (const chat of chats) {
-      const board = (chat as { storyboard?: { characters?: { generatedId?: string }[]; shots?: { generatedId?: string; videoId?: string }[] } } | null)?.storyboard;
-      for (const item of [...(board?.characters ?? []), ...(board?.shots ?? [])]) {
-        for (const id of [item.generatedId, (item as { videoId?: string }).videoId]) if (id && validId(id)) await rm(join(dir('files'), id), { force: true });
-      }
+      const board = (chat as { storyboard?: Storyboard } | null)?.storyboard;
+      if (!board) continue;
+      const files = new Set([
+        ...(board.characters ?? []).map(({ generatedId }) => generatedId),
+        ...(board.shots ?? []).flatMap(({ generatedId, videoId, takes }) => [generatedId, videoId, ...(takes ?? []).map(({ fileId }) => fileId)]),
+        ...(board.timeline?.audio ?? []).map(({ fileId }) => fileId),
+      ]);
+      for (const id of files) if (id && validId(id)) await rm(join(dir('files'), id), { force: true });
     }
   }
 
