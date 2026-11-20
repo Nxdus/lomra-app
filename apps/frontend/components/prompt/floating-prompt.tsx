@@ -31,7 +31,7 @@ import { canvasFileError, canvasFileKind } from "@/lib/image-canvas/image-canvas
 import { getSetting, saveSetting } from "@/lib/settings";
 import { characterNameKey, type Character } from "@/lib/characters";
 import { isRemoteOllama } from "@/lib/ollama-url";
-import { desktopAgents, desktopOllama, desktopVideo, type AgentToolResult, type DesktopVideoApi } from "@/lib/desktop";
+import { desktopAgents, desktopOllama, desktopSd, desktopVideo, type AgentToolResult, type DesktopVideoApi } from "@/lib/desktop";
 import { swipeDeleteThreshold, useSwipeToDelete } from "@/hooks/use-swipe-to-delete";
 import { agentEfforts, agentLabels, localAgentModel, runAgentChat } from "./agent-chat";
 import { saveAgentLimits } from "./agent-limits";
@@ -42,15 +42,21 @@ import { StoryboardCharacters } from "./storyboard-characters";
 import { StoryboardExport } from "./storyboard-export";
 import { StoryboardPreview } from "./storyboard-preview";
 import { StoryboardTakes } from "./storyboard-take-controls";
-import { generateShotTake, matchingShotTakeJob, normalizeShotTakes, selectedShotTake, selectShotTake } from "./storyboard-takes";
+import { generateShotTake, normalizeShotTakes, selectedShotTake, selectShotTake } from "./storyboard-takes";
 import { StoryboardTimeline } from "./storyboard-timeline";
 import { StoryboardReview } from "./storyboard-review";
-import { resolveStoryboardTimeline, storyboardTimelineEditError, storyboardTimelineRenderInput, type StoryboardTimelinePlan } from "./storyboard-timeline-data";
+import { resolveStoryboardTimeline, storyboardTimelineRenderInput, type StoryboardTimelinePlan } from "./storyboard-timeline-data";
+import { preflightStoryboardVideo } from "./storyboard-preflight";
 import { characterMarker, promptText, PromptBadgeText, setStoryboardCaret, storyboardMarker, StoryboardInput } from "./storyboard-input";
 import { storageFile } from "@/lib/storage";
 import { characterContext, characterGeneration, listCharacters, loadCharacterReferences } from "./character-references";
 
 function notifyError(title: string) { toast.add({ title, type: "error" }); }
+function notifyBlockers(blockers: { message: string }[]) {
+  if (blockers.length === 0) return;
+  if (blockers.length === 1) notifyError(blockers[0].message);
+  else toast.add({ title: blockers[0].message, description: blockers.slice(1).map((b) => b.message).join("\n"), type: "error" });
+}
 const storyboardCommand = "/storyboard";
 
 function downloadStoryboardVideo(blob: Blob) {
@@ -798,30 +804,32 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
 
   // Asks before spending anything: every missing clip is one video generation, and the video tool is a one-time download.
   async function planStoryboardVideo(story: Storyboard) {
-    const shots = story.shots ?? [];
-    const missing = shots.filter((shot) => !selectedShotTake(shot));
-    const model = videoModel;
-    if (story.timeline) {
-      const error = storyboardTimelineEditError(story, story.timeline);
-      if (error) return notifyError(error);
-    }
-    const pending = shots.findIndex((shot) => !selectedShotTake(shot) && shot.pendingTake && !matchingShotTakeJob(shot, model, story.timeline?.aspectRatio));
-    if (pending >= 0) return notifyError(`Open Shot ${pending + 1} settings and check its saved job before making the video.`);
-    if (missing.length && !model) return notifyError("Select a video model in the prompt toolbar first.");
-    if (missing.length && !videoStartImage(model)) return notifyError("This video model cannot start from a picture. Choose Gemini Omni, Gemini Create video or an OpenRouter video model.");
     const bridge = desktopVideo();
-    if (!bridge) return notifyError("Joining clips into one video needs the Lomra desktop app.");
-    try {
-      const tool = await bridge.status();
-      if (!tool.supported) return notifyError("Joining clips into one video is not available on this computer yet.");
-      if (latestStoryboard.current !== story) return;
-      const resumes = missing.filter((shot) => matchingShotTakeJob(shot, model, story.timeline?.aspectRatio)).length;
-      setVideoPlan({
-        clips: missing.length - resumes, resumes, stale: shots.filter((shot) => selectedShotTake(shot)?.stale).length,
-        pictures: missing.filter((shot) => shot.image === null && !shot.generatedId).length,
-        model, toolBytes: tool.installed ? 0 : tool.bytes,
-      });
-    } catch { notifyError("Could not reach the video tool."); }
+    const pictureModel = selectedModel(models, "picture") ?? "";
+    const preflight = await preflightStoryboardVideo({
+      story,
+      videoModel,
+      pictureModel,
+      keys,
+      storyImages,
+      desktopVideo: bridge,
+      desktopAgents: desktopAgents(),
+      desktopSd: desktopSd(),
+      storageFile,
+    });
+    if (latestStoryboard.current !== story) return;
+    if (!preflight.ok) {
+      notifyBlockers(preflight.blockers);
+      return;
+    }
+    setVideoPlan({
+      clips: preflight.clips,
+      resumes: preflight.resumes,
+      stale: preflight.stale,
+      pictures: preflight.pictures,
+      model: videoModel,
+      toolBytes: preflight.toolBytes,
+    });
   }
 
   async function ensureVideoTool(bridge: DesktopVideoApi, signal: AbortSignal) {
@@ -901,6 +909,22 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   async function makeStoryboardVideo(story: Storyboard, model: string) {
     const bridge = desktopVideo();
     if (!bridge || !story.shots) return;
+    const pictureModel = selectedModel(models, "picture") ?? "";
+    const preflight = await preflightStoryboardVideo({
+      story,
+      videoModel: model,
+      pictureModel,
+      keys,
+      storyImages,
+      desktopVideo: bridge,
+      desktopAgents: desktopAgents(),
+      desktopSd: desktopSd(),
+      storageFile,
+    });
+    if (!preflight.ok) {
+      notifyBlockers(preflight.blockers);
+      return;
+    }
     await runStoryboard("Preparing video…", async (signal) => {
       await ensureVideoTool(bridge, signal);
       const shots = [...story.shots!];
