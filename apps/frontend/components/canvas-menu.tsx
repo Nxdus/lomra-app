@@ -2,7 +2,7 @@
 
 import { Tip } from "@/components/tip";
 import { useEffect, useRef, useState } from "react";
-import { HistoryIcon, FilePlusIcon, LayoutGridIcon, MenuIcon, MinusIcon, PlusIcon, SearchIcon, Trash2Icon, XIcon } from "lucide-react";
+import { DownloadIcon, HistoryIcon, FilePlusIcon, LayoutGridIcon, MenuIcon, MinusIcon, PlusIcon, SearchIcon, Trash2Icon, UploadIcon, XIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { swipeDeleteThreshold, useSwipeToDelete } from "@/hooks/use-swipe-to-delete";
 import { canvasTitle, renameCanvas, type CanvasHistoryItem } from "@/lib/image-canvas/image-canvas-storage";
+import { exportProject, importProject } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
 export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDelete, title, scale, ready, onZoom, onReset, canReorganize, onReorganize }: {
@@ -38,10 +39,65 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
   const [draft, setDraft] = useState("");
   const editId = useRef<string | null>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { swipe, bind: bindSwipe } = useSwipeToDelete();
   useEffect(() => () => clearTimeout(openTimer.current), []);
   const nameOf = (id: string) => history.find(item => item.id === id)?.name || canvasTitle(id);
   const filteredHistory = history.filter((item) => nameOf(item.id).toLocaleLowerCase().includes(historySearch.trim().toLocaleLowerCase()));
+
+  function downloadBlob(filename: string, blob: Blob) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function handleExport(id = canvasId) {
+    if (busy || !ready) return;
+    setBusy(true);
+    try {
+      const { blob, filename } = await exportProject(id);
+      downloadBlob(filename, blob);
+    } catch (error) {
+      toast.add({
+        title: "Could not export project",
+        description: error instanceof Error ? error.message : "Please retry.",
+        type: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleImport(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    event.target.value = "";
+    if (busy || !ready) return;
+    setBusy(true);
+    try {
+      const result = await importProject(file);
+      toast.add({
+        title: `Imported "${result.name}"`,
+        description: `${result.itemCount} ${result.itemCount === 1 ? "file" : "files"} restored into a new canvas.`,
+        type: "success",
+      });
+      onHistory();
+      onOpen(result.canvasId);
+      setOpen(false);
+    } catch (error) {
+      toast.add({
+        title: "Could not import project",
+        description: error instanceof Error ? error.message : "Please retry.",
+        type: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function startRename(item: CanvasHistoryItem) {
     clearTimeout(openTimer.current);
     editId.current = item.id;
@@ -77,8 +133,10 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
       </PopoverTrigger>
       <PopoverContent side="right" align="center" sideOffset={12} className="group/fab w-auto flex-row gap-3 overflow-visible bg-transparent p-0 shadow-none ring-0 transition-opacity duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] data-open:animate-none data-closed:animate-none data-starting-style:opacity-0 data-ending-style:opacity-0 motion-reduce:transition-none">
         <PopoverTitle className="sr-only">Canvas menu</PopoverTitle>
-        <Tip label="New canvas"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready} onClick={onNew} aria-label="New canvas"><FilePlusIcon /></Button></Tip>
-        <Tip label="Reorganize canvas"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || !canReorganize} onClick={onReorganize} aria-label="Reorganize canvas"><LayoutGridIcon /></Button></Tip>
+        <Tip label="New canvas"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || busy} onClick={onNew} aria-label="New canvas"><FilePlusIcon /></Button></Tip>
+        <Tip label="Import project"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || busy} onClick={() => fileInputRef.current?.click()} aria-label="Import project"><UploadIcon /></Button></Tip>
+        <Tip label="Export project"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || busy} onClick={() => void handleExport()} aria-label="Export project"><DownloadIcon /></Button></Tip>
+        <Tip label="Reorganize canvas"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || !canReorganize || busy} onClick={onReorganize} aria-label="Reorganize canvas"><LayoutGridIcon /></Button></Tip>
         <Popover onOpenChange={(next) => { if (next) { setHistorySearch(""); onHistory(); } }}>
           <Tip label={history.find(item => item.id === canvasId)?.name || title}><PopoverTrigger render={<Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" />} aria-label="Canvas history"><HistoryIcon /></PopoverTrigger></Tip>
           <PopoverContent side="top" align="start" sideOffset={10} className="w-80 max-w-[calc(100vw-2rem)] gap-3 p-3">
@@ -98,7 +156,7 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
                   if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelRename(); }
                 }} /> : <div className="relative overflow-hidden rounded-xl">
                 {offset !== undefined && <div aria-hidden="true" className={cn("pointer-events-none absolute inset-0 flex items-center justify-end pr-2 text-destructive motion-safe:transition-colors", offset <= swipeDeleteThreshold ? "bg-destructive/20" : "bg-destructive/10")}><Trash2Icon className="size-4" /></div>}
-                <Button variant={item.id === canvasId ? "secondary" : "ghost"} className={cn("relative h-auto w-full touch-pan-y justify-start gap-3 rounded-xl px-3 py-2.5 text-left disabled:opacity-100", offset !== undefined && "rounded-none bg-popover bg-clip-border transition-none hover:bg-popover active:not-aria-[haspopup]:translate-y-0 dark:hover:bg-popover")} disabled={!ready || busy} aria-current={item.id === canvasId ? "true" : undefined}
+                <Button variant={item.id === canvasId ? "secondary" : "ghost"} className={cn("relative h-auto w-full touch-pan-y justify-start gap-3 rounded-xl px-3 py-2.5 pr-10 text-left disabled:opacity-100", offset !== undefined && "rounded-none bg-popover bg-clip-border transition-none hover:bg-popover active:not-aria-[haspopup]:translate-y-0 dark:hover:bg-popover")} disabled={!ready || busy} aria-current={item.id === canvasId ? "true" : undefined}
                 title="Drag left to delete, or press Delete"
                 style={offset !== undefined ? { transform: `translateX(${offset}px)` } : undefined}
                 {...swipeHandlers}
@@ -119,7 +177,25 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
                     <span className="truncate">{item.name || (item.id === "default" ? "Original canvas" : "Canvas")}</span>
                     <span className="truncate text-xs font-normal text-muted-foreground">{item.id !== "default" && `${canvasTitle(item.id).replace("Canvas · ", "")} · `}{item.count} {item.count === 1 ? "file" : "files"}</span>
                   </span>
-                </Button></div>}</div>
+                </Button>
+                <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
+                  <Tip label={`Export ${nameOf(item.id)}`}>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className="size-7 rounded-lg text-muted-foreground hover:text-foreground"
+                      disabled={!ready || busy}
+                      aria-label={`Export ${nameOf(item.id)}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        clearTimeout(openTimer.current);
+                        void handleExport(item.id);
+                      }}
+                    >
+                      <DownloadIcon className="size-3.5" />
+                    </Button>
+                  </Tip>
+                </div></div>}</div>
                 );
               })}
               {filteredHistory.length === 0 && <p role="status" className="px-3 py-6 text-center text-sm text-muted-foreground">{history.length === 0 ? "No saved canvases yet." : "No canvases found."}</p>}
@@ -145,6 +221,14 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
           </Popover>
         </div>
       </PopoverContent>
-    </Popover></>
+    </Popover>
+    <input
+      ref={fileInputRef}
+      type="file"
+      accept=".lomra,.zip,application/zip"
+      className="hidden"
+      aria-hidden="true"
+      onChange={handleImport}
+    /></>
   );
 }

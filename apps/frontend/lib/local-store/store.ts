@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Storyboard } from '../../components/prompt/storyboard-data';
+import { exportProject, importProject } from './import-export';
 import { StoreError, validId, validateValue, type Kind } from './validation';
 
 const MAX_FILE = 100 * 1024 * 1024;
@@ -113,7 +114,17 @@ export function createLocalStore(root: string, secret: Buffer) {
     await atomicWrite(join(dir('files'), id), data);
   }
 
-  return { list, save, remove, readFile: readStoredFile, writeFile: writeStoredFile };
+  const instance = {
+    list,
+    save,
+    remove,
+    readFile: readStoredFile,
+    writeFile: writeStoredFile,
+    exportProject: (canvasId: string) => exportProject(instance, canvasId),
+    importProject: (archive: Uint8Array) => importProject(instance, archive),
+  };
+
+  return instance;
 }
 
 export type LocalStore = ReturnType<typeof createLocalStore>;

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.LOMRA_DATA_DIR = await mkdtemp(join(tmpdir(), 'lomra-route-'));
-const { GET, PUT, DELETE } = await import('./route');
+const { GET, PUT, DELETE, POST } = await import('./route');
 
 const origin = 'http://localhost:3000';
 const call = (handler: typeof GET, path: string[], init: RequestInit = {}) =>
@@ -46,4 +46,40 @@ test('removed catalog models and an empty selection are saved', async () => {
     expect((await call(PUT, ['settings', id], { method: 'PUT', body: JSON.stringify({ value }) })).status).toBe(200);
   }
   expect(await (await call(GET, ['settings'])).json()).toEqual([...settings].sort((a, b) => a.id.localeCompare(b.id)));
+});
+
+test('project export and import endpoints handle portable archives', async () => {
+  const canvasItem = {
+    id: 'route-asset',
+    name: 'asset.png',
+    type: 'image/png',
+    lastModified: 1700000000000,
+    x: 10,
+    y: 20,
+    width: 100,
+    height: 100,
+  };
+  expect((await call(PUT, ['files', 'route-asset'], { method: 'PUT', body: new Uint8Array([42, 43, 44]) })).status).toBe(200);
+  expect((await call(PUT, ['canvas', 'default'], { method: 'PUT', body: JSON.stringify({ value: [canvasItem] }) })).status).toBe(200);
+  expect((await call(PUT, ['settings', 'canvas-name-default'], { method: 'PUT', body: JSON.stringify({ value: 'Exported Route Project' }) })).status).toBe(200);
+
+  // Export default canvas
+  const exportRes = await call(GET, ['export', 'default']);
+  expect(exportRes.status).toBe(200);
+  expect(exportRes.headers.get('content-type')).toBe('application/octet-stream');
+  expect(exportRes.headers.get('content-disposition')).toContain('Exported Route Project');
+  const archiveBytes = new Uint8Array(await exportRes.arrayBuffer());
+  expect(archiveBytes.byteLength).toBeGreaterThan(0);
+
+  // Import project
+  const importRes = await call(POST, ['import'], { method: 'POST', body: archiveBytes });
+  expect(importRes.status).toBe(200);
+  const importedData = await importRes.json();
+  expect(importedData.name).toBe('Exported Route Project');
+  expect(importedData.itemCount).toBe(1);
+  expect(importedData.canvasId).toMatch(/^canvas-\d{13}-[a-f0-9-]{36}$/);
+
+  // Bad import
+  const badImport = await call(POST, ['import'], { method: 'POST', body: new Uint8Array(0) });
+  expect(badImport.status).toBe(400);
 });

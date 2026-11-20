@@ -27,6 +27,36 @@ export async function storage(path: string, method = 'GET', value?: unknown) {
   return response.json();
 }
 
+export async function exportProject(canvasId: string): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(`/api/storage/export/${encodeURIComponent(canvasId)}`, {
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: 'Could not export project.' }));
+    throw new Error(error.message || 'Could not export project.');
+  }
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/);
+  const rawFilename = match ? (match[1] || match[2]) : `project-${canvasId}.lomra`;
+  const filename = decodeURIComponent(rawFilename);
+  const blob = await response.blob();
+  return { blob, filename };
+}
+
+export async function importProject(file: Blob): Promise<{ canvasId: string; name: string; itemCount: number }> {
+  const response = await fetch('/api/storage/import', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: file,
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: 'Could not import project.' }));
+    throw new Error(error.message || 'Could not import project.');
+  }
+  return response.json();
+}
+
 const pendingFiles = new Map<string, Promise<Blob | undefined>>();
 
 export async function storageFile(id: string, file?: File) {
