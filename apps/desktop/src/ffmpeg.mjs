@@ -2,10 +2,12 @@ import { spawn } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentEnv } from './agents.mjs';
-import { buildStitchArgs, ffmpegBuilds, ffmpegRelease, ffmpegUrl, maxClipBytes, maxClips, maxTotalBytes, parseProbe, videoSize } from './ffmpeg-models.mjs';
+import { buildStitchArgs, ffmpegBuilds, ffmpegRelease, ffmpegUrl, formatCaptions, maxAudioTracks, maxCaptions, maxClipBytes, maxClips, maxTotalBytes, mediaInputArgs, parseProbe, videoSize } from './ffmpeg-models.mjs';
 import { downloadFile, extractZip } from './sd.mjs';
 
 const binaryName = (platform) => platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+const isBytes = (data) => (data instanceof Uint8Array || data instanceof ArrayBuffer) && data.byteLength > 0;
+const asBytes = (data) => data instanceof ArrayBuffer ? new Uint8Array(data) : data;
 
 const failure = (cause) => /ENOSPC/.test(String(cause?.code ?? cause)) ? 'There is not enough disk space.'
   : cause instanceof Error && /^(The |Could not |There )/.test(cause.message) ? cause.message
@@ -13,8 +15,7 @@ const failure = (cause) => /ENOSPC/.test(String(cause?.code ?? cause)) ? 'There 
 
 /**
  * Joins the clips of a storyboard into one MP4 with ffmpeg. The build is downloaded into `dir` after the user agrees
- * (the caller asks) and verified against a pinned hash. The renderer can only send clip bytes, their lengths and an
- * aspect ratio; it never supplies a path or a command line.
+ * (the caller asks) and verified against a pinned hash. The renderer sends media bytes, edit settings and caption text.
  */
 export function createFfmpeg({ dir, platform = process.platform, arch = process.arch, env = process.env, fetchImpl = fetch, spawnProcess = spawn, extract = extractZip, builds = ffmpegBuilds } = {}) {
   const build = builds[`${platform}-${arch}`];
@@ -67,7 +68,7 @@ export function createFfmpeg({ dir, platform = process.platform, arch = process.
     });
   }
 
-  async function execute(runId, { clips, aspectRatio }, controller, onProgress) {
+  async function execute(runId, { clips, aspectRatio, audio, captions, total }, controller, onProgress) {
     controller.signal.throwIfAborted();
     const folder = join(work, runId);
     rmSync(folder, { recursive: true, force: true });
@@ -78,13 +79,25 @@ export function createFfmpeg({ dir, platform = process.platform, arch = process.
       for (const [index, clip] of clips.entries()) {
         const file = join(folder, `clip-${index}.bin`);
         writeFileSync(file, clip.data);
-        const probe = parseProbe((await run(['-hide_banner', '-nostdin', '-i', file], controller)).output);
+        const probe = parseProbe((await run(['-hide_banner', '-nostdin', ...mediaInputArgs(file)], controller)).output);
         controller.signal.throwIfAborted();
-        if (!probe.seconds) throw new Error(`Clip ${index + 1} is not a video the video tool can read.`);
-        files.push({ file, seconds: clip.seconds, audio: probe.audio });
+        if (!probe.video || !Number.isFinite(probe.seconds) || !probe.seconds) throw new Error(`Clip ${index + 1} is not a video the video tool can read.`);
+        if (clip.start >= probe.seconds) throw new Error(`Clip ${index + 1} starts outside its source video.`);
+        files.push({ file, seconds: clip.seconds, start: clip.start, audio: probe.audio && !clip.mute });
       }
-      const total = files.reduce((sum, { seconds }) => sum + seconds, 0);
-      const { code, output } = await run(buildStitchArgs(files, videoSize(aspectRatio), out), controller, (text) => {
+      const tracks = [];
+      for (const [index, { data, start, gain }] of audio.entries()) {
+        const file = join(folder, `audio-${index}.bin`);
+        writeFileSync(file, data);
+        const probe = parseProbe((await run(['-hide_banner', '-nostdin', ...mediaInputArgs(file)], controller)).output);
+        controller.signal.throwIfAborted();
+        if (!probe.audio) throw new Error(`Audio track ${index + 1} is not readable by the video tool.`);
+        tracks.push({ file, start, gain });
+      }
+      const subtitles = captions.length ? join(folder, 'captions.srt') : undefined;
+      if (subtitles) writeFileSync(subtitles, formatCaptions(captions), 'utf8');
+      const args = buildStitchArgs(files, videoSize(aspectRatio), out, { audio: tracks, captions: subtitles, total });
+      const { code, output } = await run(args, controller, (text) => {
         const time = [...text.matchAll(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/g)].pop();
         if (time) onProgress?.({ seconds: Math.min(total, Number(time[1]) * 3600 + Number(time[2]) * 60 + Number(time[3])), total });
       });
@@ -122,27 +135,57 @@ export function createFfmpeg({ dir, platform = process.platform, arch = process.
       return true;
     },
     /**
-     * Joins `{ clips: [{ data, seconds }], aspectRatio? }` into one MP4 and returns its bytes. Rejects with a message
-     * the user can read; only one runs at a time.
+     * Renders the clips, optional audio and captions into one MP4. Only one job runs at a time.
      */
-    stitch(runId, input, onProgress) {
-      const { clips, aspectRatio } = input && typeof input === 'object' ? input : {};
-      if (typeof runId !== 'string' || !/^[a-f0-9-]{36}$/.test(runId) || runs.has(runId)) return Promise.reject(new Error('Invalid video run.'));
-      if (!build || !existsSync(exe)) return Promise.reject(new Error('Download the video tool first.'));
-      if (!Array.isArray(clips) || !clips.length || clips.length > maxClips) return Promise.reject(new Error(`Join between 1 and ${maxClips} clips.`));
-      if (aspectRatio !== undefined && typeof aspectRatio !== 'string') return Promise.reject(new Error('Invalid aspect ratio.'));
+    async stitch(runId, input, onProgress) {
+      const { clips, aspectRatio, audio = [], captions = [] } = input && typeof input === 'object' ? input : {};
+      if (typeof runId !== 'string' || !/^[a-f0-9-]{36}$/.test(runId) || runs.has(runId)) throw new Error('Invalid video run.');
+      if (!build || !existsSync(exe)) throw new Error('Download the video tool first.');
+      if (!Array.isArray(clips) || !clips.length || clips.length > maxClips) throw new Error(`Join between 1 and ${maxClips} clips.`);
+      if (aspectRatio !== undefined && typeof aspectRatio !== 'string') throw new Error('Invalid aspect ratio.');
+      if (!Array.isArray(audio) || audio.length > maxAudioTracks) throw new Error(`Use up to ${maxAudioTracks} audio tracks.`);
+      if (!Array.isArray(captions) || captions.length > maxCaptions) throw new Error(`Use up to ${maxCaptions} captions.`);
+      let bytes = 0;
       let total = 0;
+      const prepared = [];
       for (const clip of clips) {
-        const size = clip?.data?.byteLength;
-        if (!(clip?.data instanceof Uint8Array || clip?.data instanceof ArrayBuffer) || !size || size > maxClipBytes) return Promise.reject(new Error('A clip is missing or larger than 100 MB.'));
-        if (typeof clip.seconds !== 'number' || !Number.isFinite(clip.seconds) || clip.seconds < 1 || clip.seconds > 60) return Promise.reject(new Error('Each clip needs a length of 1 to 60 seconds.'));
-        total += size;
+        if (!isBytes(clip?.data) || clip.data.byteLength > maxClipBytes) throw new Error('A clip is missing or larger than 100 MB.');
+        const { data, seconds, start = 0, mute = false } = clip;
+        if (!Number.isFinite(seconds) || seconds < 1 || seconds > 60) throw new Error('Each clip needs a length of 1 to 60 seconds.');
+        if (!Number.isFinite(start) || start < 0 || typeof mute !== 'boolean') throw new Error('Invalid clip trim or mute setting.');
+        const length = Number(seconds.toFixed(3));
+        prepared.push({ data: asBytes(data), seconds: length, start, mute });
+        total += length;
+        bytes += data.byteLength;
       }
-      if (total > maxTotalBytes) return Promise.reject(new Error('The clips are too large to join together.'));
-      const prepared = clips.map(({ data, seconds }) => ({ data: data instanceof ArrayBuffer ? new Uint8Array(data) : data, seconds }));
+      total = Number(total.toFixed(3));
+      const tracks = [];
+      for (const track of audio) {
+        if (!isBytes(track?.data)) throw new Error('An audio track is missing its media.');
+        const { data, start, gain = 1 } = track;
+        if (!Number.isFinite(start) || start < 0 || start >= total) throw new Error('Each audio track must start within the video.');
+        if (!Number.isFinite(gain) || gain < 0 || gain > 2) throw new Error('Audio gain must be between 0 and 2.');
+        tracks.push({ data: asBytes(data), start, gain });
+        bytes += data.byteLength;
+      }
+      if (bytes > maxTotalBytes) throw new Error('The media is too large to join together.');
+      const subtitles = [];
+      for (const caption of captions) {
+        const { start, end, text } = caption ?? {};
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end > total || start.toFixed(3) === end.toFixed(3) || start >= end) {
+          throw new Error('Each caption must have a positive duration within the video, at millisecond precision.');
+        }
+        if (typeof text !== 'string' || text.length > 2000) throw new Error('Each caption needs up to 2,000 characters of text.');
+        // Keep a single SRT text line and neutralize tags interpreted by its decoder.
+        const clean = text.replace(/[\p{Cc}\p{Z}\s]+/gu, ' ').replace(/[<>{}]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 0xfee0)).trim();
+        if (!clean) throw new Error('A caption is missing its text.');
+        subtitles.push({ start, end, text: clean });
+      }
+      subtitles.sort((a, b) => a.start - b.start);
+      if (subtitles.some(({ start }, index) => index > 0 && start < subtitles[index - 1].end)) throw new Error('Captions cannot overlap.');
       const controller = new AbortController();
       runs.set(runId, controller);
-      const task = queue.then(() => execute(runId, { clips: prepared, aspectRatio }, controller, onProgress));
+      const task = queue.then(() => execute(runId, { clips: prepared, aspectRatio, audio: tracks, captions: subtitles, total }, controller, onProgress));
       queue = task.catch(() => {});
       return task.finally(() => { runs.delete(runId); });
     },

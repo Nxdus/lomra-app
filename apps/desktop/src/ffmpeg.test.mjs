@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { createFfmpeg } from './ffmpeg.mjs';
-import { buildStitchArgs, ffmpegBuilds, parseProbe, videoSize } from './ffmpeg-models.mjs';
+import { buildStitchArgs, ffmpegBuilds, maxClipBytes, mediaInputArgs, parseProbe, videoSize } from './ffmpeg-models.mjs';
 
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 const runId = '11111111-1111-1111-1111-111111111111';
@@ -34,9 +34,9 @@ test('the pinned builds carry a hash and a size', () => {
 
 test('parseProbe reads the length and whether there is sound', () => {
   const withSound = '  Duration: 00:00:05.04, start: 0.000000\n  Stream #0:0[0x1](und): Video: h264\n  Stream #0:1[0x2](und): Audio: aac (LC)';
-  expect(parseProbe(withSound)).toEqual({ audio: true, seconds: 5.04 });
-  expect(parseProbe('  Duration: 01:02:03.50, start: 0\n  Stream #0:0: Video: vp9')).toEqual({ audio: false, seconds: 3723.5 });
-  expect(parseProbe('not a video')).toEqual({ audio: false, seconds: 0 });
+  expect(parseProbe(withSound)).toEqual({ audio: true, video: true, seconds: 5.04 });
+  expect(parseProbe('  Duration: 01:02:03.50, start: 0\n  Stream #0:0: Video: vp9')).toEqual({ audio: false, video: true, seconds: 3723.5 });
+  expect(parseProbe('not a video')).toEqual({ audio: false, video: false, seconds: 0 });
 });
 
 test('videoSize falls back to 16:9', () => {
@@ -46,9 +46,9 @@ test('videoSize falls back to 16:9', () => {
 
 test('buildStitchArgs cuts or holds every clip to its length and adds silence only where there is none', () => {
   const args = buildStitchArgs([{ file: 'a.bin', seconds: 2, audio: true }, { file: 'b.bin', seconds: 4.5, audio: false }], videoSize('16:9'), 'out.mp4');
-  expect(args.slice(0, 7)).toEqual(['-hide_banner', '-nostdin', '-y', '-i', 'a.bin', '-i', 'b.bin']);
+  expect(args.slice(0, args.indexOf('-filter_complex'))).toEqual(['-hide_banner', '-nostdin', '-y', ...mediaInputArgs('a.bin'), ...mediaInputArgs('b.bin')]);
   const graph = args[args.indexOf('-filter_complex') + 1];
-  expect(graph).toContain('[0:v:0]fps=24,scale=1280:720');
+  expect(graph).toContain('[0:v:0]fps=24:start_time=0,scale=1280:720');
   expect(graph).toContain('tpad=stop_mode=clone:stop_duration=4.500,trim=duration=4.500');
   expect(graph).toContain('[0:a:0]aresample=48000');
   expect(graph).toContain('anullsrc=r=48000:cl=stereo,atrim=duration=4.500');
@@ -101,6 +101,21 @@ test('stitch rejects invalid input before running anything', async () => {
   await expect(ffmpeg.stitch(runId, { clips: [{ data: new Uint8Array(0), seconds: 2 }] })).rejects.toThrow('missing or larger');
   await expect(ffmpeg.stitch(runId, { clips: [{ data: 'path/to/file', seconds: 2 }] })).rejects.toThrow('missing or larger');
   await expect(ffmpeg.stitch(runId, { clips: [clip], aspectRatio: 5 })).rejects.toThrow('Invalid aspect ratio.');
+  for (const start of [NaN, Infinity, -1, '1']) {
+    await expect(ffmpeg.stitch(runId, { clips: [{ ...clip, start }] })).rejects.toThrow('Invalid clip trim');
+  }
+  await expect(ffmpeg.stitch(runId, { clips: [{ ...clip, mute: 1 }] })).rejects.toThrow('Invalid clip trim');
+  const track = { data: clip.data, start: 0, gain: 1 };
+  await expect(ffmpeg.stitch(runId, { clips: [clip], audio: Array(9).fill(track) })).rejects.toThrow('up to 8 audio tracks');
+  await expect(ffmpeg.stitch(runId, { clips: [clip], audio: [{ ...track, data: 'audio.mp3' }] })).rejects.toThrow('missing its media');
+  await expect(ffmpeg.stitch(runId, { clips: [clip], audio: [{ ...track, start: 2 }] })).rejects.toThrow('must start within');
+  await expect(ffmpeg.stitch(runId, { clips: [clip], audio: [{ ...track, gain: 2.01 }] })).rejects.toThrow('Audio gain');
+  const fullClip = { ...clip, data: new Uint8Array(maxClipBytes) };
+  await expect(ffmpeg.stitch(runId, { clips: Array(6).fill(fullClip), audio: [track] })).rejects.toThrow('media is too large');
+  const caption = { start: 0.5, end: 1.5, text: 'Thai' };
+  await expect(ffmpeg.stitch(runId, { clips: [clip], captions: Array(101).fill(caption) })).rejects.toThrow('up to 100 captions');
+  await expect(ffmpeg.stitch(runId, { clips: [clip], captions: [{ ...caption, end: 3 }] })).rejects.toThrow('positive duration');
+  await expect(ffmpeg.stitch(runId, { clips: [clip], captions: [caption, { ...caption, start: 0 }] })).rejects.toThrow('cannot overlap');
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -112,6 +127,7 @@ test('stitch needs the tool downloaded first', async () => {
 
 test('stitch probes each clip, runs ffmpeg without the secret and returns the video', async () => {
   const calls = [];
+  let subtitles;
   const spawnProcess = (command, args, options) => {
     calls.push({ command, args, options });
     const handlers = {};
@@ -119,6 +135,7 @@ test('stitch probes each clip, runs ffmpeg without the secret and returns the vi
     const proc = { stderr, kill() {}, on: (event, callback) => { handlers[event] = callback; } };
     queueMicrotask(() => {
       if (args.includes('-filter_complex')) {
+        if (args.includes('srt')) subtitles = readFileSync(args[args.indexOf('srt') + 2], 'utf8');
         writeFileSync(args.at(-1), 'mp4-bytes');
         handlers.stderr?.('frame=1 time=00:00:03.00 speed=2x');
       } else handlers.stderr?.('  Duration: 00:00:05.00, start: 0\n  Stream #0:0: Video: h264\n  Stream #0:1: Audio: aac');
@@ -136,5 +153,24 @@ test('stitch probes each clip, runs ffmpeg without the secret and returns the vi
   expect(calls[2].options.env.LOMRA_SECRET).toBeUndefined();
   expect(calls[2].args.join(' ')).toContain('scale=720:1280');
   expect(progress).toEqual([{ seconds: 3, total: 10 }]);
+  const data = new Uint8Array([1]);
+  await expect(ffmpeg.stitch(runId, { clips: [{ data, seconds: 2, start: 5 }] })).rejects.toThrow('starts outside its source');
+  expect(existsSync(join(dir, 'work', runId))).toBe(false);
+  await ffmpeg.stitch(runId, {
+    clips: [{ data, seconds: 2, start: 1.25 }, { data, seconds: 2, mute: true }],
+    audio: [{ data, start: 0.5, gain: 0.75 }, { data, start: 1 }],
+    captions: [{ start: 1, end: 2, text: 'After' }, { start: 0.25, end: 1, text: 'สวัสดี\n\n<i>ไทย</i>\0' }],
+  });
+  const args = calls.at(-1).args;
+  const graph = args[args.indexOf('-filter_complex') + 1];
+  expect(graph).toContain('trim=start=1.250000:duration=2.000');
+  expect(graph).toContain('[0:a:0]aresample=48000');
+  expect(graph).not.toContain('[1:a:0]');
+  expect(graph).toContain('volume=0.750000,adelay=24000S:all=1[track0]');
+  expect(graph).toContain('volume=1.000000,adelay=48000S:all=1[track1]');
+  expect(graph).toContain('[base][track0][track1]amix=inputs=3:duration=first:normalize=0[a]');
+  expect(args.slice(args.indexOf('4:s:0'), args.indexOf('4:s:0') + 5)).toEqual(['4:s:0', '-c:s', 'mov_text', '-disposition:s:0', '0']);
+  expect(subtitles).toBe('1\n00:00:00,250 --> 00:00:01,000\nสวัสดี ＜i＞ไทย＜/i＞\n\n2\n00:00:01,000 --> 00:00:02,000\nAfter\n\n');
+  expect(existsSync(join(dir, 'work', runId))).toBe(false);
   rmSync(dir, { recursive: true, force: true });
 });

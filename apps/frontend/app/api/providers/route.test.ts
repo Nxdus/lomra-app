@@ -182,6 +182,25 @@ test("Google requests use the Gemini endpoints, strip the model prefix and send 
     calls.length = 0;
     globalThis.fetch = (async (url, options) => {
       calls.push({ url: String(url), options });
+      const target = String(url);
+      if (target.endsWith("/interactions")) return Response.json({ steps: [{ type: "model_output", content: [{ type: "video", mime_type: "video/mp4", uri: "https://generativelanguage.googleapis.com/v1beta/files/om1" }] }] });
+      if (target.endsWith("/files/om1")) return Response.json({ state: "ACTIVE" });
+      return new Response("omni-bytes");
+    }) as typeof fetch;
+    const omni = { provider: "google", model: "google-ai/gemini-omni-1.2-flash" };
+    assert.deepEqual(await (await POST(request({ ...omni, action: "video", input: "a cat", aspectRatio: "3:4", duration: 20, images: ["data:image/png;base64,AAAA"] }))).json(), { id: "om1" });
+    assert.equal(calls[0].url, "https://generativelanguage.googleapis.com/v1beta/interactions");
+    assert.deepEqual(JSON.parse(String(calls[0].options?.body)), {
+      model: "gemini-omni-1.2-flash",
+      input: [{ type: "text", text: "a cat" }, { type: "image", data: "AAAA", mime_type: "image/png" }],
+      response_format: { type: "video", aspect_ratio: "9:16", duration: "15s", delivery: "uri" },
+    });
+    assert.deepEqual(await (await POST(request({ ...omni, action: "video-status", requestId: "om1" }))).json(), { status: "completed" });
+    assert.equal(await (await POST(request({ ...omni, action: "video-content", requestId: "om1" }))).text(), "omni-bytes");
+    assert.equal(calls.at(-1)?.url, "https://generativelanguage.googleapis.com/v1beta/files/om1:download?alt=media");
+    calls.length = 0;
+    globalThis.fetch = (async (url, options) => {
+      calls.push({ url: String(url), options });
       return Response.json({ data: [{ b64_json: "AAAA" }] });
     }) as typeof fetch;
     assert.equal((await POST(request({ provider: "google", action: "image", model: "google-ai/gemini-2.5-flash-image", input: "a cat" }))).status, 200);

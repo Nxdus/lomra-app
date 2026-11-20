@@ -1,7 +1,7 @@
 import { chatCompletion } from "./chat-stream";
 import { falErrorMessage } from "./provider-error";
 import { MAX_MEDIA_BYTES, MAX_MEDIA_ITEMS } from "@/components/prompt/media";
-import { GOOGLE_API, GOOGLE_MODEL_PREFIX, VEO_MODEL, googleModels, googleTools, veoOperation } from "./google";
+import { GOOGLE_API, GOOGLE_MODEL_PREFIX, OMNI_MODEL, VEO_MODEL, googleModels, googleTools, omniFileId, omniRequest, veoOperation } from "./google";
 import { generationPlan, generationTools, routingInstruction } from "./generation-tools";
 import { sameOrigin } from "../same-origin";
 import { usd } from "../models/price";
@@ -33,6 +33,7 @@ export async function POST(request: Request) {
   const google = provider === "google";
   let url: string;
   let payload: unknown;
+  let omni = false;
   if (action === "usage" || (action === "credits" && google)) {
     if (google) return json({ message: "Google AI Studio does not report usage through the API" }, 400);
     const falKeyId = key.split(":")[0];
@@ -68,6 +69,7 @@ export async function POST(request: Request) {
     if (google && !model.startsWith(GOOGLE_MODEL_PREFIX)) return json({ message: "A valid Google model ID is required" }, 400);
     if (local && !(model.startsWith(OLLAMA_PREFIX) && validOllamaName(model.slice(OLLAMA_PREFIX.length)))) return json({ message: "A valid local model ID is required" }, 400);
     const upstreamModel = google ? model.slice(GOOGLE_MODEL_PREFIX.length) : local ? model.slice(OLLAMA_PREFIX.length) : model;
+    omni = google && OMNI_MODEL.test(upstreamModel);
     if (provider !== "fal" && (action === "chat" || action === "route")) {
       let mediaCount = 0;
       let mediaBytes = 0;
@@ -109,21 +111,22 @@ export async function POST(request: Request) {
           tools: generationTools, tool_choice: "auto", stream: true };
       }
     } else if (provider !== "fal" && (action === "image" || action === "video")) {
-      if (google && action === "video" && !VEO_MODEL.test(upstreamModel)) return json({ message: "A valid Google Veo model ID is required" }, 400);
-      if (google && images?.length) return json({ message: "Google models do not support reference images yet" }, 400);
+      if (google && action === "video" && !VEO_MODEL.test(upstreamModel) && !omni) return json({ message: "A valid Google Veo or Omni model ID is required" }, 400);
+      if (google && images?.length && !(omni && action === "video")) return json({ message: "Google models do not support reference images yet" }, 400);
       if (typeof input !== "string" || !input.trim() || input.length > 8000) return json({ message: "A generation prompt is required" }, 400);
-      url = google ? (action === "video" ? `${GOOGLE_API}/models/${upstreamModel}:predictLongRunning` : `${GOOGLE_API}/openai/images/generations`) : `https://openrouter.ai/api/v1/${action === "image" ? "images" : "videos"}`;
+      url = google ? (action === "video" ? (omni ? `${GOOGLE_API}/interactions` : `${GOOGLE_API}/models/${upstreamModel}:predictLongRunning`) :`${GOOGLE_API}/openai/images/generations`) : `https://openrouter.ai/api/v1/${action === "image" ? "images" : "videos"}`;
       // Video takes at most one picture, the first frame; images take up to ten references.
       if (images !== undefined && (!Array.isArray(images) || images.length > (action === "video" ? 1 : MAX_MEDIA_ITEMS) ||
         images.some((url: unknown) => typeof url !== "string" || !/^data:image\/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/.test(url) || url.split(",")[1].length % 4 !== 0) ||
         images.reduce((sum: number, url: string) => sum + url.length, 0) > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + MAX_MEDIA_ITEMS * 64)) return json({ message: action === "video" ? "Invalid first frame image" : "Invalid reference images (up to 10 images, 20 MB total)" }, 400);
       if (duration !== undefined && (action !== "video" || typeof duration !== "number" || !Number.isInteger(duration) || duration < 1 || duration > 30)) return json({ message: "Invalid video duration" }, 400);
       if (aspectRatio !== undefined && (typeof aspectRatio !== "string" || !["1:1", "3:4", "9:16", "4:3", "16:9"].includes(aspectRatio))) return json({ message: "Invalid image aspect ratio" }, 400);
-      payload = google ? (action === "video" ? { instances: [{ prompt: input }] } : { model: upstreamModel, prompt: input, n: 1, response_format: "b64_json" }) : { model, prompt: input, ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}), ...(duration ? { duration } : {}), ...(images?.length && action === "video" ? { frame_images: [{ type: "image_url", image_url: { url: images[0] }, frame_type: "first_frame" }] } : {}), ...(images?.length && action === "image" ? { input_references: images.map((url: string) => ({ type: "image_url", image_url: { url } })) } : {}) };
+      payload = google ? (action === "video" ? (omni ? omniRequest(upstreamModel, input, images?.[0], aspectRatio, duration) : { instances: [{ prompt: input }] }) :{ model: upstreamModel, prompt: input, n: 1, response_format: "b64_json" }) : { model, prompt: input, ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}), ...(duration ? { duration } : {}), ...(images?.length && action === "video" ? { frame_images: [{ type: "image_url", image_url: { url: images[0] }, frame_type: "first_frame" }] } : {}), ...(images?.length && action === "image" ? { input_references: images.map((url: string) => ({ type: "image_url", image_url: { url } })) } : {}) };
     } else if (provider !== "fal" && (action === "video-status" || action === "video-content")) {
       if (typeof requestId !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(requestId)) return json({ message: "A valid request ID is required" }, 400);
-      if (google && !VEO_MODEL.test(upstreamModel)) return json({ message: "A valid Google Veo model ID is required" }, 400);
-      url = google ? `${GOOGLE_API}/models/${upstreamModel}/operations/${requestId}` : `https://openrouter.ai/api/v1/videos/${requestId}${action === "video-content" ? "/content" : ""}`;
+      if (google && !VEO_MODEL.test(upstreamModel) && !omni) return json({ message: "A valid Google Veo or Omni model ID is required" }, 400);
+      // Omni's request ID is the Files API id of its video: poll the file, then download it.
+      url = google ? (omni ? `${GOOGLE_API}/files/${requestId}${action === "video-content" ? ":download?alt=media" : ""}` : `${GOOGLE_API}/models/${upstreamModel}/operations/${requestId}`) :`https://openrouter.ai/api/v1/videos/${requestId}${action === "video-content" ? "/content" : ""}`;
     } else if (provider === "fal" && action === "submit") {
       if (!input || typeof input !== "object" || Array.isArray(input)) {
         return json({ message: "Model input is required" }, 400);
@@ -152,7 +155,7 @@ export async function POST(request: Request) {
       url = `https://queue.fal.run/${model.split("/").slice(0, 2).join("/")}/requests/${requestId}${action === "status" ? "/status" : action === "cancel" ? "/cancel" : ""}`;
     } else return json({ message: "Unsupported provider action" }, 400);
   }
-  const signal = AbortSignal.any([request.signal, AbortSignal.timeout(action === "image" ? 180_000 : local ? 300_000 : 60_000)]);
+  const signal = AbortSignal.any([request.signal, AbortSignal.timeout(action === "image" ? 180_000 : local || (omni && action === "video") ? 300_000 : 60_000)]);
   try {
     const usageUrl = url;
     let total = 0;
@@ -183,6 +186,14 @@ export async function POST(request: Request) {
         if (google && action === "verify" && [400, 401, 403].includes(status)) message = "API key was rejected";
         return json({ message }, [400, 401, 402, 403, 404, 422, 429].includes(status) ? status : 502);
       }
+      if (omni && action === "video-content") {
+        if (!response.body) return json({ message: "Google returned no video" }, 502);
+        return new Response(response.body, { headers: { "Content-Type": "video/mp4", "Cache-Control": "no-store" } });
+      }
+      if (omni && action === "video-status") {
+        const state = (await response.json() as { state?: unknown })?.state;
+        return json({ status: state === "ACTIVE" ? "completed" : state === "FAILED" ? "failed" : "in_progress" });
+      }
       if (google && (action === "video-status" || action === "video-content")) {
         const operation = veoOperation(await response.json());
         if (action === "video-status") return json({ status: !operation.done ? "in_progress" : operation.uri ? "completed" : "failed" });
@@ -207,6 +218,10 @@ export async function POST(request: Request) {
         return json({ message: "Provider returned an invalid response" }, 502);
       }
       if (action === "models") return json({ models: googleModels(result) });
+      if (omni && action === "video") {
+        const id = omniFileId(result);
+        return id ? json({ id }) : json({ message: "Google returned no video" }, 502);
+      }
       if (google && action === "video") {
         // Operation names look like models/<model>/operations/<id>; only the id is kept client-side.
         const id = "name" in result && typeof result.name === "string" ? result.name.split("/").pop() : undefined;

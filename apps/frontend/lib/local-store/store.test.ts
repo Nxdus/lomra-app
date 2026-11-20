@@ -83,14 +83,23 @@ test('deleting a canvas removes its chats, settings and unshared files only', as
   const { store: s } = await store();
   await s.save('canvas', 'default', [item('shared'), item('own')]);
   await s.save('canvas', canvasId, [item('shared')]);
-  for (const id of ['shared', 'own']) await s.writeFile(id, new Uint8Array([1]));
+  for (const id of ['shared', 'own', 'take', 'audio']) await s.writeFile(id, new Uint8Array([1]));
   await s.save('settings', 'camera', { x: 0, y: 0, scale: 1 });
   await s.save('settings', 'canvas-name-default', 'Main');
-  await s.save('chats', 'c1', { id: 'c1', title: 't', updatedAt: 1, history: [], generations: [], models: [] });
+  await s.save('chats', 'c1', {
+    id: 'c1', title: 't', updatedAt: 1, history: [], generations: [], models: [],
+    storyboard: {
+      story: 'A shot',
+      shots: [{ description: 'A shot', seconds: 4, image: null, references: [], takes: [{ fileId: 'take', source: { frame: null, prompt: 'A shot' } }] }],
+      timeline: { aspectRatio: '16:9', trims: [], captions: [], audio: [{ fileId: 'audio', name: 'sound.wav', kind: 'narration', start: 0, seconds: 2, gain: 1 }] },
+    },
+  });
   await s.remove('canvas', 'default');
   expect((await s.list('canvas')).map((row) => row.id)).toEqual([canvasId]);
   expect(await s.list('chats')).toEqual([]);
   expect(await s.list('settings')).toEqual([]);
   expect([...await s.readFile('shared')]).toEqual([1]);
   await expect(s.readFile('own')).rejects.toMatchObject({ status: 404 });
+  await expect(s.readFile('take')).rejects.toMatchObject({ status: 404 });
+  await expect(s.readFile('audio')).rejects.toMatchObject({ status: 404 });
 });

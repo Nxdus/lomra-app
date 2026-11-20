@@ -144,7 +144,12 @@ export type DesktopVideoApi = {
   cancelDownload(): Promise<void>;
   remove(): Promise<boolean>;
   /** Join clips (1-12, each at most 100 MB) into one MP4; each is cut or held to `seconds`. `runId` is a UUID. */
-  stitch(runId: string, input: { clips: { data: Uint8Array; seconds: number }[]; aspectRatio?: string }): Promise<{ video: Uint8Array } | { error: string }>;
+  stitch(runId: string, input: {
+    clips: { data: Uint8Array; seconds: number; start?: number; mute?: boolean }[];
+    aspectRatio?: string;
+    audio?: { data: Uint8Array; start: number; gain?: number }[];
+    captions?: { start: number; end: number; text: string }[];
+  }): Promise<{ video: Uint8Array } | { error: string }>;
   cancel(runId: string): void;
   onProgress(callback: (event: { runId: string; seconds: number; total: number }) => void): () => void;
 };

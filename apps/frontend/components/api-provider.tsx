@@ -35,7 +35,7 @@ export async function callProvider(provider: Provider, key: string, options: Pro
     headers: { "Content-Type": "application/json", "x-api-key": key },
     body: JSON.stringify({ provider, ...options, signal: undefined }),
     cache: "no-store",
-    signal: AbortSignal.any([AbortSignal.timeout(options.action === "image" ? 185_000 : provider === "ollama" ? 305_000 : 65_000), ...(options.signal ? [options.signal] : [])]),
+    signal: AbortSignal.any([AbortSignal.timeout(options.action === "image" ? 185_000 : provider === "ollama" || (provider === "google" && options.action === "video") ? 305_000 : 65_000), ...(options.signal ? [options.signal] : [])]),
   });
   if (response.ok && options.action === "video-content") return response.blob();
   const result = await response.json();

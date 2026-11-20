@@ -4,58 +4,67 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Textarea } from "@/components/ui/textarea";
 import { storyCharacterNotesLimit, type StoryCharacter } from "./storyboard-data";
 
-export function StoryboardCharacters({ characters, images, status, onEdit, onRemove, onGenerate, onStop }: {
+export function StoryboardCharacters({ characters, index, images, status, onEdit, onRemove, onGenerate, onStop }: {
   characters: StoryCharacter[];
+  index: number;
   images: { name: string; url: string }[];
   status: string;
   onEdit: (index: number, change: Partial<StoryCharacter>) => void;
-  onRemove: (index: number) => void;
-  onGenerate: (index: number) => void;
+  onRemove: () => void;
+  onGenerate: () => void;
   onStop: () => void;
 }) {
-  return <section aria-label="Storyboard cast" className="flex flex-col gap-3">
-      {status && <div className="flex items-center gap-2">
-        <p role="status" className="flex-1 text-sm text-muted-foreground">{status}</p>
-        <Button variant="outline" size="sm" onClick={onStop}>Stop</Button>
+  const character = characters[index];
+  if (!character) return null;
+  const selected = character.image === null ? undefined : images[character.image];
+  const url = selected?.url ?? (character.generatedId ? `/api/storage/files/${character.generatedId}` : undefined);
+  const name = character.name.trim() || `Character ${index + 1}`;
+  const canGenerate = character.image === null && !character.approved;
+
+  return <section aria-label={`Reference for ${name}`} className="grid gap-3 border-t bg-muted/25 p-3">
+    {status && <div className="flex items-center gap-2">
+      <p role="status" className="min-w-0 flex-1 text-xs text-muted-foreground">{status}</p>
+      <Button variant="outline" size="sm" onClick={onStop}>Stop</Button>
+    </div>}
+    <div className="flex min-w-0 items-center gap-3">
+      {url && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={url} alt={`Reference for ${name}`} className="size-12 shrink-0 rounded-full border object-cover" />
+      )}
+      <div className="grid min-w-0 flex-1 gap-1">
+        <span className="text-xs font-medium">Main reference</span>
+        <Select value={character.image?.toString() ?? "none"} disabled={!!status || !images.length} onValueChange={(value) => {
+          if (value !== null) onEdit(index, { image: value === "none" ? null : Number(value) });
+        }}>
+          <SelectTrigger size="sm" aria-label="Main reference" className="w-full min-w-0">
+            <SelectValue>{selected?.name ?? (character.approved ? "Generated reference" : character.generatedId ? "Generated preview" : images.length ? "Choose an attached image" : "No attached images")}</SelectValue>
+          </SelectTrigger>
+          <SelectContent><SelectGroup>
+            {character.generatedId && <SelectItem value="none">Generated image</SelectItem>}
+            {images.map((image, position) => <SelectItem key={position} value={String(position)}>{image.name}</SelectItem>)}
+          </SelectGroup></SelectContent>
+        </Select>
+      </div>
+    </div>
+    {canGenerate && !character.generatedId && <label className="grid min-w-0 gap-1 text-xs font-medium">
+      Appearance
+      <Textarea placeholder="Face, clothing, and distinguishing details" className="min-h-0 py-1.5" value={character.notes}
+        maxLength={storyCharacterNotesLimit} rows={2} disabled={!!status}
+        onChange={(event) => onEdit(index, { notes: event.target.value })} />
+    </label>}
+    <div className="flex flex-wrap items-center gap-2">
+      <Button variant="ghost" size="icon-sm" className="text-muted-foreground"
+        aria-label={`Remove ${name} from storyboard`} title={`Remove ${name} from storyboard`}
+        disabled={!!status} onClick={onRemove}><TrashIcon /></Button>
+      {canGenerate && <div className="ml-auto flex min-w-0 flex-wrap justify-end gap-2">
+        <Button variant="outline" size="sm" disabled={!!status || !character.name.trim()} onClick={onGenerate}>
+          {character.generatedId ? <RefreshCwIcon data-icon="inline-start" /> : <ImageIcon data-icon="inline-start" />}
+          {character.generatedId ? "Generate again" : "Generate reference"}
+        </Button>
+        {character.generatedId && <Button size="sm" disabled={!!status} onClick={() => onEdit(index, { approved: true })}>
+          <CheckIcon data-icon="inline-start" />Use this reference
+        </Button>}
       </div>}
-      <ol className="flex flex-col divide-y">
-        {characters.map((character, index) => {
-          const selected = character.image === null ? undefined : images[character.image];
-          const url = selected?.url ?? (character.generatedId ? `/api/storage/files/${character.generatedId}` : undefined);
-          const name = character.name.trim() || `Character ${index + 1}`;
-          return <li key={index} className="flex items-center gap-2 py-2 first:pt-0">
-            <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-muted-foreground">
-              {url
-                // eslint-disable-next-line @next/next/no-img-element
-                ? <img src={url} alt={`Reference for ${name}`} className="size-full object-cover" />
-                : <ImageIcon aria-label="No reference" className="size-4" />}
-            </div>
-            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <div className="flex items-center gap-1">
-                {character.image === null && !character.generatedId && <span className="min-w-0 flex-1 truncate px-1 text-sm font-medium">{name}</span>}
-                <Select value={character.image?.toString() ?? "none"} disabled={!!status} onValueChange={(value) => {
-                  if (value !== null) onEdit(index, { image: value === "none" ? null : Number(value) });
-                }}>
-                  <SelectTrigger size="sm" aria-label="Main reference" className={character.image === null && !character.generatedId ? "max-w-28" : "min-w-0 flex-1"}>
-                    <SelectValue>{selected?.name ?? (character.approved ? "Generated reference" : character.generatedId ? "Generated preview" : "Select reference")}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent><SelectGroup>
-                    {character.generatedId && <SelectItem value="none">Generated image</SelectItem>}
-                    {images.map((image, position) => <SelectItem key={position} value={String(position)}>{image.name}</SelectItem>)}
-                  </SelectGroup></SelectContent>
-                </Select>
-                {character.image === null && !character.approved && <>
-                  <Button variant="ghost" size="icon-sm" aria-label={character.generatedId ? "Generate again" : "Generate reference"} title={character.generatedId ? "Generate again" : "Generate reference"}
-                    disabled={!!status || !character.name.trim()} onClick={() => onGenerate(index)}>{character.generatedId ? <RefreshCwIcon /> : <ImageIcon />}</Button>
-                  {character.generatedId && <Button size="icon-sm" aria-label="Use this reference" title="Use this reference" disabled={!!status} onClick={() => onEdit(index, { approved: true })}><CheckIcon /></Button>}
-                </>}
-                <Button variant="ghost" size="icon-sm" aria-label={`Remove ${name}`} title={`Remove ${name}`} disabled={!!status} onClick={() => onRemove(index)}><TrashIcon /></Button>
-              </div>
-              {character.image === null && !character.generatedId && <Textarea aria-label="Appearance" placeholder="Appearance" className="min-h-0 py-1.5" value={character.notes} maxLength={storyCharacterNotesLimit} rows={1} disabled={!!status}
-                onChange={(event) => onEdit(index, { notes: event.target.value })} />}
-            </div>
-          </li>;
-        })}
-      </ol>
+    </div>
   </section>;
 }

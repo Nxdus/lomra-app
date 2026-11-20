@@ -3,7 +3,7 @@
 import { Tip } from "@/components/tip";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, Loader2Icon, MessageCircleIcon, MicIcon, PauseIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, TrashIcon } from "lucide-react";
+import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, Loader2Icon, MessageCircleIcon, MicIcon, PauseIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, Rows3Icon, ScanEyeIcon, TrashIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { chatStorage, persistentUrl, restoreGenerations, type Chat } from "./chat-storage";
 import { Button } from "@/components/ui/button";
@@ -35,16 +35,39 @@ import { desktopAgents, desktopOllama, desktopVideo, type AgentToolResult, type 
 import { swipeDeleteThreshold, useSwipeToDelete } from "@/hooks/use-swipe-to-delete";
 import { agentEfforts, agentLabels, localAgentModel, runAgentChat } from "./agent-chat";
 import { saveAgentLimits } from "./agent-limits";
-import { draftedShots, draftShotsInstruction, draftStoryInstruction, mergeStoryCharacters, shotImagePrompt, storyCharacterNotesLimit, storyLimit, storyReply, type Shot, type Storyboard, type StoryCharacter } from "./storyboard-data";
+import { draftedShots, draftShotsInstruction, draftStoryInstruction, ensureShotIds, mergeStoryCharacters, moveShot, shotImagePrompt, storyCharacterNotesLimit, storyLimit, storyReply, type Shot, type Storyboard, type StoryCharacter } from "./storyboard-data";
 import { storyboardLayout } from "@/lib/image-canvas/storyboard-layout";
-import { StoryboardShots, defaultSpot, shotsFrame, shotsOffset } from "./storyboard-shots";
+import { StoryboardShots, defaultSpot, shotsFrame } from "./storyboard-shots";
 import { StoryboardCharacters } from "./storyboard-characters";
+import { StoryboardExport } from "./storyboard-export";
+import { StoryboardPreview } from "./storyboard-preview";
+import { StoryboardTakes } from "./storyboard-take-controls";
+import { generateShotTake, matchingShotTakeJob, normalizeShotTakes, selectedShotTake, selectShotTake } from "./storyboard-takes";
+import { StoryboardTimeline } from "./storyboard-timeline";
+import { StoryboardReview } from "./storyboard-review";
+import { resolveStoryboardTimeline, storyboardTimelineEditError, storyboardTimelineRenderInput, type StoryboardTimelinePlan } from "./storyboard-timeline-data";
 import { characterMarker, promptText, PromptBadgeText, setStoryboardCaret, storyboardMarker, StoryboardInput } from "./storyboard-input";
 import { storageFile } from "@/lib/storage";
 import { characterContext, characterGeneration, listCharacters, loadCharacterReferences } from "./character-references";
 
 function notifyError(title: string) { toast.add({ title, type: "error" }); }
 const storyboardCommand = "/storyboard";
+
+function downloadStoryboardVideo(blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "storyboard.mp4";
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+function timelineCaptionsUrl(captions: StoryboardTimelinePlan["captions"]) {
+  if (!captions.length) return;
+  const timestamp = (seconds: number) => new Date(Math.round(seconds * 1000)).toISOString().slice(11, 23);
+  const cues = captions.map(({ start, end, text }) => `${timestamp(start)} --> ${timestamp(end)}\n${text.replaceAll("&", "&amp;").replaceAll("<", "&lt;")}\n\n`);
+  return URL.createObjectURL(new Blob(["WEBVTT\n\n", ...cues], { type: "text/vtt" }));
+}
 
 export function FloatingPrompt({ canvasId = "default", loading = false, onAddToCanvas, onFocusFile, selection = [], onModelPreview, onDeselect, storyboardHost, storyboardOrigin = { x: 0, y: 0 }, videoBounds, onVideoItem, onRemoveFromCanvas }: { videoBounds?: { x: number; y: number; width: number; height: number } | null; onVideoItem?: (id: string | undefined) => void; onRemoveFromCanvas?: (ids: string[]) => void; storyboardHost?: HTMLElement | null; storyboardOrigin?: { x: number; y: number }; canvasId?: string; loading?: boolean; onAddToCanvas?: (files: File[], at?: { x: number; y: number }) => Promise<string[]>; onFocusFile?: (file: File) => void; selection?: VisibleImage[]; onModelPreview?: (id: string) => string; onDeselect?: (ids: string[]) => void }) {
   const panel = useRef<HTMLElement>(null);
@@ -67,12 +90,23 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const [characterOptions, setCharacterOptions] = useState<Character[] | false | null>(null);
   const [characterIndex, setCharacterIndex] = useState(0);
   const [models, setModels] = useState<string[]>([]);
+  const [{ prices: modelPrices, vision }, setCatalogInfo] = useState<{ prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean> }>(() => ({ prices: new Map(), vision: new Map() }));
+  const videoModel = selectedModel(models, "video") ?? "";
+  const videoPrice = modelPrices.get(`video:${videoModel}`);
   const llm = selectedModel(models, "llm");
   const localEngine = localAgentModel(llm);
   const threeDModel = selectedModel(models, "3d") ?? "";
   const multiview = isMultiview(threeDModel);
   const [history, setHistory] = useState<ConversationMessage[]>([]);
   const [storyboard, setStoryboard] = useState<Storyboard>();
+  const [boardDialog, setBoardDialog] = useState<"preview" | "export" | "timeline" | "review" | null>(null);
+  const [timelineDownload, setTimelineDownload] = useState<{ plan: StoryboardTimelinePlan; action: "preview" | "export"; bytes: number } | null>(null);
+  const [timelinePreview, setTimelinePreview] = useState<{ video: string; captions?: string; blob: Blob } | null>(null);
+  const renderedTimeline = useRef<{ key: string; blob: Blob } | null>(null);
+  useEffect(() => () => {
+    if (timelinePreview) URL.revokeObjectURL(timelinePreview.video);
+    if (timelinePreview?.captions) URL.revokeObjectURL(timelinePreview.captions);
+  }, [timelinePreview]);
   const [editingStory, setEditingStory] = useState(false);
   const [storyDraft, setStoryDraft] = useState<string | null>(null);
   // Where the storyboard is while its section is being dragged; committed (and recorded for Undo) on release.
@@ -116,13 +150,18 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const [historySearch, setHistorySearch] = useState("");
   const [deleting, setDeleting] = useState<Chat | null>(null);
   const [redrafting, setRedrafting] = useState(false);
-  const [videoPlan, setVideoPlan] = useState<{ clips: number; pictures: number; model: string; toolBytes: number } | null>(null);
+  const [videoPlan, setVideoPlan] = useState<{ clips: number; resumes: number; stale: number; pictures: number; model: string; toolBytes: number } | null>(null);
+  const [takePlan, setTakePlan] = useState<{ shotId: string; model: string } | null>(null);
   const { swipe, bind: bindSwipe } = useSwipeToDelete();
   const [storageError, setStorageError] = useState("");
   const [saving, setSaving] = useState(false);
   const saves = useRef(Promise.resolve());
   const importing = useRef(false);
   const { keys, request } = useApiProviders();
+  const reviewProvider = llm ? providerOf(llm) : undefined;
+  const reviewUnavailable = !llm || localEngine || vision.get(llm) === false
+    ? "Select a chat model that can read images to review these shots."
+    : reviewProvider && reviewProvider !== "ollama" && !keys[reviewProvider] ? "Add the chat provider’s API key in Settings." : undefined;
   const active = useRef<AbortController | null>(null);
   const agentMessageIndex = useRef(0);
   const agentSelection = useRef<VisibleImage[] | null>(null);
@@ -134,8 +173,6 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
 
   // The canvas reads and restores shot node positions for Organize canvas and Undo.
   const latestStoryboard = useRef(storyboard);
-  // The Cast card only shows while a character still needs a reference; the shots then start at its left edge.
-  const castShown = !!storyboard?.characters?.some((character) => character.image === null && !character.approved);
   useEffect(() => { latestStoryboard.current = storyboard; });
   const origin = moving ?? storyboard?.origin ?? storyboardOrigin;
   const videoItemId = storyboard?.videoItemId;
@@ -174,15 +211,19 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   // Pin a new storyboard where the canvas had room for it, once the canvas is ready, so it no longer follows the pictures.
   if (!loading && storyboard && !storyboard.origin) setStoryboard({ ...storyboard, origin: storyboardOrigin });
   useEffect(() => {
-    storyboardLayout.read = () => latestStoryboard.current
-      ? { origin: latestStoryboard.current.origin, shots: latestStoryboard.current.shots?.map((shot) => shot.position) ?? [] } : null;
+    storyboardLayout.read = () => {
+      const current = latestStoryboard.current;
+      return current ? { origin: current.origin, shots: current.shots?.map((shot) => shot.position) ?? [], shotIds: current.shots?.map((shot) => shot.id) } : null;
+    };
     storyboardLayout.write = (layout) => setStoryboard((current) => {
+      const { shotIds } = layout;
       if (!current) return current;
+      if (shotIds && (shotIds.length !== current.shots?.length || current.shots.some((shot) => !shotIds.includes(shot.id)))) return current;
       const next = { ...current, origin: layout.origin };
       if (!next.origin) delete next.origin;
       if (current.shots?.length === layout.shots.length) {
         next.shots = current.shots.map((shot, index) => {
-          const moved = { ...shot, position: layout.shots[index] };
+          const moved = { ...shot, position: layout.shots[shotIds?.indexOf(shot.id) ?? index] };
           if (!moved.position) delete moved.position;
           return moved;
         });
@@ -217,7 +258,13 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
 
   // A chat that holds a storyboard puts it on the canvas; any other chat leaves the one already there.
   function showStoryboard(chat: Chat) {
-    setStoryboard(chat.storyboard);
+    setBoardDialog(null);
+    setTakePlan(null);
+    setVideoPlan(null);
+    setTimelineDownload(null);
+    setTimelinePreview(null);
+    renderedTimeline.current = null;
+    setStoryboard(chat.storyboard && ensureShotIds(chat.storyboard));
     setBoardOwner(chat.id);
     setStoryImages(chat.history[0]?.images ?? []);
   }
@@ -540,14 +587,30 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       await startLocalLlm(signal);
       setStatus(instruction === draftStoryInstruction ? "Refining story…" : "Drafting shots…");
     }
+    return storyboardChat(llm, instruction, text, images, signal, prior);
+  }
+
+  function storyboardChat(model: string, instruction: string, text: string, images: typeof storyImages, signal: AbortSignal, prior: ConversationMessage[] = []) {
     const content: MediaPart[] = [{ type: "text", text }];
     for (const [index, image] of images.entries()) {
       content.push({ type: "text", text: `Selected image ${index}: ${image.name}` }, { type: "image_url", image_url: { url: image.url } });
     }
-    return request(provider, {
-      action: "chat", model: llm, signal,
+    return request(providerOf(model), {
+      action: "chat", model, signal,
       input: [{ role: "system", content: instruction }, ...prior.slice(-20).map(({ role, content }) => ({ role, content })), { role: "user", content }],
     });
+  }
+
+  async function completeStoryboardReview(instruction: string, text: string, images: typeof storyImages, signal: AbortSignal) {
+    if (!llm || reviewUnavailable) throw new Error(reviewUnavailable ?? "Select a chat model.");
+    if (reviewProvider === "ollama") {
+      const response = await fetch("/api/ollama", { signal, cache: "no-store" });
+      const catalog = response.ok ? await response.json() as { models?: { id: string; vision: boolean }[] } : undefined;
+      if (!catalog?.models?.some(({ id, vision }) => llm === `ollama/${id}` && vision)) {
+        throw new Error("Choose a running Ollama model that reports vision support.");
+      }
+    }
+    return storyboardChat(llm, instruction, text, images, signal);
   }
 
   async function refineStory() {
@@ -591,7 +654,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       const input = JSON.stringify({ story: story.story, cast: characters.map(({ name, notes, image }, index) => ({ index, name, notes, image })) });
       const shots = draftedShots(await storyboardCompletion(draftShotsInstruction, input, storyImages, signal), storyImages.length, characters);
       signal.throwIfAborted();
-      setStoryboard({ ...story, shots });
+      setStoryboard(ensureShotIds({ ...story, shots }));
     });
   }
 
@@ -599,14 +662,27 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     setStoryboard((current) => current?.shots ? {
       ...current, shots: current.shots.map((shot, position) => {
         if (position !== index) return shot;
-        const next = { ...shot, ...change };
+        const next = { ...normalizeShotTakes(shot), ...change };
         if (!next.position) delete next.position;
         if (!next.videoId) delete next.videoId;
-        // A clip made from an older picture or description is no longer this shot's.
-        if (!("videoId" in change) && ("description" in change || "image" in change || "generatedId" in change)) delete next.videoId;
+        if ("videoId" in change && !change.videoId) delete next.selectedTakeId;
         return next;
       }),
     } : current);
+  }
+
+  function reorderShots(from: number, to: number) {
+    setStoryboard((current) => {
+      if (!current?.shots) return current;
+      const shots = moveShot(current.shots, from, to);
+      return shots === current.shots ? current : { ...current, shots };
+    });
+  }
+
+  function updateShotById(id: string, update: (shot: Shot) => Shot) {
+    setStoryboard((current) => current?.shots?.some((shot) => shot.id === id)
+      ? { ...current, shots: current.shots.map((shot) => shot.id === id ? update(shot) : shot) }
+      : current);
   }
 
   function editCharacter(index: number, change: Partial<StoryCharacter>) {
@@ -702,18 +778,49 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     return storyImages[shot.image!].url;
   }
 
+  function createTake(shot: Shot, model: string, label: string, signal: AbortSignal, aspectRatio?: string, resume = false) {
+    return generateShotTake({
+      shot, model, aspectRatio, resume, request, signal, loadPicture: shotPicture, updateShot: updateShotById,
+      saveFile: (file, signal) => saveStoryboardFile(file, label, signal),
+      onStatus: (next) => setStatus(`${label} · ${next}`),
+    });
+  }
+
+  function runShotTake(id: string, model: string, resume = false) {
+    const index = storyboard?.shots?.findIndex((shot) => shot.id === id) ?? -1;
+    const shot = storyboard?.shots?.[index];
+    if (!shot) return;
+    const label = `Shot ${index + 1} clip`;
+    void runStoryboard(`Preparing ${label.toLowerCase()}…`, async (signal) => {
+      await createTake(shot, model, label, signal, storyboard?.timeline?.aspectRatio, resume);
+    });
+  }
+
   // Asks before spending anything: every missing clip is one video generation, and the video tool is a one-time download.
   async function planStoryboardVideo(story: Storyboard) {
-    const model = selectedModel(models, "video");
-    if (!model) return notifyError("Select a video model in the prompt toolbar first.");
-    if (!videoStartImage(model)) return notifyError("This video model cannot start from a picture. Choose Gemini Create video or an OpenRouter video model.");
+    const shots = story.shots ?? [];
+    const missing = shots.filter((shot) => !selectedShotTake(shot));
+    const model = videoModel;
+    if (story.timeline) {
+      const error = storyboardTimelineEditError(story, story.timeline);
+      if (error) return notifyError(error);
+    }
+    const pending = shots.findIndex((shot) => !selectedShotTake(shot) && shot.pendingTake && !matchingShotTakeJob(shot, model, story.timeline?.aspectRatio));
+    if (pending >= 0) return notifyError(`Open Shot ${pending + 1} settings and check its saved job before making the video.`);
+    if (missing.length && !model) return notifyError("Select a video model in the prompt toolbar first.");
+    if (missing.length && !videoStartImage(model)) return notifyError("This video model cannot start from a picture. Choose Gemini Omni, Gemini Create video or an OpenRouter video model.");
     const bridge = desktopVideo();
     if (!bridge) return notifyError("Joining clips into one video needs the Lomra desktop app.");
     try {
       const tool = await bridge.status();
       if (!tool.supported) return notifyError("Joining clips into one video is not available on this computer yet.");
-      const shots = story.shots ?? [];
-      setVideoPlan({ clips: shots.filter((shot) => !shot.videoId).length, pictures: shots.filter((shot) => shot.image === null && !shot.generatedId).length, model, toolBytes: tool.installed ? 0 : tool.bytes });
+      if (latestStoryboard.current !== story) return;
+      const resumes = missing.filter((shot) => matchingShotTakeJob(shot, model, story.timeline?.aspectRatio)).length;
+      setVideoPlan({
+        clips: missing.length - resumes, resumes, stale: shots.filter((shot) => selectedShotTake(shot)?.stale).length,
+        pictures: missing.filter((shot) => shot.image === null && !shot.generatedId).length,
+        model, toolBytes: tool.installed ? 0 : tool.bytes,
+      });
     } catch { notifyError("Could not reach the video tool."); }
   }
 
@@ -737,70 +844,97 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     }
   }
 
-  // One clip per shot from its picture, then one video from all the clips. Finished pictures and clips stay on their shots, so a stopped run resumes.
-  async function makeStoryboardVideo(story: Storyboard) {
+  async function renderStoryboardPlan(bridge: DesktopVideoApi, plan: StoryboardTimelinePlan, signal: AbortSignal) {
+    const key = JSON.stringify(plan);
+    if (renderedTimeline.current?.key === key) return renderedTimeline.current.blob;
+    setStatus("Loading timeline media…");
+    const input = await storyboardTimelineRenderInput(plan, storageFile);
+    signal.throwIfAborted();
+    setStatus("Rendering timeline…");
+    const runId = crypto.randomUUID();
+    const unlisten = bridge.onProgress((event) => {
+      if (event.runId === runId) setStatus(`Rendering timeline · ${Math.round((event.seconds / Math.max(1, event.total)) * 100)}%`);
+    });
+    const cancel = () => bridge.cancel(runId);
+    signal.addEventListener("abort", cancel, { once: true });
+    try {
+      const result = await bridge.stitch(runId, input);
+      if ("error" in result) throw new Error(result.error);
+      signal.throwIfAborted();
+      const blob = new Blob([result.video as BlobPart], { type: "video/mp4" });
+      renderedTimeline.current = { key, blob };
+      return blob;
+    } finally {
+      unlisten();
+      signal.removeEventListener("abort", cancel);
+    }
+  }
+
+  async function renderFromTimeline(plan: StoryboardTimelinePlan, action: "preview" | "export") {
     const bridge = desktopVideo();
-    const model = selectedModel(models, "video");
-    if (!bridge || !model || !story.shots) return;
+    if (!bridge) throw new Error("Rendering a timeline needs the Lomra desktop app.");
+    const cached = renderedTimeline.current?.key === JSON.stringify(plan);
+    if (!cached) {
+      const tool = await bridge.status();
+      if (!tool.supported) throw new Error("Timeline rendering is unavailable on this computer.");
+      if (!tool.installed) {
+        setBoardDialog(null);
+        setTimelineDownload({ plan, action, bytes: tool.bytes });
+        return;
+      }
+    }
+    setBoardDialog(null);
+    await finishTimelineRender(bridge, plan, action, false);
+  }
+
+  async function finishTimelineRender(bridge: DesktopVideoApi, plan: StoryboardTimelinePlan, action: "preview" | "export", downloadTool: boolean) {
+    await runStoryboard("Preparing timeline…", async (signal) => {
+      if (downloadTool) await ensureVideoTool(bridge, signal);
+      const blob = await renderStoryboardPlan(bridge, plan, signal);
+      signal.throwIfAborted();
+      if (action === "export") downloadStoryboardVideo(blob);
+      else setTimelinePreview({ blob, video: URL.createObjectURL(blob), captions: timelineCaptionsUrl(plan.captions) });
+    });
+  }
+
+  // One clip per shot from its picture, then one video from all the clips. Finished pictures and clips stay on their shots, so a stopped run resumes.
+  async function makeStoryboardVideo(story: Storyboard, model: string) {
+    const bridge = desktopVideo();
+    if (!bridge || !story.shots) return;
     await runStoryboard("Preparing video…", async (signal) => {
       await ensureVideoTool(bridge, signal);
       const shots = [...story.shots!];
       for (const [index, first] of shots.entries()) {
         signal.throwIfAborted();
         const label = `Shot ${index + 1} of ${shots.length}`;
+        if (selectedShotTake(first)) continue;
         let shot = first;
         if (shot.image === null && !shot.generatedId) {
           if (!shot.description.trim()) throw new Error(`Shot ${index + 1} needs a description.`);
           setStatus(`${label} · drawing the picture…`);
           const generatedId = await renderShot(index, { ...story, shots }, signal);
-          editShot(index, { generatedId });
-          shot = shots[index] = { ...shot, generatedId };
+          if (shot.id) updateShotById(shot.id, (current) => ({ ...current, generatedId }));
+          shot = { ...shot, generatedId };
         }
-        if (shot.videoId) continue;
-        const prompt = `${shot.description}
-
-Animate this shot from the starting image with natural, subtle motion and camera movement. Keep the characters and the setting exactly as in the image. No text or subtitles.`;
-        const task: Generation = { id: crypto.randomUUID(), category: "video", model, status: "Waiting", prompt, aspectRatio: "16:9", startImage: true };
         setStatus(`${label} · making the clip…`);
-        const files = await generate(task, request, signal, ({ status }) => { if (status) setStatus(`${label} · ${status}`); }, undefined, [await shotPicture(shot, signal)]);
-        try {
-          const file = files.find((item) => item.kind === "video");
-          if (!file) throw new Error("The video model did not return a video.");
-          const videoId = await saveStoryboardFile(file, `Storyboard clip ${index + 1}`, signal);
-          editShot(index, { videoId });
-          shots[index] = { ...shot, videoId };
-        } finally {
-          files.forEach(({ url }) => { if (url.startsWith("blob:")) URL.revokeObjectURL(url); });
-        }
+        const take = await createTake(shot, model, `Storyboard clip ${index + 1}`, signal, story.timeline?.aspectRatio);
+        shots[index] = { ...shot, selectedTakeId: take.fileId, videoId: take.fileId };
       }
-      setStatus("Joining clips…");
-      const clips: { data: Uint8Array; seconds: number }[] = [];
-      for (const shot of shots) {
-        const blob = await storageFile(shot.videoId!);
-        if (!blob) throw new Error("Could not load a clip. Make the video again.");
-        clips.push({ data: new Uint8Array(await blob.arrayBuffer()), seconds: shot.seconds });
-      }
-      const runId = crypto.randomUUID();
-      const stopListening = bridge.onProgress((event) => { if (event.runId === runId) setStatus(`Joining clips · ${Math.round((event.seconds / Math.max(1, event.total)) * 100)}%`); });
-      const cancel = () => bridge.cancel(runId);
-      signal.addEventListener("abort", cancel, { once: true });
+      const blob = await renderStoryboardPlan(bridge, resolveStoryboardTimeline({ ...story, shots }), signal);
+      signal.throwIfAborted();
+      const url = URL.createObjectURL(blob);
       try {
-        const result = await bridge.stitch(runId, { clips, aspectRatio: "16:9" });
-        if ("error" in result) throw new Error(result.error);
-        const url = URL.createObjectURL(new Blob([result.video as BlobPart], { type: "video/mp4" }));
-        try {
-          // The video sits at the end of the flow, to the right of the shots; making it again replaces the last one.
-          const previous = latestStoryboard.current?.videoItemId;
-          if (previous) onRemoveFromCanvas?.([previous]);
-          const frame = shotsFrame(shots.map((shot, index) => shot.position ?? defaultSpot(index)));
-          const base = { x: origin.x + (castShown ? shotsOffset : 0), y: origin.y };
-          const itemId = await addToCanvas({ url, name: "Storyboard", kind: "video" }, [], signal, { x: base.x + frame.left + frame.width + 100, y: base.y + frame.anchorY });
-          setStoryboard((current) => current ? { ...current, videoItemId: itemId } : current);
-        } finally { URL.revokeObjectURL(url); }
-      } finally {
-        stopListening();
-        signal.removeEventListener("abort", cancel);
-      }
+        const frame = shotsFrame(shots.map((shot, index) => shot.position ?? defaultSpot(index)));
+        const base = { x: origin.x, y: origin.y };
+        const itemId = await addToCanvas({ url, name: "Storyboard", kind: "video" }, [], signal, { x: base.x + frame.left + frame.width + 100, y: base.y + frame.anchorY });
+        if (!itemId) throw new Error("Could not add the video to the canvas.");
+        if (signal.aborted) {
+          onRemoveFromCanvas?.([itemId]);
+          signal.throwIfAborted();
+        }
+        if (story.videoItemId) onRemoveFromCanvas?.([story.videoItemId]);
+        setStoryboard((current) => current ? { ...current, videoItemId: itemId } : current);
+      } finally { URL.revokeObjectURL(url); }
     });
   }
 
@@ -1068,14 +1202,64 @@ Animate this shot from the starting image with natural, subtle motion and camera
             <DialogTitle>Make video?</DialogTitle>
             <DialogDescription>
               {videoPlan.clips > 0
-                ? `Lomra will make ${videoPlan.clips} clip${videoPlan.clips === 1 ? "" : "s"} with ${videoPlan.model}${videoPlan.pictures > 0 ? ` (after drawing ${videoPlan.pictures} missing shot image${videoPlan.pictures === 1 ? "" : "s"})` : ""}, then join them into one video on the canvas. Each clip uses your video model's credits or limits.`
-                : "Every shot already has its clip. Lomra will join them into one video on the canvas."}
+                ? `Lomra will make ${videoPlan.clips} new clip${videoPlan.clips === 1 ? "" : "s"} with ${videoPlan.model}${videoPlan.pictures > 0 ? ` (after drawing ${videoPlan.pictures} missing shot image${videoPlan.pictures === 1 ? "" : "s"})` : ""}. New clips use your video model's credits or limits.`
+                : "Lomra will use your existing clips and saved jobs."}
+              {videoPlan.clips > 0 && modelPrices.has(`video:${videoPlan.model}`) && ` Model rate: ${modelPrices.get(`video:${videoPlan.model}`)}.`}
+              {videoPlan.resumes > 0 && ` Saved jobs to resume: ${videoPlan.resumes}.`}
+              {videoPlan.stale > 0 && ` Selected takes using earlier shot inputs: ${videoPlan.stale}.`}
+              {" Lomra will join the clips into one video on the canvas."}
               {videoPlan.toolBytes > 0 && ` Joining needs a small video tool (about ${Math.round(videoPlan.toolBytes / 1_000_000)} MB), downloaded once.`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setVideoPlan(null)}>Cancel</Button>
-            <Button onClick={() => { setVideoPlan(null); if (storyboard) void makeStoryboardVideo(storyboard); }}>Make video</Button>
+            <Button onClick={() => { setVideoPlan(null); if (storyboard) void makeStoryboardVideo(storyboard, videoPlan.model); }}>Make video</Button>
+          </DialogFooter>
+        </DialogContent>}
+      </Dialog>
+      <Dialog open={!!timelineDownload} onOpenChange={(open) => { if (!open) setTimelineDownload(null); }}>
+        {timelineDownload && <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Download video tool?</DialogTitle>
+            <DialogDescription>Rendering needs a one-time download of about {Math.round(timelineDownload.bytes / 1_000_000)} MB.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setTimelineDownload(null); setBoardDialog("timeline"); }}>Cancel</Button>
+            <Button onClick={() => {
+              const bridge = desktopVideo();
+              setTimelineDownload(null);
+              if (bridge) void finishTimelineRender(bridge, timelineDownload.plan, timelineDownload.action, true);
+            }}>Download and render</Button>
+          </DialogFooter>
+        </DialogContent>}
+      </Dialog>
+      <Dialog open={!!timelinePreview} onOpenChange={(open) => { if (!open) setTimelinePreview(null); }}>
+        {timelinePreview && <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Timeline preview</DialogTitle>
+            <DialogDescription>Play the rendered edit before exporting.</DialogDescription>
+          </DialogHeader>
+          <video src={timelinePreview.video} controls playsInline className="max-h-[60vh] w-full rounded-md bg-black">
+            {timelinePreview.captions && <track kind="subtitles" label="Storyboard subtitles" src={timelinePreview.captions} default />}
+          </video>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setTimelinePreview(null); setBoardDialog("timeline"); }}>Back to timeline</Button>
+            <Button onClick={() => downloadStoryboardVideo(timelinePreview.blob)}>Export MP4</Button>
+          </DialogFooter>
+        </DialogContent>}
+      </Dialog>
+      <Dialog open={!!takePlan} onOpenChange={(open) => { if (!open) setTakePlan(null); }}>
+        {takePlan && <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Generate clip take?</DialogTitle>
+            <DialogDescription>
+              Generate one clip with {takePlan.model} using your video model’s credits or limits.
+              {modelPrices.has(`video:${takePlan.model}`) && ` Model rate: ${modelPrices.get(`video:${takePlan.model}`)}.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTakePlan(null)}>Cancel</Button>
+            <Button onClick={() => { setTakePlan(null); runShotTake(takePlan.shotId, takePlan.model); }}>Generate take</Button>
           </DialogFooter>
         </DialogContent>}
       </Dialog>
@@ -1191,19 +1375,39 @@ Animate this shot from the starting image with natural, subtle motion and camera
       </AccordionItem>
       </Accordion>
       {storyboard && storyboardHost && createPortal(<>
-        {castShown && <section aria-label="Cast" className="absolute flex w-[460px] flex-col gap-2 rounded-3xl border bg-background p-4 shadow-lg" style={{ left: origin.x, top: origin.y }}>
-          <h3 onPointerDown={startMove} title="Drag to move the storyboard" className="w-fit cursor-grab touch-none text-sm font-medium select-none active:cursor-grabbing">Cast</h3>
-        <StoryboardCharacters characters={storyboard.characters ?? []} images={storyImages} status={status}
-          onEdit={editCharacter} onRemove={removeCharacter}
-          onGenerate={(index) => void generateCharacter(index, storyboard.characters![index], storyboard.story)}
-          onStop={() => active.current?.abort()} />
-        </section>}
-        {storyboard.shots && <div className="absolute top-0 left-0" style={{ transform: `translate(${origin.x + (castShown ? shotsOffset : 0)}px, ${origin.y}px)` }}>
+        {storyboard.shots && <div className="absolute top-0 left-0" style={{ transform: `translate(${origin.x}px, ${origin.y}px)` }}>
         <StoryboardShots shots={storyboard.shots} images={storyImages} characters={storyboard.characters ?? []}
-          busy={!!status} status={status} onEdit={editShot} onGenerate={(index) => void generateShot(index, storyboard)} onStop={() => active.current?.abort()}
-          video={videoBounds && { ...videoBounds, x: videoBounds.x - origin.x - (castShown ? shotsOffset : 0), y: videoBounds.y - origin.y }} onMoveStart={startMove} onMakeVideo={() => void planStoryboardVideo(storyboard)} onEditStory={() => setStoryDraft(storyboard.story)} onRedraft={() => setRedrafting(true)} />
+          busy={!!status} status={status} onEdit={editShot} onReorder={reorderShots} onGenerate={(index) => void generateShot(index, storyboard)} onStop={() => active.current?.abort()}
+          renderCharacterReference={(index, close) => <StoryboardCharacters characters={storyboard.characters ?? []} index={index} images={storyImages} status={status}
+            onEdit={editCharacter} onRemove={() => { removeCharacter(index); close(); }}
+            onGenerate={() => void generateCharacter(index, storyboard.characters![index], storyboard.story)}
+            onStop={() => active.current?.abort()} />}
+          renderTakeControls={(shot, close) => shot.id && <StoryboardTakes shot={shot} model={videoStartImage(videoModel) ? videoModel : ""} aspectRatio={storyboard.timeline?.aspectRatio} disabled={!!status} price={videoPrice}
+            onSelect={(id) => updateShotById(shot.id!, (current) => selectShotTake(current, id))}
+            onGenerate={(action) => {
+              close();
+              if (action === "resume") runShotTake(shot.id!, videoModel, true);
+              else setTakePlan({ shotId: shot.id!, model: videoModel });
+            }} />}
+          toolbarActions={<>
+            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Preview storyboard" onClick={() => setBoardDialog("preview")} />}><PlayIcon /></TooltipTrigger><TooltipContent>Preview storyboard</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Export storyboard" onClick={() => setBoardDialog("export")} />}><DownloadIcon /></TooltipTrigger><TooltipContent>Export storyboard</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Edit timeline" onClick={() => setBoardDialog("timeline")} />}><Rows3Icon /></TooltipTrigger><TooltipContent>Edit timeline</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="AI storyboard review" onClick={() => setBoardDialog("review")} />}><ScanEyeIcon /></TooltipTrigger><TooltipContent>AI storyboard review</TooltipContent></Tooltip>
+          </>}
+          video={videoBounds && { ...videoBounds, x: videoBounds.x - origin.x, y: videoBounds.y - origin.y }} onMoveStart={startMove} onMakeVideo={() => void planStoryboardVideo(storyboard)} onEditStory={() => setStoryDraft(storyboard.story)} onRedraft={() => setRedrafting(true)} />
         </div>}
       </>, storyboardHost)}
+      {storyboard?.shots && <>
+        <StoryboardPreview storyboard={storyboard} images={storyImages} open={boardDialog === "preview"} onOpenChange={(open) => setBoardDialog(open ? "preview" : null)} />
+        <StoryboardExport storyboard={storyboard} images={storyImages} open={boardDialog === "export"} onOpenChange={(open) => setBoardDialog(open ? "export" : null)} />
+        <StoryboardTimeline storyboard={storyboard} images={storyImages} open={boardDialog === "timeline"} onOpenChange={(open) => setBoardDialog(open ? "timeline" : null)}
+          onSelectTake={(shotId, fileId) => updateShotById(shotId, (shot) => selectShotTake(shot, fileId))}
+          onSave={(timeline) => setStoryboard((current) => current ? { ...current, timeline } : current)}
+          onPreview={(plan) => renderFromTimeline(plan, "preview")} onExport={(plan) => renderFromTimeline(plan, "export")} />
+        <StoryboardReview storyboard={storyboard} images={storyImages} open={boardDialog === "review"} onOpenChange={(open) => setBoardDialog(open ? "review" : null)}
+          contextKey={JSON.stringify([canvasId, boardOwner, llm])} unavailableReason={reviewUnavailable} complete={completeStoryboardReview} onUpdate={setStoryboard} />
+      </>}
       {!storyboard && selection.some(({ file }) => !storyboardQueued || canvasFileKind(file) === "image") && <div aria-label="Selected canvas items" className="flex max-h-36 gap-2 overflow-x-auto px-3 py-2">
         {selection.filter(({ file }) => !storyboardQueued || canvasFileKind(file) === "image").map((item) => <div key={item.id} title={item.file.name} className="flex size-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted">
           {canvasFileKind(item.file) === "image" ? (
@@ -1321,7 +1525,7 @@ Animate this shot from the starting image with natural, subtle motion and camera
           <div className="ml-auto flex min-w-0 items-center gap-2">
           {localEngine && agentEfforts[localEngine.engine] && <EffortPicker levels={agentEfforts[localEngine.engine] ?? []} value={efforts[localEngine.engine]}
             onChange={(level) => changeEffort(localEngine.engine, level)} disabled={!!status} />}
-          <ModelSelector models={models} onModelsChange={setModels} disabled={!!status} />
+          <ModelSelector models={models} onModelsChange={setModels} onCatalogInfoChange={setCatalogInfo} disabled={!!status} />
           <SpeechMenu><Button variant="ghost" size="icon-sm" aria-label="Record audio" title="Record audio · right-click for speech models" disabled={!!status} onClick={() => setVoiceMode(true)}>
             <MicIcon />
           </Button></SpeechMenu>

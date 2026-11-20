@@ -19,8 +19,8 @@ type RequestProvider = (provider: Provider, options: ProviderRequest) => Promise
 
 /** Models from Google AI Studio carry this prefix; everything else is routed through OpenRouter. */
 export const modelProvider = (model: string): "google" | "openrouter" => model.startsWith("google-ai/") ? "google" : "openrouter";
-/** Whether a video model can start from a picture. Google's Veo API takes text only; Gemini Create video and OpenRouter models take a first frame. */
-export const videoStartImage = (model: string) => modelProvider(model) !== "google";
+/** Whether a video model can start from a picture. Google's Veo API takes text only; Gemini Omni, Gemini Create video and OpenRouter models take a first frame. */
+export const videoStartImage = (model: string) => modelProvider(model) !== "google" || model.startsWith("google-ai/gemini-omni-");
 /** Models installed in Ollama run on this computer and carry this prefix. */
 export const ollamaPrefix = "ollama/";
 export const isOllamaModel = (model: string) => model.startsWith(ollamaPrefix);
