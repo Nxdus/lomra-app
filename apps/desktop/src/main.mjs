@@ -17,6 +17,7 @@ import { generateBrowserImage } from './browser-image.mjs';
 import { generateGeminiMedia } from './browser-gemini.mjs';
 import { openChatGPTPage, openGeminiPage, signInChatGPT, signInGemini } from './browser-image-page.mjs';
 import { defaultSpeechModel, speechModelInstalled, speechModels } from './speech-models.mjs';
+import { createUpdates, isReleaseUrl } from './updates.mjs';
 
 const frontend = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'frontend');
 const smoke = process.env.LOMRA_SMOKE === '1';
@@ -28,6 +29,8 @@ let appOrigin;
 let mainWindow;
 let quitting = false;
 const ollama = createOllama();
+const updates = createUpdates({ currentVersion: app.getVersion(), isPackaged: app.isPackaged });
+let updateController = null;
 // Local image generation (stable-diffusion.cpp); created on first use because userData is only known once the app is ready.
 let ffmpegInstance;
 const ffmpeg = () => ffmpegInstance ??= createFfmpeg({ dir: join(app.getPath('userData'), 'ffmpeg') });
@@ -334,6 +337,42 @@ ipcMain.handle('agent:chat', (event, runId, id, prompt, sessionId, model, effort
 ipcMain.on('agent:chat-cancel', (event, runId) => { if (trusted(event)) agents.cancelChat(runId); });
 ipcMain.on('agent:tool-result', (event, callId, result) => { if (trusted(event) && typeof callId === 'string') toolBridge.settle(callId, result); });
 ipcMain.on('agent:kill', (event, id) => { if (trusted(event)) agents.kill(id); });
+ipcMain.handle('app:version', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return app.getVersion(); });
+ipcMain.handle('app:checkUpdate', (event, force) => { if (!trusted(event)) throw new Error('Untrusted sender'); return updates.check(Boolean(force)); });
+ipcMain.handle('app:openRelease', async (event, url) => {
+  if (!trusted(event)) throw new Error('Untrusted sender');
+  if (!isReleaseUrl(url)) return false;
+  await shell.openExternal(url);
+  return true;
+});
+ipcMain.handle('app:installUpdate', async (event) => {
+  if (!trusted(event)) throw new Error('Untrusted sender');
+  if (updateController) return { ok: false, error: 'An update is already downloading.' };
+  const controller = new AbortController();
+  updateController = controller;
+  try {
+    const result = await updates.install({
+      dir: join(app.getPath('temp'), 'lomra-update'),
+      signal: controller.signal,
+      onProgress: (progress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:updateProgress', progress);
+      },
+    });
+    if (!result.ok) return result;
+    updates.launch(result.path);
+    if (updateController === controller) updateController = null;
+    app.quit();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Update failed.' };
+  } finally {
+    if (updateController === controller) updateController = null;
+  }
+});
+ipcMain.handle('app:cancelUpdate', (event) => {
+  if (!trusted(event)) throw new Error('Untrusted sender');
+  updateController?.abort();
+});
 
 /** Send one second of silence through the voice route; 200 means the bundled speech model loaded and ran. A missing model is downloaded without asking here. */
 async function smokeVoice(url) {
@@ -401,6 +440,7 @@ app.on('second-instance', () => {
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => {
   quitting = true;
+  updateController?.abort();
   for (const controller of imageRuns.values()) controller.abort();
   agents.killAll();
   toolBridge.close();

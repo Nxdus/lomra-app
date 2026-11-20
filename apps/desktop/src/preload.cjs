@@ -71,4 +71,12 @@ contextBridge.exposeInMainWorld('lomra', {
     downloadModel: (id) => ipcRenderer.invoke('speech:downloadModel', id),
     deleteModel: (id) => ipcRenderer.invoke('speech:deleteModel', id),
   },
+  app: {
+    version: () => ipcRenderer.invoke('app:version'),
+    checkUpdate: (force) => ipcRenderer.invoke('app:checkUpdate', force),
+    openRelease: (url) => ipcRenderer.invoke('app:openRelease', url),
+    installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
+    cancelUpdate: () => ipcRenderer.invoke('app:cancelUpdate'),
+    onUpdateProgress: (callback) => subscribe('app:updateProgress', callback),
+  },
 });

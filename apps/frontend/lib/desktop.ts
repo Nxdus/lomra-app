@@ -194,3 +194,32 @@ export type DesktopLocal3dApi = {
 export function desktopLocal3d(): DesktopLocal3dApi | undefined {
   return (window as unknown as { lomra?: { local3d?: DesktopLocal3dApi } }).lomra?.local3d;
 }
+
+export type UpdateInfo = {
+  current: string;
+  latest?: string;
+  available?: boolean;
+  url?: string;
+  notes?: string;
+  publishedAt?: string;
+  assetUrl?: string;
+  assetName?: string;
+  assetSize?: number;
+  assetSha256?: string;
+  canInstall?: boolean;
+  error?: string;
+};
+
+/** App version and GitHub release update checks in the desktop app. */
+export type DesktopAppApi = {
+  version(): Promise<string>;
+  checkUpdate(force?: boolean): Promise<UpdateInfo>;
+  openRelease(url: string): Promise<boolean>;
+  installUpdate(): Promise<{ ok: boolean; error?: string }>;
+  cancelUpdate(): Promise<void>;
+  onUpdateProgress(callback: (event: { received: number; total: number }) => void): () => void;
+};
+
+export function desktopApp(): DesktopAppApi | undefined {
+  return (window as unknown as { lomra?: { app?: DesktopAppApi } }).lomra?.app;
+}
