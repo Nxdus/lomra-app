@@ -20,7 +20,8 @@ import { useDisabledAgents } from "@/hooks/use-disabled-agents";
 import { desktopAgents } from "@/lib/desktop";
 import { localAgentModel } from "./agent-chat";
 import { callProvider, useApiProviders } from "@/components/api-provider";
-import { PlusIcon, Trash2Icon } from "lucide-react";
+import { KeyIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { ModelSetupDialog } from "@/components/first-run/model-setup-dialog";
 import { StabilityIcon } from "@/components/stability-icon";
 import { OllamaIcon } from "@/components/ollama-icon";
 import falIcon from "./provider-icons/fal.png";
@@ -179,6 +180,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, dis
   const canDelete = items.length > 1;
   const [attempt, setAttempt] = useState(0);
   const [open, setOpen] = useState(false);
+  const [modelSetupOpen, setModelSetupOpen] = useState(false);
   const [addingGroup, setAddingGroup] = useState<Group | null>(null);
   const [addProvider, setAddProvider] = useState<string | null>(null);
   const refreshSd = sd.refresh;
@@ -526,8 +528,24 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, dis
               {group.error ? "Models unavailable" : "No models available"}
             </SelectItem>}
           </SelectGroup>)}
+          <div className="border-t border-border p-1.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start gap-2 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                setOpen(false);
+                setModelSetupOpen(true);
+              }}
+            >
+              <KeyIcon className="size-3.5" />
+              <span>Configure API keys & local models…</span>
+            </Button>
+          </div>
         </SelectContent>
       </Select>
+      <ModelSetupDialog open={modelSetupOpen} onOpenChange={setModelSetupOpen} />
       <ConfirmDelete open={!!deletingModel} onOpenChange={(open) => { if (!open) setDeletingModel(null); }} title="Delete model?" description={`“${deletingModel?.name}” will be removed from your model list.`} disabled={disabled || settingsSaving || !canDelete} onConfirm={async () => { if (deletingModel) await removeModel(deletingModel.value); }} />
       <Dialog open={!!addingGroup} onOpenChange={(open) => { if (!open) setAddingGroup(null); }}>
         <DialogContent className="gap-4 rounded-2xl p-4 shadow-lg">

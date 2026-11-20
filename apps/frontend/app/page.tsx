@@ -5,6 +5,7 @@ import { FloatingPrompt } from "@/components/prompt/floating-prompt";
 import { ImageCanvas, type CanvasHandle, type VisibleImage } from "@/components/image-canvas";
 import type { ImageBounds } from "@/lib/image-canvas/image-canvas-resize";
 import { PopupBoundaryContext } from "@/components/ui/popup-boundary";
+import { FirstRunFlow } from "@/components/first-run/first-run-flow";
 
 export default function Home() {
   const canvas = useRef<CanvasHandle>(null);
@@ -31,6 +32,7 @@ export default function Home() {
       <main ref={setContentBoundary} className="relative min-h-0 flex-1 overflow-hidden">
         <PopupBoundaryContext value={contentBoundary ?? undefined}>
           <ImageCanvas ref={canvas} onSelectionChange={setSelection} onReadyChange={setCanvasReady} onCanvasChange={setCanvasId} onStoryboardHost={setStoryboardHost} onStoryboardOrigin={setStoryboardOrigin} watchItem={videoItem} onWatchedBounds={setVideoBounds} />
+          <FirstRunFlow canvasRef={canvas} canvasReady={canvasReady} />
           <div className="relative z-10">
             <FloatingPrompt key={canvasId} canvasId={canvasId} storyboardHost={storyboardHost} storyboardOrigin={storyboardOrigin} videoBounds={videoBounds} onVideoItem={setVideoItem} onRemoveFromCanvas={(ids) => canvas.current?.removeItems(ids)} loading={!canvasReady} selection={selection} onDeselect={(ids) => canvas.current?.deselect(ids)} onModelPreview={(id) => {
               if (!canvas.current) throw new Error("Canvas is not ready");
