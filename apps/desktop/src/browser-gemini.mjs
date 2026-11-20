@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { control, imageType, sameUrl } from './browser-image.mjs';
 
-const home = 'https://gemini.google.com/app?hl=en';
 const conversation = /^https:\/\/gemini\.google\.com(?:\/u\/\d+)?\/app\/[\w-]+$/;
 const maxImageBytes = 20 * 1024 * 1024;
 const maxVideoBytes = 100 * 1024 * 1024;
@@ -17,7 +16,7 @@ const autoSelected = /\bcurrently(?: selected:?| using)?\s+(?:Gemini )?Auto\b/i;
 // Gemini's "limit reached / try again later" replies, in English and Thai.
 const declined = /unusually high|reached (?:its|the|your) [\w ]*limits?|(?:can(?:'|’)?t|cannot|unable to) (?:create|generate) (?:videos?|images?)|try again later|ลองอีกครั้งในภายหลัง|ขีดจำกัด|ไม่สามารถสร้าง(?:วิดีโอ|วิดิโอ|รูปภาพ|ภาพ)/i;
 
-const isHome =url => sameUrl(url, home);
+const isComposerPage = url => /^https:\/\/gemini\.google\.com(?:\/u\/\d+)?\/app(?:\/(?:images?|videos?|create-image|create-video))?$/.test(url.split(/[?#]/)[0].replace(/\/+$/, ''));
 const isConversation = url => conversation.test(url.split(/[?#]/)[0].replace(/\/+$/, ''));
 
 function videoType(bytes) {
@@ -78,11 +77,11 @@ export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } 
           deadline = Date.now() + timeout;
           continue;
         }
-        if ((url && !sameUrl(state.url, url)) || (!url && !isHome(state.url) && !isConversation(state.url))) {
+        if ((url && !sameUrl(state.url, url)) || (!url && !isComposerPage(state.url) && !isConversation(state.url))) {
           throw new Error('The Gemini page navigated away from this request.');
         }
-        if (!url && isConversation(state.url)) url = state.url;
-        const node = find(state);
+        if (!url && !isComposerPage(state.url) && isConversation(state.url)) url = state.url;
+        const node = await find(state);
         if (node) return { node, url: state.url };
         await delay(interval, undefined, { signal });
       }
@@ -92,69 +91,103 @@ export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } 
       if (cause.message) throw cause;
     });
 
-    const composer = await waitFor(/(?:)/, { url: home, role: 'textbox', allowSignIn: true, error: 'Could not find the Gemini prompt box.' });
-    await page.clear?.(home);
+    let { url: composerUrl } = await waitFor(/(?:)/, { role: 'textbox', allowSignIn: true, error: 'Could not find the Gemini prompt box.',
+      find: state => isComposerPage(state.url) && control(state, /(?:)/, 'textbox'),
+    });
+    await page.clear?.(composerUrl);
 
     // Best effort: Gemini remembers the last mode it was used in, so choose Auto explicitly.
     let mode;
     const findPicker = state => control(state, modelPicker) ?? control({
       nodes: state.nodes.filter(node => node.properties?.some(({ name, value }) => name === 'hasPopup' && ['menu', 'listbox'].includes(value.value))),
     }, /^(?:Gemini )?(?:Auto|Flash-Lite|Flash|Fast|Thinking|Pro)$/i);
-    const picker = await optional(modelPicker, { url: home, timeout: 4000, find: findPicker });
+    const picker = await optional(modelPicker, { url: composerUrl, timeout: 4000, find: findPicker });
     if (!picker) mode = 'Could not verify Auto in Gemini. Check Settings → Usage limits → Auto model selection.';
     else if (!autoSelected.test(picker.node.name.value) && !autoModel.test(picker.node.name.value)) {
-      await page.click(picker.node, home);
-      const auto = await optional(autoModel, { url: home, role: menuRoles, timeout: 4000 });
-      if (auto) await page.click(auto.node, home);
+      await page.click(picker.node, composerUrl);
+      const auto = await optional(autoModel, { url: composerUrl, role: menuRoles, timeout: 4000 });
+      if (auto) await page.click(auto.node, composerUrl);
       else {
         mode = 'Gemini did not offer Auto in the model picker. Check Settings → Usage limits → Auto model selection.';
-        await page.click(picker.node, home);
+        await page.click(picker.node, composerUrl);
       }
     }
+    let tool = false;
+    const tools = await optional(/^(?:Upload & tools|Tools)\b/i, { url: composerUrl, timeout: 4000 });
+    const createName = new RegExp(`^(?:Create|Generate) ${kind}s?\\b`, 'i');
+    if (tools) {
+      await page.click(tools.node, composerUrl);
+      const create = await optional(createName, { url: composerUrl, role: menuRoles, timeout: 4000 });
+      await page.click(create?.node ?? tools.node, composerUrl);
+      tool = !!create;
+    }
+
+    if (!tool) {
+      const sidebarTool = kind === 'image' ? /^(?:Images|Create image)$/i : /^Create video$/i;
+      const roles = ['link', 'button', 'menuitem'];
+      const state = await page.state();
+      let entry = control(state, sidebarTool, roles);
+      const sidebar = control(state, /^Open sidebar$/i);
+      if (!entry && sidebar) {
+        await page.click(sidebar, composerUrl);
+        entry = (await optional(sidebarTool, { url: composerUrl, role: roles, timeout: 3000 }))?.node;
+      }
+      if (entry) {
+        await page.click(entry, composerUrl);
+        ({ url: composerUrl } = await waitFor(/(?:)/, {
+          find: state => isComposerPage(state.url) && control(state, /(?:)/, 'textbox'),
+          error: 'Could not find the Gemini media prompt box.',
+        }));
+        tool = true;
+      }
+    }
+
     if (paths.length) {
-      const menu = await waitFor(/^(?:Upload & tools|Open upload file menu|Add files?)\b/i, { url: home, error: 'Could not open the Gemini upload menu.' });
-      await page.chooseFiles(home, paths, async () => {
-        await page.click(menu.node, home);
-        const upload = await waitFor(/^Upload files?\b/i, { url: home, role: menuRoles, error: 'Could not find Gemini file upload.' });
-        await page.click(upload.node, home);
+      const menu = await waitFor(/^(?:Upload & tools|Open upload file menu|Add files?|Add image)\b/i, { url: composerUrl, error: 'Could not open the Gemini upload menu.' });
+      await page.chooseFiles(composerUrl, paths, async () => {
+        await page.click(menu.node, composerUrl);
+        if (/^Add image\b/i.test(menu.node.name.value)) return;
+        const upload = await waitFor(/^Upload files?\b/i, { url: composerUrl, role: menuRoles, error: 'Could not find Gemini file upload.' });
+        await page.click(upload.node, composerUrl);
       });
       await delay(1500, undefined, { signal });
     }
 
-    // Best effort: without the tool chip the prompt is still prefixed so Gemini knows what to make.
-    let tool = false;
-    const tools = await optional(/^(?:Upload & tools|Tools)\b/i, { url: home, timeout: 4000 });
-    if (tools) {
-      await page.click(tools.node, home);
-      const create = await optional(new RegExp(`^(?:Create|Generate) ${kind}s?\\b`, 'i'), { url: home, role: menuRoles, timeout: 4000 });
-      if (create) {
-        await page.click(create.node, home);
-        tool = true;
-      }
-    }
     const lead = tool ? '' : kind === 'video' ? 'Generate a video. ' : 'Generate an image. ';
     const refs = paths.length ? (kind === 'video' ? 'Animate the attached image into a video. ' : 'Create an image using the attached references in order. ') : '';
-    await page.fill(composer.node, home, `${lead}${refs}${prompt.trim()}${aspectRatio ? `\nAspect ratio: ${aspectRatio}.` : ''}`);
-    const send = await waitFor(/^Send(?: message)?$/i, { url: home, error: 'Gemini is not ready to send the prompt.', timeout: 45_000 });
-    await page.click(send.node, home);
+    const composer = await waitFor(/(?:)/, { url: composerUrl, role: 'textbox', error: 'Could not find the Gemini prompt box.' });
+    await page.fill(composer.node, composerUrl, `${lead}${refs}${prompt.trim()}${aspectRatio ? `\nAspect ratio: ${aspectRatio}.` : ''}`);
+    const send = await waitFor(/^(?:Send(?: message)?|Submit)$/i, { url: composerUrl, error: 'Gemini is not ready to send the prompt.', timeout: 45_000 });
+    await page.click(send.node, composerUrl);
 
     const done = kind === 'video' ? /^Download video\b/i : /^Download (?:full size )?image\b/i;
     // Gemini answers a usage limit or busy system with plain text and no media: stop waiting and show it.
-    const own = prompt.trim().slice(0, 30);
     let refusal;
+    const share = /^(?:Share|Share video)$/i;
+    const downloadRoles = [...menuRoles, 'link'];
     const result = await waitFor(done, {
       timeout: kind === 'video' ? 15 * 60_000 : 6 * 60_000, interval: 2500,
-      find: state => control(state, done) ?? (refusal = state.nodes.find(node => !node.ignored && node.name?.value?.length < 600 &&
-        declined.test(node.name.value) && !node.name.value.includes(own))),
+      find: async state => {
+        if (!isConversation(state.url) || isComposerPage(state.url)) return;
+        const download = control(state, done, downloadRoles) ?? (kind === 'video' ? control(state, share) : undefined);
+        if (download) return download;
+        const text = await page.responseText(state.url);
+        if (text.length < 600 && declined.test(text)) return (refusal = text);
+      },
       error: `Gemini did not return a ${kind} in time. Check your Gemini activity for the result or a usage limit.`,
     });
-    if (result.node === refusal) throw new Error(`Gemini could not create the ${kind}: ${refusal.name.value}`);
+    if (refusal) throw new Error(`Gemini could not create the ${kind}: ${refusal}`);
     const url = result.url;
     if (!isConversation(url)) throw new Error('Could not identify the Gemini conversation.');
     const output = join(dir, `generated-${kind}`);
     let bytes;
     try {
-      await page.download(result.node, url, output, kind === 'video' ? 120_000 : 45_000);
+      let download = result.node;
+      if (kind === 'video' && share.test(download.name.value)) {
+        await page.click(download, url);
+        ({ node: download } = await waitFor(done, { url, role: downloadRoles, error: 'Could not find Download video in the Gemini share menu.' }));
+      }
+      await page.download(download, url, output, kind === 'video' ? 120_000 : 45_000);
       if ((await stat(output)).size > limit) throw new Error(`The downloaded ${kind} is too large.`);
       bytes = await readFile(output);
     } catch (error) {

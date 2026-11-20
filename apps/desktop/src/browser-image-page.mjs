@@ -241,6 +241,12 @@ async function open(signal) {
         if (!contents.isDestroyed()) await contents.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {});
       }
     },
+    async responseText(url) {
+      guard(url);
+      const text = await contents.executeJavaScript("Array.from(document.querySelectorAll('model-response')).at(-1)?.innerText?.trim() ?? ''");
+      guard(url);
+      return text;
+    },
     // Fallback to the download button: reads the generated image or video the page shows, as base64.
     async fetchMedia(url, kind, limit) {
       guard(url);
