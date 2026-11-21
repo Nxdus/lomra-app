@@ -8,7 +8,7 @@ import { recordGoogleUsage } from "@/components/google-usage";
 /** Providers that need an API key. Local models (Ollama) need none. */
 export type KeyedProvider = "openrouter" | "fal" | "google";
 export type Provider = KeyedProvider | "ollama";
-export const apiProviderNames: Record<KeyedProvider, string> = {
+const apiProviderNames: Record<KeyedProvider, string> = {
   openrouter: "OpenRouter",
   fal: "Fal.AI",
   google: "Google AI",
@@ -16,7 +16,7 @@ export const apiProviderNames: Record<KeyedProvider, string> = {
 
 export class MissingApiKeyError extends Error {
   constructor(readonly provider: KeyedProvider) {
-    super(`Add your ${apiProviderNames[provider]} API key to continue.`);
+    super(`${apiProviderNames[provider]} API key required.`);
   }
 }
 
