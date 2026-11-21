@@ -25,10 +25,7 @@ export function ModelSetupDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-w-2xl flex-col gap-0 overflow-hidden rounded-3xl p-5 pb-4 sm:p-6 sm:pb-5">
         <DialogHeader className="mb-4 shrink-0 gap-1.5 pr-8">
-          <DialogTitle className="flex items-center gap-2 text-lg">
-            <KeyIcon className="size-5 text-primary" />
-            Set up models to generate
-          </DialogTitle>
+          <DialogTitle>Set up models to generate</DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">
             Configure your cloud API keys (Google AI, OpenRouter, Fal.ai) or local models (Ollama, Stable Diffusion, Hunyuan 3D) to start generating.
           </DialogDescription>
