@@ -375,10 +375,13 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
 
   useEffect(() => {
     if (!preferencesReady.current) return;
-    const available = models.filter((value) => isInstalled(value) && allGroups.some((group) =>
-      group.models.some((item) => item.value === value && item.custom) ||
-      (!hiddenModels.includes(value) && (group.models.some((item) => item.value === value) ||
-        (group.error && value.startsWith(`${group.value}:`))))));
+    const available = models.filter((value) => {
+      const provider = modelApiKeyProvider(value);
+      return (!provider || !!keys[provider]) && isInstalled(value) && allGroups.some((group) =>
+        group.models.some((item) => item.value === value && item.custom) ||
+        (!hiddenModels.includes(value) && (group.models.some((item) => item.value === value) ||
+          (group.error && value.startsWith(`${group.value}:`)))));
+    });
     if (available.length !== models.length) {
       onModelsChange(available);
       return;
@@ -387,7 +390,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
       void saveSetting('selected-models', models).catch(() => toast.add({ id: 'model-settings-error', title: 'Could not save selected models. Please retry.', type: 'error' }));
     }, 400);
     return () => clearTimeout(timer);
-  }, [models, allGroups, hiddenModels, isInstalled, onModelsChange]);
+  }, [models, allGroups, hiddenModels, isInstalled, keys, onModelsChange]);
 
   const existingValues = new Set(allGroups.flatMap((group) => group.models
     .filter((item) => item.custom || !hiddenModels.includes(item.value))
@@ -458,9 +461,10 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
 
   function openSetupIfKeyMissing(value: string) {
     const provider = modelApiKeyProvider(value);
-    if (!keysReady || !provider || keys[provider]) return;
+    if (!keysReady || !provider || keys[provider]) return false;
     setOpen(false);
     onOpenModelSetup();
+    return true;
   }
 
   useEffect(() => {
@@ -492,8 +496,8 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
       }}
         value={models} onValueChange={(nextModels) => {
           const added = nextModels.find((value) => !models.includes(value));
+          if (added && openSetupIfKeyMissing(added)) return;
           onModelsChange(added ? nextModels.filter((value) => value === added || value.split(":")[0] !== added.split(":")[0]) : nextModels);
-          if (added) openSetupIfKeyMissing(added);
         }} disabled={disabled || settingsSaving}>
         <SelectTrigger size="sm" variant="ghost" aria-label="AI models" className="max-w-full">
           <SelectValue className="min-w-0 truncate" title={selectionLabel}>
@@ -590,9 +594,10 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
             } finally {
               setSettingsSaving(false);
             }
-            onModelsChange((current) => [...current.filter((model) => !model.startsWith(`${addingGroup.value}:`)), value]);
             setAddingGroup(null);
-            openSetupIfKeyMissing(value);
+            if (!openSetupIfKeyMissing(value)) {
+              onModelsChange((current) => [...current.filter((model) => !model.startsWith(`${addingGroup.value}:`)), value]);
+            }
           }}>
             {providerOptions.length > 0 ? <FieldGroup className="grid grid-cols-[fit-content(45%)_minmax(0,1fr)] items-center gap-2">
               {addingGroup && <Field className="min-w-0">

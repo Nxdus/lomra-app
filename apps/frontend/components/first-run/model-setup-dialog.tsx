@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { ApiKeysPanel } from "@/components/api-settings";
 import { OllamaSettings } from "@/components/ollama-settings";
 import { SdSettings } from "@/components/sd-settings";
@@ -16,22 +17,49 @@ export function ModelSetupDialog({
   open,
   onOpenChange,
   defaultTab = "api",
+  onContinue,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultTab?: "api" | "local";
+  onContinue?: () => Promise<void>;
 }) {
+  const [continuing, setContinuing] = useState(false);
+  const [error, setError] = useState("");
+
+  async function finishSetup() {
+    if (!onContinue) {
+      onOpenChange(false);
+      return;
+    }
+    setContinuing(true);
+    setError("");
+    try {
+      await onContinue();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not start the tutorial. Try again.");
+    } finally {
+      setContinuing(false);
+    }
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-w-2xl flex-col gap-0 overflow-hidden rounded-3xl p-5 pb-4 sm:p-6 sm:pb-5">
+    <Dialog open={open} onOpenChange={(nextOpen) => {
+      if (continuing) return;
+      if (!nextOpen) setError("");
+      onOpenChange(nextOpen);
+    }}>
+      <DialogContent showCloseButton={!continuing} className="flex max-w-2xl flex-col gap-0 overflow-hidden rounded-3xl p-5 pb-4 sm:p-6 sm:pb-5">
         <DialogHeader className="mb-4 shrink-0 gap-1.5 pr-8">
           <DialogTitle>Set up models to generate</DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">
-            Configure your cloud API keys (Google AI, OpenRouter, Fal.ai) or local models (Ollama, Stable Diffusion, Hunyuan 3D) to start generating.
+            {onContinue
+              ? "Save an API key or install a local model. Lomra checks that at least one provider is ready before starting the tutorial."
+              : "Configure your cloud API keys (Google AI, OpenRouter, Fal.ai) or local models (Ollama, Stable Diffusion, Hunyuan 3D) to start generating."}
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue={defaultTab} className="min-h-0 flex-1 gap-4">
+        <Tabs defaultValue={defaultTab} inert={continuing} className="min-h-0 flex-1 gap-4">
           <TabsList className="w-full shrink-0">
             <TabsTrigger value="api" className="flex items-center gap-1.5">
               <KeyIcon className="size-3.5" />
@@ -56,9 +84,10 @@ export function ModelSetupDialog({
           </TabsContent>
         </Tabs>
 
-        <DialogFooter className="mt-4 flex-row justify-end border-t border-border pt-3">
-          <Button type="button" size="sm" onClick={() => onOpenChange(false)}>
-            Done
+        <DialogFooter className="mt-4 flex-row flex-wrap items-center justify-end border-t border-border pt-3">
+          {error && <p role="alert" className="mr-auto text-sm text-destructive">{error}</p>}
+          <Button type="button" size="sm" disabled={continuing} onClick={() => void finishSetup()}>
+            {continuing ? "Checking setup…" : onContinue ? "Continue to tutorial" : "Done"}
           </Button>
         </DialogFooter>
       </DialogContent>

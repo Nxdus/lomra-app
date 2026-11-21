@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  beginTutorialSetup,
   checkIsFirstRun,
   dismissFirstRun,
-  dismissSampleBanner,
-  isSampleBannerDismissed,
   FIRST_RUN_STORAGE_KEY,
-  SAMPLE_BANNER_STORAGE_KEY,
+  verifyTutorialProvider,
 } from "./use-first-run";
 import { createSampleFiles, loadSampleProject } from "./sample-project";
 import type { CanvasHandle } from "@/components/image-canvas";
@@ -157,7 +156,7 @@ test("checkIsFirstRun fails safe (returns false) if storage errors", async () =>
   }
 });
 
-test("dismissFirstRun and dismissSampleBanner persist flags in localStorage", () => {
+test("unfinished tutorial setup stays pending across reloads", async () => {
   const originalWindow = globalThis.window;
   const mockStorage = createMockStorage();
 
@@ -168,14 +167,37 @@ test("dismissFirstRun and dismissSampleBanner persist flags in localStorage", ()
     });
 
     assert.equal(mockStorage.getItem(FIRST_RUN_STORAGE_KEY), null);
+    beginTutorialSetup();
+    assert.equal(await checkIsFirstRun(), true);
     dismissFirstRun();
     assert.equal(mockStorage.getItem(FIRST_RUN_STORAGE_KEY), "true");
-
-    assert.equal(isSampleBannerDismissed(), false);
-    dismissSampleBanner();
-    assert.equal(isSampleBannerDismissed(), true);
-    assert.equal(mockStorage.getItem(SAMPLE_BANNER_STORAGE_KEY), "true");
   } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test("tutorial requires a verified API provider or a usable local model", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  const keys = { google: "", openrouter: "test-key", fal: "" };
+  try {
+    Object.assign(globalThis, { window: {} });
+    globalThis.fetch = (async (url: string) => url === "/api/ollama"
+      ? Response.json({ running: true, models: [{ tools: false }] })
+      : Response.json({ message: "Invalid key" }, { status: 401 })) as typeof fetch;
+    await assert.rejects(verifyTutorialProvider(keys), /working API key/);
+
+    globalThis.fetch = (async (url: string, options?: RequestInit) => {
+      if (url === "/api/ollama") return Response.json({ running: false, models: [] });
+      const body = JSON.parse(String(options?.body));
+      return Response.json({ connected: body.provider === "openrouter" && body.action === "verify" });
+    }) as typeof fetch;
+    await verifyTutorialProvider(keys);
+
+    globalThis.fetch = (async () => Response.json({ running: true, models: [{ tools: true }] })) as typeof fetch;
+    await verifyTutorialProvider({ ...keys, openrouter: "" });
+  } finally {
+    globalThis.fetch = originalFetch;
     globalThis.window = originalWindow;
   }
 });
