@@ -5,7 +5,7 @@ import { ConfirmDelete } from "@/components/confirm-delete";
 
 import { useEffect, useRef, useState } from "react";
 import { CheckIcon, DatabaseIcon, EyeIcon, EyeOffIcon, LoaderCircleIcon, PlugZapIcon, RefreshCwIcon, SaveIcon, Trash2Icon } from "lucide-react";
-import { callProvider, useApiProviders, type KeyedProvider as Provider } from "@/components/api-provider";
+import { apiProviderNames, callProvider, useApiProviders, type KeyedProvider as Provider } from "@/components/api-provider";
 import { readGoogleUsage, type GoogleUsage } from "@/components/google-usage";
 import { toast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
@@ -108,7 +108,14 @@ function CreditUsage({ provider, apiKey }: { provider: Provider; apiKey: string 
   </section>;
 }
 
-function ProviderSettings({ provider, name, href }: { provider: Provider; name: string; href: string }) {
+const apiKeyUrls: Record<Provider, string> = {
+  openrouter: "https://openrouter.ai/settings/keys",
+  fal: "https://fal.ai/dashboard/keys",
+  google: "https://aistudio.google.com/apikey",
+};
+
+export function ProviderSettings({ provider }: { provider: Provider }) {
+  const name = apiProviderNames[provider];
   const { keys, setKey, keysReady } = useApiProviders();
   const [deletingKey, setDeletingKey] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -161,7 +168,7 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
       }} />
     <div className="flex items-center justify-between gap-2">
       <h2 id={`${provider}-heading`} className="text-sm font-medium">{name}</h2>
-      <a href={href} target="_blank" rel="noreferrer" className="shrink-0 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
+      <a href={apiKeyUrls[provider]} target="_blank" rel="noreferrer" className="shrink-0 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
         Get API key
       </a>
     </div>
@@ -215,10 +222,10 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
 
 export function ApiKeysPanel() {
   return <FieldGroup className="gap-6">
-    <ProviderSettings provider="openrouter" name="OpenRouter" href="https://openrouter.ai/settings/keys" />
+    <ProviderSettings provider="openrouter" />
     <Separator />
-    <ProviderSettings provider="fal" name="Fal.AI" href="https://fal.ai/dashboard/keys" />
+    <ProviderSettings provider="fal" />
     <Separator />
-    <ProviderSettings provider="google" name="Google AI" href="https://aistudio.google.com/apikey" />
+    <ProviderSettings provider="google" />
   </FieldGroup>;
 }

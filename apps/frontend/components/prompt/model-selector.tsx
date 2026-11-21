@@ -19,7 +19,7 @@ import { getSetting, saveSetting } from "@/lib/settings";
 import { useDisabledAgents } from "@/hooks/use-disabled-agents";
 import { desktopAgents } from "@/lib/desktop";
 import { localAgentModel } from "./agent-chat";
-import { callProvider, useApiProviders } from "@/components/api-provider";
+import { apiProviderNames, callProvider, useApiProviders } from "@/components/api-provider";
 import { KeyIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { ModelSetupDialog } from "@/components/first-run/model-setup-dialog";
 import { StabilityIcon } from "@/components/stability-icon";
@@ -99,7 +99,7 @@ function PriceText({ price }: { price?: string }) {
   </Tip>;
 }
 
-function ModelProviderIcon({ value, provider }: { value: string; provider: Group["provider"] }) {
+function ModelProviderIcon({ value, provider, decorative }: { value: string; provider: Group["provider"]; decorative?: boolean }) {
   const model = value.slice(value.indexOf(":") + 1);
   if (model === browserImageModel || model === browserProvider) {
     return <span role="img" aria-label={browserProvider} title={browserProvider} className="shrink-0">
@@ -135,7 +135,7 @@ function ModelProviderIcon({ value, provider }: { value: string; provider: Group
     </span>;
   }
   const name = provider === "OpenRouter" && modelProvider(model) === "google" ? "Google AI" : provider;
-  return <span role="img" aria-label={`Provider: ${name}`} title={name} className="shrink-0">
+  return <span role="img" aria-hidden={decorative} aria-label={`Provider: ${name}`} title={name} className="shrink-0">
     <Image src={providerIcons[name]} alt="" width={12} height={12} unoptimized className="size-3 object-contain grayscale" />
   </span>;
 }
@@ -501,30 +501,43 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, dis
                 <PlusIcon />
               </Button>
             </div>
-            {group.models.length ? group.models.map((item) => <div key={item.value} className="relative overflow-hidden rounded-xl">
-              {swipe?.id === item.value && <div aria-hidden="true" className={`absolute inset-0 flex items-center justify-end rounded-xl pr-2 text-destructive motion-safe:transition-colors ${swipe.offset <= swipeDeleteThreshold ? "bg-destructive/20" : "bg-destructive/10"}`}>
-                <Trash2Icon className="size-4 shrink-0" />
-              </div>}
-              <SelectItem value={item.value}
-              title={canDelete ? "Drag left to remove, or press Delete" : "Keep at least one model"}
-              className={`[&>:first-child]:min-w-0 ${canDelete ? "touch-pan-y bg-popover" : ""} ${swipe?.id === item.value ? "rounded-none" : ""}`}
-              style={swipe?.id === item.value ? { transform: `translateX(${swipe.offset}px)` } : undefined}
-              {...bindSwipe(item.value, canDelete && !disabled, () => { setOpen(false); setDeletingModel(item); })}
-              onKeyDown={(event) => {
-                if (canDelete && (event.key === "Delete" || event.key === "Backspace")) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setOpen(false);
-                  setDeletingModel(item);
-                }
-              }}>
-              <span className="flex w-full min-w-0 items-center gap-2">
-                <ModelProviderIcon value={item.value} provider={group.provider} />
-                <span className="truncate">{item.name}</span>
-                <PriceText price={item.price} />
-                <CapabilityText capabilities={item.capabilities} />
-              </span>
-            </SelectItem></div>) : <SelectItem value={`${group.value}:empty`} disabled>
+            {group.models.length ? group.models.map((item) => {
+              const model = item.value.slice(item.value.indexOf(":") + 1);
+              const provider = group.value === "llm" && !isOllamaModel(model) && !localAgentModel(model)
+                ? modelProvider(model)
+                : null;
+              return <div key={item.value} className="relative overflow-hidden rounded-xl">
+                {swipe?.id === item.value && <div aria-hidden="true" className={`absolute inset-0 flex items-center justify-end rounded-xl pr-2 text-destructive motion-safe:transition-colors ${swipe.offset <= swipeDeleteThreshold ? "bg-destructive/20" : "bg-destructive/10"}`}>
+                  <Trash2Icon className="size-4 shrink-0" />
+                </div>}
+                <SelectItem value={item.value}
+                  title={canDelete ? "Drag left to remove, or press Delete" : "Keep at least one model"}
+                  className={`[&>:first-child]:min-w-0 ${canDelete ? "touch-pan-y bg-popover" : ""} ${swipe?.id === item.value ? "rounded-none" : ""}`}
+                  style={swipe?.id === item.value ? { transform: `translateX(${swipe.offset}px)` } : undefined}
+                  {...bindSwipe(item.value, canDelete && !disabled, () => { setOpen(false); setDeletingModel(item); })}
+                  onKeyDown={(event) => {
+                    if (canDelete && (event.key === "Delete" || event.key === "Backspace")) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setOpen(false);
+                      setDeletingModel(item);
+                    }
+                  }}
+                >
+                  <span className="flex w-full min-w-0 items-center gap-2">
+                    <ModelProviderIcon value={item.value} provider={group.provider} decorative={provider !== null} />
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate">{item.name}</span>
+                      {provider && <span className="truncate text-xs text-muted-foreground">
+                        {apiProviderNames[provider]}{keysReady && (keys[provider] ? " · API key saved" : " · API key required")}
+                      </span>}
+                    </span>
+                    <PriceText price={item.price} />
+                    <CapabilityText capabilities={item.capabilities} />
+                  </span>
+                </SelectItem>
+              </div>;
+            }) : <SelectItem value={`${group.value}:empty`} disabled>
               {group.error ? "Models unavailable" : "No models available"}
             </SelectItem>}
           </SelectGroup>)}

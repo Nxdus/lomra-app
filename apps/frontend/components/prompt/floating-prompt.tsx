@@ -22,7 +22,8 @@ import { MarkdownMessage } from "./markdown-message";
 import { chatTimeline } from "./chat-timeline";
 import { ModelSelector } from "./model-selector";
 import { toast } from "@/components/ui/toast";
-import { useApiProviders } from "@/components/api-provider";
+import { apiProviderNames, MissingApiKeyError, useApiProviders, type KeyedProvider } from "@/components/api-provider";
+import { ProviderSettings } from "@/components/api-settings";
 import { multiviewRequirements, resolveMultiview } from "./multiview";
 import { canvasResults, generate, llmProvider as providerOf, modelProvider, type Category, selectedModel, isMultiview, isSdModel, requiresImage, isLocal3dModel, videoStartImage, type ConversationMessage, type GeneratedFile, type Generation, type GenerationTask } from "./generation";
 import type { VisibleImage } from "@/components/image-canvas";
@@ -158,12 +159,13 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const [redrafting, setRedrafting] = useState(false);
   const [videoPlan, setVideoPlan] = useState<{ clips: number; resumes: number; stale: number; pictures: number; model: string; toolBytes: number } | null>(null);
   const [takePlan, setTakePlan] = useState<{ shotId: string; model: string } | null>(null);
+  const [setupProvider, setSetupProvider] = useState<KeyedProvider | null>(null);
   const { swipe, bind: bindSwipe } = useSwipeToDelete();
   const [storageError, setStorageError] = useState("");
   const [saving, setSaving] = useState(false);
   const saves = useRef(Promise.resolve());
   const importing = useRef(false);
-  const { keys, request } = useApiProviders();
+  const { keys, keysReady, storageError: keyStorageError, request } = useApiProviders();
   const reviewProvider = llm ? providerOf(llm) : undefined;
   const reviewUnavailable = !llm || localEngine || vision.get(llm) === false
     ? "Select a chat model that can read images to review these shots."
@@ -559,6 +561,24 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     signal.throwIfAborted();
   }
 
+  function notifyMissingApiKey(error: MissingApiKeyError) {
+    if (!keysReady) {
+      notifyError(keyStorageError || "API keys are still loading. Try again shortly.");
+      return;
+    }
+    const id = toast.add({
+      title: error.message,
+      type: "error",
+      actionProps: {
+        children: "Open API key settings",
+        onClick: () => {
+          toast.close(id);
+          setSetupProvider(error.provider);
+        },
+      },
+    });
+  }
+
   async function runStoryboard(label: string, work: (signal: AbortSignal) => Promise<void>) {
     if (active.current) return;
     const controller = new AbortController();
@@ -567,7 +587,8 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     try {
       await work(controller.signal);
     } catch (cause) {
-      notifyError(controller.signal.aborted ? "Request stopped" : cause instanceof Error ? cause.message : "Storyboard request failed");
+      if (!controller.signal.aborted && cause instanceof MissingApiKeyError) notifyMissingApiKey(cause);
+      else notifyError(controller.signal.aborted ? "Request stopped" : cause instanceof Error ? cause.message : "Storyboard request failed");
     } finally {
       active.current = null;
       setStatus("");
@@ -1049,9 +1070,13 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       return;
     }
     if (localEngine) return sendToAgent(localEngine);
-    const llmProvider = llm ? providerOf(llm) : "openrouter";
-    if (!llm || (llmProvider !== "ollama" && !keys[llmProvider])) {
-      notifyError(!llm ? "Select an LLM first" : `Enter your ${llmProvider === "google" ? "Google" : "OpenRouter"} API key in Settings first`);
+    if (!llm) {
+      notifyError("Select an LLM first");
+      return;
+    }
+    const llmProvider = providerOf(llm);
+    if (llmProvider !== "ollama" && !keys[llmProvider]) {
+      notifyMissingApiKey(new MissingApiKeyError(llmProvider));
       return;
     }
     const controller = new AbortController();
@@ -1171,6 +1196,15 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           : { bottom: chatBottom }) }
         : { left: "50%", bottom: 24, transform: "translateX(-50%)" }}
     >
+      <Dialog open={setupProvider !== null} onOpenChange={(open) => { if (!open) setSetupProvider(null); }}>
+        {setupProvider && <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{apiProviderNames[setupProvider]} API key settings</DialogTitle>
+            <DialogDescription>Save your key, then return to your draft and send it again.</DialogDescription>
+          </DialogHeader>
+          <ProviderSettings provider={setupProvider} />
+        </DialogContent>}
+      </Dialog>
       {loading ? <div role="status" aria-label="Loading canvas" className="flex flex-col gap-3 p-2">
         <div aria-hidden="true" className="flex items-center gap-2">
           <Skeleton className="size-5" />
