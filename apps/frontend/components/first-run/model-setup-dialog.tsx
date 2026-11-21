@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { KeyIcon, CpuIcon } from "lucide-react";
 
 const panelClassName = "-mx-3 min-h-0 max-h-[60vh] overflow-y-auto overscroll-contain px-3 pb-4";
 
@@ -61,14 +60,8 @@ export function ModelSetupDialog({
 
         <Tabs defaultValue={defaultTab} inert={continuing} className="min-h-0 flex-1 gap-4">
           <TabsList className="w-full shrink-0">
-            <TabsTrigger value="api" className="flex items-center gap-1.5">
-              <KeyIcon className="size-3.5" />
-              API keys
-            </TabsTrigger>
-            <TabsTrigger value="local" className="flex items-center gap-1.5">
-              <CpuIcon className="size-3.5" />
-              Local models
-            </TabsTrigger>
+            <TabsTrigger value="api">API keys</TabsTrigger>
+            <TabsTrigger value="local">Local models</TabsTrigger>
           </TabsList>
 
           <TabsContent value="api" className={panelClassName}>
