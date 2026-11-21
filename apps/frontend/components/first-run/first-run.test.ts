@@ -224,9 +224,9 @@ test("loadSampleProject throws when canvas is null", async () => {
   await assert.rejects(loadSampleProject(null), /Canvas is not ready/);
 });
 
-test("loadSampleProject adds files and focuses item on canvas", async () => {
+test("loadSampleProject adds files and frames items on canvas", async () => {
   const addedCalls: { files: File[]; at?: { x: number; y: number } }[] = [];
-  let focusedFile: File | null = null;
+  let framed = false;
 
   const mockCanvas: CanvasHandle = {
     addFiles: async (files, at) => {
@@ -234,8 +234,9 @@ test("loadSampleProject adds files and focuses item on canvas", async () => {
       return files.map((_, index) => `id-${index}-${Date.now()}`);
     },
     removeItems: () => {},
-    focusFile: (file) => {
-      focusedFile = file;
+    focusFile: () => {},
+    frameAll: () => {
+      framed = true;
     },
     modelPreview: () => "",
     deselect: () => {},
@@ -244,6 +245,5 @@ test("loadSampleProject adds files and focuses item on canvas", async () => {
   const ids = await loadSampleProject(mockCanvas);
   assert.equal(ids.length, 3);
   assert.equal(addedCalls.length, 3);
-  assert.ok(focusedFile !== null);
-  assert.equal((focusedFile as File).name, "demo-character-concept.png");
+  assert.equal(framed, true);
 });

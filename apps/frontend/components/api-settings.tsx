@@ -108,7 +108,23 @@ function CreditUsage({ provider, apiKey }: { provider: Provider; apiKey: string 
   </section>;
 }
 
-function ProviderSettings({ provider, name, href }: { provider: Provider; name: string; href: string }) {
+function ProviderSettings({
+  provider,
+  name,
+  href,
+  targetProvider,
+  modelName,
+  onVerified,
+  onKeyChange,
+}: {
+  provider: Provider;
+  name: string;
+  href: string;
+  targetProvider?: Provider | "local" | null;
+  modelName?: string | null;
+  onVerified?: () => void;
+  onKeyChange?: () => void;
+}) {
   const { keys, setKey, keysReady } = useApiProviders();
   const [deletingKey, setDeletingKey] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -118,13 +134,23 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
   const [checking, setChecking] = useState(false);
   const [verification, setVerification] = useState<"idle" | "success" | "error">("idle");
   const revision = useRef(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const isTarget = targetProvider === provider;
   const saved = !!keys[provider] && draft.trim() === keys[provider];
+
+  useEffect(() => {
+    if (isTarget && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [isTarget]);
 
   async function saveKey(value: string) {
     setSaving(true);
     try {
       await setKey(provider, value);
       setDraft(value.trim());
+      onKeyChange?.();
       toast.add({ title: value.trim() ? 'API key saved' : 'Key removed', type: 'success' });
     } catch (error) {
       toast.add({ title: error instanceof Error ? error.message : 'Could not save key', type: 'error' });
@@ -139,6 +165,7 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
       await callProvider(provider, draft.trim(), { action: "verify" });
       if (version === revision.current) {
         setVerification("success");
+        onVerified?.();
         toast.add({ title: "Connection verified for this key.", type: "success" });
       }
     } catch (error) {
@@ -151,7 +178,7 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
     }
   }
 
-  return <section aria-labelledby={`${provider}-heading`} className="flex flex-col gap-4">
+  return <section aria-labelledby={`${provider}-heading`} className="flex flex-col gap-3">
     <ConfirmDelete open={deletingKey} onOpenChange={setDeletingKey} title={`Remove ${name} API key?`} description="You will need to add a key again to use this provider." disabled={!keysReady || saving} onConfirm={async () => {
         revision.current++;
         setChecking(false);
@@ -160,7 +187,14 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
         setVerification("idle");
       }} />
     <div className="flex items-center justify-between gap-2">
-      <h2 id={`${provider}-heading`} className="text-sm font-medium">{name}</h2>
+      <div className="flex items-center gap-2">
+        <h2 id={`${provider}-heading`} className="text-sm font-medium">{name}</h2>
+        {isTarget && (
+          <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
+            {modelName ? `Required for ${modelName}` : "Required"}
+          </span>
+        )}
+      </div>
       <a href={href} target="_blank" rel="noreferrer" className="shrink-0 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
         Get API key
       </a>
@@ -168,7 +202,7 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
     {!keysReady ? <div role="status" aria-label={`Loading ${name} settings`} aria-busy="true" className="flex flex-col gap-3">
       <div aria-hidden="true" className="flex flex-col gap-3">
         <Skeleton className="h-4 w-20" />
-        <Skeleton className="h-11 w-full" />
+        <Skeleton className="h-10 w-full" />
         <div className="flex items-center justify-end gap-2">
           <Skeleton className="size-8" />
           <Skeleton className="h-8 w-24" />
@@ -176,10 +210,10 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
       </div>
     </div> : <>
     {saved && (provider === "google" ? <GoogleUsageBox /> : <CreditUsage key={keys[provider]} provider={provider} apiKey={keys[provider]} />)}
-    <Field className="gap-3" data-invalid={verification === "error" || undefined}>
+    <Field className="gap-2" data-invalid={verification === "error" || undefined}>
     <FieldLabel htmlFor={`${provider}-key`} className="items-center gap-1.5 text-xs font-medium"><DatabaseIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />API Key</FieldLabel>
-    <InputGroup className="h-11">
-    <InputGroupInput id={`${provider}-key`} type={visible ? "text" : "password"} value={draft}
+    <InputGroup className="h-10">
+    <InputGroupInput ref={inputRef} id={`${provider}-key`} type={visible ? "text" : "password"} value={draft}
       autoComplete="off" spellCheck={false} maxLength={512} disabled={!keysReady || saving}
       placeholder="Paste your API key"
       aria-invalid={verification === "error"}
@@ -189,6 +223,7 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
         setChecking(false);
         setDraft(event.target.value);
         setVerification("idle");
+        onKeyChange?.();
       }} />
     <InputGroupAddon align="inline-end">
       <InputGroupButton size="icon-sm" onClick={() => setVisible(!visible)} aria-pressed={visible} aria-label={`${visible ? "Hide" : "Show"} ${name} API key`}>
@@ -213,12 +248,22 @@ function ProviderSettings({ provider, name, href }: { provider: Provider; name: 
   </section>;
 }
 
-export function ApiKeysPanel() {
-  return <FieldGroup className="gap-6">
-    <ProviderSettings provider="openrouter" name="OpenRouter" href="https://openrouter.ai/settings/keys" />
+export function ApiKeysPanel({
+  targetProvider,
+  modelName,
+  onVerified,
+  onKeyChange,
+}: {
+  targetProvider?: Provider | "local" | null;
+  modelName?: string | null;
+  onVerified?: () => void;
+  onKeyChange?: () => void;
+} = {}) {
+  return <FieldGroup className="gap-4">
+    <ProviderSettings provider="openrouter" name="OpenRouter" href="https://openrouter.ai/settings/keys" targetProvider={targetProvider} modelName={modelName} onVerified={onVerified} onKeyChange={onKeyChange} />
     <Separator />
-    <ProviderSettings provider="fal" name="Fal.AI" href="https://fal.ai/dashboard/keys" />
+    <ProviderSettings provider="fal" name="Fal.AI" href="https://fal.ai/dashboard/keys" targetProvider={targetProvider} modelName={modelName} onVerified={onVerified} onKeyChange={onKeyChange} />
     <Separator />
-    <ProviderSettings provider="google" name="Google AI" href="https://aistudio.google.com/apikey" />
+    <ProviderSettings provider="google" name="Google AI" href="https://aistudio.google.com/apikey" targetProvider={targetProvider} modelName={modelName} onVerified={onVerified} onKeyChange={onKeyChange} />
   </FieldGroup>;
 }

@@ -22,7 +22,7 @@ import { MarkdownMessage } from "./markdown-message";
 import { chatTimeline } from "./chat-timeline";
 import { ModelSelector } from "./model-selector";
 import { toast } from "@/components/ui/toast";
-import { MissingApiKeyError, useApiProviders } from "@/components/api-provider";
+import { MissingApiKeyError, useApiProviders, type KeyedProvider } from "@/components/api-provider";
 import { ModelSetupDialog } from "@/components/first-run/model-setup-dialog";
 import { multiviewRequirements, resolveMultiview } from "./multiview";
 import { canvasResults, generate, llmProvider as providerOf, modelProvider, type Category, selectedModel, isMultiview, isSdModel, requiresImage, isLocal3dModel, videoStartImage, type ConversationMessage, type GeneratedFile, type Generation, type GenerationTask } from "./generation";
@@ -160,6 +160,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const [videoPlan, setVideoPlan] = useState<{ clips: number; resumes: number; stale: number; pictures: number; model: string; toolBytes: number } | null>(null);
   const [takePlan, setTakePlan] = useState<{ shotId: string; model: string } | null>(null);
   const [modelSetupOpen, setModelSetupOpen] = useState(false);
+  const [modelSetupTarget, setModelSetupTarget] = useState<{ provider?: KeyedProvider | "local"; modelName?: string; tab?: "api" | "local" } | null>(null);
   const { swipe, bind: bindSwipe } = useSwipeToDelete();
   const [storageError, setStorageError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -574,6 +575,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
         "aria-label": "Set up models",
         onClick: () => {
           toast.close(id);
+          setModelSetupTarget({ provider: error.provider, tab: "api" });
           setModelSetupOpen(true);
         },
       },
@@ -1197,7 +1199,16 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           : { bottom: chatBottom }) }
         : { left: "50%", bottom: 24, transform: "translateX(-50%)" }}
     >
-      <ModelSetupDialog open={modelSetupOpen} onOpenChange={setModelSetupOpen} />
+      <ModelSetupDialog
+        open={modelSetupOpen}
+        onOpenChange={(nextOpen) => {
+          setModelSetupOpen(nextOpen);
+          if (!nextOpen) setModelSetupTarget(null);
+        }}
+        defaultTab={modelSetupTarget?.tab ?? "api"}
+        targetProvider={modelSetupTarget?.provider}
+        modelName={modelSetupTarget?.modelName}
+      />
       {loading ? <div role="status" aria-label="Loading canvas" className="flex flex-col gap-3 p-2">
         <div aria-hidden="true" className="flex items-center gap-2">
           <Skeleton className="size-5" />
@@ -1576,7 +1587,16 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           <div className="ml-auto flex min-w-0 items-center gap-2">
           {localEngine && agentEfforts[localEngine.engine] && <EffortPicker levels={agentEfforts[localEngine.engine] ?? []} value={efforts[localEngine.engine]}
             onChange={(level) => changeEffort(localEngine.engine, level)} disabled={!!status} />}
-          <ModelSelector models={models} onModelsChange={setModels} onCatalogInfoChange={setCatalogInfo} onOpenModelSetup={() => setModelSetupOpen(true)} disabled={!!status} />
+          <ModelSelector
+            models={models}
+            onModelsChange={setModels}
+            onCatalogInfoChange={setCatalogInfo}
+            onOpenModelSetup={(target) => {
+              setModelSetupTarget(target ?? null);
+              setModelSetupOpen(true);
+            }}
+            disabled={!!status}
+          />
           <SpeechMenu><Button variant="ghost" size="icon-sm" aria-label="Record audio" title="Record audio · right-click for speech models" disabled={!!status} onClick={() => setVoiceMode(true)}>
             <MicIcon />
           </Button></SpeechMenu>

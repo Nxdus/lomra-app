@@ -19,7 +19,7 @@ import { getSetting, saveSetting } from "@/lib/settings";
 import { useDisabledAgents } from "@/hooks/use-disabled-agents";
 import { desktopAgents } from "@/lib/desktop";
 import { localAgentModel } from "./agent-chat";
-import { callProvider, useApiProviders } from "@/components/api-provider";
+import { callProvider, useApiProviders, type KeyedProvider } from "@/components/api-provider";
 import { KeyIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { StabilityIcon } from "@/components/stability-icon";
 import { OllamaIcon } from "@/components/ollama-icon";
@@ -149,7 +149,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
   models: string[];
   onModelsChange: Dispatch<SetStateAction<string[]>>;
   onCatalogInfoChange?: (info: { prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean> }) => void;
-  onOpenModelSetup: () => void;
+  onOpenModelSetup: (options?: { provider?: KeyedProvider | "local"; modelName?: string; tab?: "api" | "local" }) => void;
   disabled?: boolean;
 }) {
   const { keys, keysReady } = useApiProviders();
@@ -462,8 +462,9 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
   function openSetupIfKeyMissing(value: string) {
     const provider = modelApiKeyProvider(value);
     if (!keysReady || !provider || keys[provider]) return false;
+    const item = items.find((entry) => entry.value === value);
     setOpen(false);
-    onOpenModelSetup();
+    onOpenModelSetup({ provider, modelName: item?.name, tab: "api" });
     return true;
   }
 

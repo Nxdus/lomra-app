@@ -256,8 +256,8 @@ export async function loadSampleProject(canvas: CanvasHandle | null): Promise<st
 
   // Arrange items side-by-side with appropriate spacing
   const positions = [
-    { x: -380, y: -40 },
-    { x: 140, y: -40 },
+    { x: -580, y: -40 },
+    { x: -60, y: -40 },
     { x: 620, y: -40 },
   ];
 
@@ -268,9 +268,13 @@ export async function loadSampleProject(canvas: CanvasHandle | null): Promise<st
     addedIds.push(...ids);
   }
 
-  // Focus view on the primary scene keyframe
+  // Frame all sample items in viewport
   try {
-    if (files[0]) canvas.focusFile(files[0]);
+    if (typeof canvas.frameAll === "function") {
+      canvas.frameAll();
+    } else if (files[0]) {
+      canvas.focusFile(files[0]);
+    }
   } catch {
     // Optional focus
   }
