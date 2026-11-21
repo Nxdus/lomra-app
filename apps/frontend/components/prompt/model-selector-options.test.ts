@@ -4,10 +4,24 @@ import {
   browserProvider,
   geminiProvider,
   googlePrefix,
+  modelApiKeyProvider,
   resolveAddModelOptions,
   type AgentProviderEntry,
   type CatalogModel,
 } from "./model-selector-options";
+
+test("model setup only asks for keys used by the selected model's provider", () => {
+  assert.equal(modelApiKeyProvider("llm:google/gemini-3.1-flash-lite"), "openrouter");
+  assert.equal(modelApiKeyProvider("video:google-ai/gemini-omni"), "google");
+  assert.equal(modelApiKeyProvider("picture:openai/gpt-image"), "openrouter");
+  assert.equal(modelApiKeyProvider("3d:fal-ai/trellis"), "fal");
+  for (const model of [
+    "llm:ollama/qwen3:4b", "llm:local-agent/codex", "picture:sd/sdxl",
+    "3d:local3d/triposr", "picture:chatgpt-browser/create-image", "video:gemini-browser/create-video",
+  ]) {
+    assert.equal(modelApiKeyProvider(model), undefined, model);
+  }
+});
 
 const baseInput = {
   category: "picture" as const,

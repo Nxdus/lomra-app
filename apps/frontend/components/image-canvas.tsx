@@ -70,7 +70,7 @@ function ImageResizeHandles({ name, onPointerDown, onKeyDown }: {
   ));
 }
 
-export type CanvasHandle = { addFiles: (files: File[], at?: { x: number; y: number }) => Promise<string[]>; removeItems: (ids: string[]) => void; focusFile: (file: File) => void; modelPreview: (id: string) => string; deselect: (ids: string[]) => void };
+export type CanvasHandle = { addFiles: (files: File[], at?: { x: number; y: number }) => Promise<string[]>; removeItems: (ids: string[]) => void; focusFile: (file: File) => void; frameAll: () => void; modelPreview: (id: string) => string; deselect: (ids: string[]) => void };
 
 export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasChange, onStoryboardHost, onStoryboardOrigin, watchItem, onWatchedBounds }: { watchItem?: string; onWatchedBounds?: (bounds: ImageBounds | null) => void; onStoryboardHost?: (host: HTMLDivElement | null) => void; onStoryboardOrigin?: (origin: { x: number; y: number }) => void; ref?: Ref<CanvasHandle>; onSelectionChange?: (images: VisibleImage[]) => void; onReadyChange?: (ready: boolean) => void; onCanvasChange?: (id: string) => void }) {
   const viewport = useRef<HTMLDivElement>(null);
@@ -592,8 +592,8 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     }
   }
 
-  useImperativeHandle(ref, () => ({ deselect(ids) {
-    setSelected((previous) => previous.filter((id) => !ids.includes(id)));
+  useImperativeHandle(ref, () => ({ deselect(ids?: string[]) {
+    setSelected((previous) => ids ? previous.filter((id) => !ids.includes(id)) : []);
   }, modelPreview(id) {
     const item = Array.from(viewport.current?.querySelectorAll<HTMLElement>("[data-canvas-image]") ?? []).find((element) => element.dataset.canvasImage === id);
     const viewer = item?.querySelector("model-viewer") as (HTMLElement & { loaded: boolean; toDataURL: (type: string) => string }) | null;
@@ -606,6 +606,12 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     select(image.id);
     const scale = Math.min(1, element.clientWidth * 0.8 / image.width, element.clientHeight * 0.6 / image.height);
     changeView({ scale, x: element.clientWidth / 2 - (image.x + image.width / 2) * scale, y: element.clientHeight * 0.35 - (image.y + image.height / 2) * scale });
+    element.focus({ preventScroll: true });
+  }, frameAll() {
+    const element = viewport.current;
+    if (!element || !current.current.length) return;
+    const camera = fitCanvas(current.current, element.clientWidth, element.clientHeight);
+    changeView(camera);
     element.focus({ preventScroll: true });
   }, removeItems(ids) {
     remove(ids);

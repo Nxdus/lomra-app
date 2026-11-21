@@ -8,6 +8,18 @@ import { recordGoogleUsage } from "@/components/google-usage";
 /** Providers that need an API key. Local models (Ollama) need none. */
 export type KeyedProvider = "openrouter" | "fal" | "google";
 export type Provider = KeyedProvider | "ollama";
+const apiProviderNames: Record<KeyedProvider, string> = {
+  openrouter: "OpenRouter",
+  fal: "Fal.AI",
+  google: "Google AI",
+};
+
+export class MissingApiKeyError extends Error {
+  constructor(readonly provider: KeyedProvider) {
+    super(`${apiProviderNames[provider]} API key required.`);
+  }
+}
+
 type Keys = Record<KeyedProvider, string>;
 export type ProviderRequest = {
   action: "verify" | "models" | "prices" | "usage" | "credits" | "chat" | "submit" | "status" | "result" | "route" | "image" | "video" | "video-status" | "video-content" | "cancel";
@@ -29,7 +41,7 @@ const ApiContext = createContext<{
 } | null>(null);
 
 export async function callProvider(provider: Provider, key: string, options: ProviderRequest): Promise<unknown> {
-  if (!key && provider !== "ollama") throw new Error("Enter your API key in Settings first");
+  if (!key && provider !== "ollama") throw new MissingApiKeyError(provider);
   const response = await fetch("/api/providers", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": key },

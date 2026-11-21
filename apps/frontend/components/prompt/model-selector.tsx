@@ -19,9 +19,8 @@ import { getSetting, saveSetting } from "@/lib/settings";
 import { useDisabledAgents } from "@/hooks/use-disabled-agents";
 import { desktopAgents } from "@/lib/desktop";
 import { localAgentModel } from "./agent-chat";
-import { callProvider, useApiProviders } from "@/components/api-provider";
+import { callProvider, useApiProviders, type KeyedProvider } from "@/components/api-provider";
 import { KeyIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import { ModelSetupDialog } from "@/components/first-run/model-setup-dialog";
 import { StabilityIcon } from "@/components/stability-icon";
 import { OllamaIcon } from "@/components/ollama-icon";
 import falIcon from "./provider-icons/fal.png";
@@ -42,6 +41,7 @@ import {
   browserProvider,
   geminiProvider,
   googlePrefix,
+  modelApiKeyProvider,
   resolveAddModelOptions,
   type AgentProviderEntry,
   type Capability,
@@ -145,10 +145,11 @@ type Group = typeof categories[number] & {
   error: boolean;
 };
 
-export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, disabled = false }: {
+export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onOpenModelSetup, disabled = false }: {
   models: string[];
   onModelsChange: Dispatch<SetStateAction<string[]>>;
   onCatalogInfoChange?: (info: { prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean> }) => void;
+  onOpenModelSetup: (options?: { provider?: KeyedProvider; modelName?: string }) => void;
   disabled?: boolean;
 }) {
   const { keys, keysReady } = useApiProviders();
@@ -180,7 +181,6 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, dis
   const canDelete = items.length > 1;
   const [attempt, setAttempt] = useState(0);
   const [open, setOpen] = useState(false);
-  const [modelSetupOpen, setModelSetupOpen] = useState(false);
   const [addingGroup, setAddingGroup] = useState<Group | null>(null);
   const [addProvider, setAddProvider] = useState<string | null>(null);
   const refreshSd = sd.refresh;
@@ -375,10 +375,13 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, dis
 
   useEffect(() => {
     if (!preferencesReady.current) return;
-    const available = models.filter((value) => isInstalled(value) && allGroups.some((group) =>
-      group.models.some((item) => item.value === value && item.custom) ||
-      (!hiddenModels.includes(value) && (group.models.some((item) => item.value === value) ||
-        (group.error && value.startsWith(`${group.value}:`))))));
+    const available = models.filter((value) => {
+      const provider = modelApiKeyProvider(value);
+      return (!provider || !!keys[provider]) && isInstalled(value) && allGroups.some((group) =>
+        group.models.some((item) => item.value === value && item.custom) ||
+        (!hiddenModels.includes(value) && (group.models.some((item) => item.value === value) ||
+          (group.error && value.startsWith(`${group.value}:`)))));
+    });
     if (available.length !== models.length) {
       onModelsChange(available);
       return;
@@ -387,7 +390,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, dis
       void saveSetting('selected-models', models).catch(() => toast.add({ id: 'model-settings-error', title: 'Could not save selected models. Please retry.', type: 'error' }));
     }, 400);
     return () => clearTimeout(timer);
-  }, [models, allGroups, hiddenModels, isInstalled, onModelsChange]);
+  }, [models, allGroups, hiddenModels, isInstalled, keys, onModelsChange]);
 
   const existingValues = new Set(allGroups.flatMap((group) => group.models
     .filter((item) => item.custom || !hiddenModels.includes(item.value))
@@ -456,6 +459,15 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, dis
     || (selectedDefault && !hiddenOptions.length && catalogStatus !== "ready");
   const selectionLabel = items.find((item) => models.includes(item.value))?.name ?? "Select models";
 
+  function openSetupIfKeyMissing(value: string) {
+    const provider = modelApiKeyProvider(value);
+    if (!keysReady || !provider || keys[provider]) return false;
+    const item = items.find((entry) => entry.value === value);
+    setOpen(false);
+    onOpenModelSetup({ provider, modelName: item?.name });
+    return true;
+  }
+
   useEffect(() => {
     if (!addingGroup) return;
     if ((selectedDefault && catalogStatus === "error") || (selectedGoogle && googleStatus === "error")) {
@@ -485,6 +497,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, dis
       }}
         value={models} onValueChange={(nextModels) => {
           const added = nextModels.find((value) => !models.includes(value));
+          if (added && openSetupIfKeyMissing(added)) return;
           onModelsChange(added ? nextModels.filter((value) => value === added || value.split(":")[0] !== added.split(":")[0]) : nextModels);
         }} disabled={disabled || settingsSaving}>
         <SelectTrigger size="sm" variant="ghost" aria-label="AI models" className="max-w-full">
@@ -536,7 +549,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, dis
               className="w-full justify-start gap-2 text-xs text-muted-foreground hover:text-foreground"
               onClick={() => {
                 setOpen(false);
-                setModelSetupOpen(true);
+                onOpenModelSetup();
               }}
             >
               <KeyIcon className="size-3.5" />
@@ -545,7 +558,6 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, dis
           </div>
         </SelectContent>
       </Select>
-      <ModelSetupDialog open={modelSetupOpen} onOpenChange={setModelSetupOpen} />
       <ConfirmDelete open={!!deletingModel} onOpenChange={(open) => { if (!open) setDeletingModel(null); }} title="Delete model?" description={`“${deletingModel?.name}” will be removed from your model list.`} disabled={disabled || settingsSaving || !canDelete} onConfirm={async () => { if (deletingModel) await removeModel(deletingModel.value); }} />
       <Dialog open={!!addingGroup} onOpenChange={(open) => { if (!open) setAddingGroup(null); }}>
         <DialogContent className="gap-4 rounded-2xl p-4 shadow-lg">
@@ -583,8 +595,10 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, dis
             } finally {
               setSettingsSaving(false);
             }
-            onModelsChange((current) => [...current.filter((model) => !model.startsWith(`${addingGroup.value}:`)), value]);
             setAddingGroup(null);
+            if (!openSetupIfKeyMissing(value)) {
+              onModelsChange((current) => [...current.filter((model) => !model.startsWith(`${addingGroup.value}:`)), value]);
+            }
           }}>
             {providerOptions.length > 0 ? <FieldGroup className="grid grid-cols-[fit-content(45%)_minmax(0,1fr)] items-center gap-2">
               {addingGroup && <Field className="min-w-0">
