@@ -1,3 +1,7 @@
+import type { KeyedProvider } from "@/components/api-provider";
+import { localAgentModel } from "./agent-chat";
+import { isBrowserModel, isLocal3dModel, isOllamaModel, isSdModel, modelProvider } from "./generation";
+
 export type ModelCategory = "llm" | "picture" | "video" | "3d";
 export type CatalogStatus = "loading" | "ready" | "error";
 export type Capability = "text-to-3d" | "image-to-3d" | "multi-view-to-3d";
@@ -8,6 +12,16 @@ export type ProviderOption = { id: string; name: string };
 export const googlePrefix = "google-ai/";
 export const browserProvider = "ChatGPT";
 export const geminiProvider = "Gemini";
+
+export function modelApiKeyProvider(value: string): KeyedProvider | undefined {
+  const separator = value.indexOf(":");
+  if (separator < 1 || separator === value.length - 1) return;
+  const category = value.slice(0, separator);
+  const model = value.slice(separator + 1);
+  if (category === "llm") return isOllamaModel(model) || localAgentModel(model) ? undefined : modelProvider(model);
+  if (category === "3d") return isLocal3dModel(model) ? undefined : "fal";
+  if ((category === "picture" || category === "video") && !isBrowserModel(model) && !isSdModel(model)) return modelProvider(model);
+}
 
 export function resolveAddModelOptions(input: {
   category: ModelCategory;

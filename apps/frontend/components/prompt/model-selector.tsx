@@ -41,6 +41,7 @@ import {
   browserProvider,
   geminiProvider,
   googlePrefix,
+  modelApiKeyProvider,
   resolveAddModelOptions,
   type AgentProviderEntry,
   type Capability,
@@ -455,6 +456,13 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
     || (selectedDefault && !hiddenOptions.length && catalogStatus !== "ready");
   const selectionLabel = items.find((item) => models.includes(item.value))?.name ?? "Select models";
 
+  function openSetupIfKeyMissing(value: string) {
+    const provider = modelApiKeyProvider(value);
+    if (!keysReady || !provider || keys[provider]) return;
+    setOpen(false);
+    onOpenModelSetup();
+  }
+
   useEffect(() => {
     if (!addingGroup) return;
     if ((selectedDefault && catalogStatus === "error") || (selectedGoogle && googleStatus === "error")) {
@@ -485,6 +493,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
         value={models} onValueChange={(nextModels) => {
           const added = nextModels.find((value) => !models.includes(value));
           onModelsChange(added ? nextModels.filter((value) => value === added || value.split(":")[0] !== added.split(":")[0]) : nextModels);
+          if (added) openSetupIfKeyMissing(added);
         }} disabled={disabled || settingsSaving}>
         <SelectTrigger size="sm" variant="ghost" aria-label="AI models" className="max-w-full">
           <SelectValue className="min-w-0 truncate" title={selectionLabel}>
@@ -583,6 +592,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
             }
             onModelsChange((current) => [...current.filter((model) => !model.startsWith(`${addingGroup.value}:`)), value]);
             setAddingGroup(null);
+            openSetupIfKeyMissing(value);
           }}>
             {providerOptions.length > 0 ? <FieldGroup className="grid grid-cols-[fit-content(45%)_minmax(0,1fr)] items-center gap-2">
               {addingGroup && <Field className="min-w-0">
