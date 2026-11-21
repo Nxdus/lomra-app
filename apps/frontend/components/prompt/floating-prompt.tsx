@@ -160,7 +160,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const [videoPlan, setVideoPlan] = useState<{ clips: number; resumes: number; stale: number; pictures: number; model: string; toolBytes: number } | null>(null);
   const [takePlan, setTakePlan] = useState<{ shotId: string; model: string } | null>(null);
   const [modelSetupOpen, setModelSetupOpen] = useState(false);
-  const [modelSetupTarget, setModelSetupTarget] = useState<{ provider?: KeyedProvider | "local"; modelName?: string; tab?: "api" | "local" } | null>(null);
+  const [modelSetupTarget, setModelSetupTarget] = useState<{ provider?: KeyedProvider; modelName?: string } | null>(null);
   const { swipe, bind: bindSwipe } = useSwipeToDelete();
   const [storageError, setStorageError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -575,7 +575,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
         "aria-label": "Set up models",
         onClick: () => {
           toast.close(id);
-          setModelSetupTarget({ provider: error.provider, tab: "api" });
+          setModelSetupTarget({ provider: error.provider });
           setModelSetupOpen(true);
         },
       },
@@ -1205,7 +1205,6 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           setModelSetupOpen(nextOpen);
           if (!nextOpen) setModelSetupTarget(null);
         }}
-        defaultTab={modelSetupTarget?.tab ?? "api"}
         targetProvider={modelSetupTarget?.provider}
         modelName={modelSetupTarget?.modelName}
       />

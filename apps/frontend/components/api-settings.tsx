@@ -113,15 +113,13 @@ function ProviderSettings({
   name,
   href,
   targetProvider,
-  modelName,
   onVerified,
   onKeyChange,
 }: {
   provider: Provider;
   name: string;
   href: string;
-  targetProvider?: Provider | "local" | null;
-  modelName?: string | null;
+  targetProvider?: Provider | null;
   onVerified?: () => void;
   onKeyChange?: () => void;
 }) {
@@ -191,7 +189,7 @@ function ProviderSettings({
         <h2 id={`${provider}-heading`} className="text-sm font-medium">{name}</h2>
         {isTarget && (
           <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary">
-            {modelName ? `Required for ${modelName}` : "Required"}
+            Required
           </span>
         )}
       </div>
@@ -250,20 +248,18 @@ function ProviderSettings({
 
 export function ApiKeysPanel({
   targetProvider,
-  modelName,
   onVerified,
   onKeyChange,
 }: {
-  targetProvider?: Provider | "local" | null;
-  modelName?: string | null;
+  targetProvider?: Provider | null;
   onVerified?: () => void;
   onKeyChange?: () => void;
 } = {}) {
   return <FieldGroup className="gap-4">
-    <ProviderSettings provider="openrouter" name="OpenRouter" href="https://openrouter.ai/settings/keys" targetProvider={targetProvider} modelName={modelName} onVerified={onVerified} onKeyChange={onKeyChange} />
+    <ProviderSettings provider="openrouter" name="OpenRouter" href="https://openrouter.ai/settings/keys" targetProvider={targetProvider} onVerified={onVerified} onKeyChange={onKeyChange} />
     <Separator />
-    <ProviderSettings provider="fal" name="Fal.AI" href="https://fal.ai/dashboard/keys" targetProvider={targetProvider} modelName={modelName} onVerified={onVerified} onKeyChange={onKeyChange} />
+    <ProviderSettings provider="fal" name="Fal.AI" href="https://fal.ai/dashboard/keys" targetProvider={targetProvider} onVerified={onVerified} onKeyChange={onKeyChange} />
     <Separator />
-    <ProviderSettings provider="google" name="Google AI" href="https://aistudio.google.com/apikey" targetProvider={targetProvider} modelName={modelName} onVerified={onVerified} onKeyChange={onKeyChange} />
+    <ProviderSettings provider="google" name="Google AI" href="https://aistudio.google.com/apikey" targetProvider={targetProvider} onVerified={onVerified} onKeyChange={onKeyChange} />
   </FieldGroup>;
 }

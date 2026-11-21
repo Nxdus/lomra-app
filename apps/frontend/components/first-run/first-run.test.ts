@@ -224,9 +224,10 @@ test("loadSampleProject throws when canvas is null", async () => {
   await assert.rejects(loadSampleProject(null), /Canvas is not ready/);
 });
 
-test("loadSampleProject adds files and frames items on canvas", async () => {
+test("loadSampleProject adds files, deselects and frames items on canvas", async () => {
   const addedCalls: { files: File[]; at?: { x: number; y: number } }[] = [];
   let framed = false;
+  let deselected: string[] = [];
 
   const mockCanvas: CanvasHandle = {
     addFiles: async (files, at) => {
@@ -239,11 +240,14 @@ test("loadSampleProject adds files and frames items on canvas", async () => {
       framed = true;
     },
     modelPreview: () => "",
-    deselect: () => {},
+    deselect: (ids) => {
+      deselected = ids;
+    },
   };
 
   const ids = await loadSampleProject(mockCanvas);
   assert.equal(ids.length, 3);
   assert.equal(addedCalls.length, 3);
   assert.equal(framed, true);
+  assert.deepEqual(deselected, ids);
 });

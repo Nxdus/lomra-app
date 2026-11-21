@@ -13,11 +13,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const panelClassName = "-mx-3 min-h-0 max-h-[min(38rem,calc(100vh-14rem))] overflow-y-auto overscroll-contain px-3 pb-4";
 
-function providerLabel(provider?: KeyedProvider | "local" | null) {
+function providerLabel(provider?: KeyedProvider | null) {
   if (provider === "fal") return "Fal.AI";
   if (provider === "google") return "Google AI";
   if (provider === "openrouter") return "OpenRouter";
-  if (provider === "local") return "Local";
   return "";
 }
 
@@ -32,14 +31,14 @@ export function ModelSetupDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultTab?: "api" | "local";
-  targetProvider?: KeyedProvider | "local" | null;
+  targetProvider?: KeyedProvider | null;
   modelName?: string | null;
   onContinue?: () => Promise<void>;
 }) {
   const [continuing, setContinuing] = useState(false);
   const [error, setError] = useState("");
   const [userTab, setUserTab] = useState<"api" | "local" | null>(null);
-  const activeTab = userTab ?? (targetProvider === "local" ? "local" : defaultTab);
+  const activeTab = userTab ?? defaultTab;
 
   async function finishSetup() {
     if (!onContinue) {
@@ -89,7 +88,6 @@ export function ModelSetupDialog({
           <TabsContent value="api" className={panelClassName}>
             <ApiKeysPanel
               targetProvider={targetProvider}
-              modelName={modelName}
               onVerified={() => setError("")}
               onKeyChange={() => setError("")}
             />

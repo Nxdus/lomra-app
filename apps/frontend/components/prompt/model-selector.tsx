@@ -149,7 +149,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
   models: string[];
   onModelsChange: Dispatch<SetStateAction<string[]>>;
   onCatalogInfoChange?: (info: { prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean> }) => void;
-  onOpenModelSetup: (options?: { provider?: KeyedProvider | "local"; modelName?: string; tab?: "api" | "local" }) => void;
+  onOpenModelSetup: (options?: { provider?: KeyedProvider; modelName?: string }) => void;
   disabled?: boolean;
 }) {
   const { keys, keysReady } = useApiProviders();
@@ -464,7 +464,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
     if (!keysReady || !provider || keys[provider]) return false;
     const item = items.find((entry) => entry.value === value);
     setOpen(false);
-    onOpenModelSetup({ provider, modelName: item?.name, tab: "api" });
+    onOpenModelSetup({ provider, modelName: item?.name });
     return true;
   }
 

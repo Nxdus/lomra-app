@@ -592,8 +592,8 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     }
   }
 
-  useImperativeHandle(ref, () => ({ deselect(ids) {
-    setSelected((previous) => previous.filter((id) => !ids.includes(id)));
+  useImperativeHandle(ref, () => ({ deselect(ids?: string[]) {
+    setSelected((previous) => ids ? previous.filter((id) => !ids.includes(id)) : []);
   }, modelPreview(id) {
     const item = Array.from(viewport.current?.querySelectorAll<HTMLElement>("[data-canvas-image]") ?? []).find((element) => element.dataset.canvasImage === id);
     const viewer = item?.querySelector("model-viewer") as (HTMLElement & { loaded: boolean; toDataURL: (type: string) => string }) | null;

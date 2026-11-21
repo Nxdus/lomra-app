@@ -254,11 +254,12 @@ export async function loadSampleProject(canvas: CanvasHandle | null): Promise<st
   const files = await createSampleFiles();
   const addedIds: string[] = [];
 
-  // Arrange items side-by-side with appropriate spacing
+  // Arrange items side-by-side as a cohesive row with modest consistent gaps (32px)
+  // Display sizes (max 320px): Concept ~295px, Scene 320px, Moodboard 320px
   const positions = [
-    { x: -580, y: -40 },
-    { x: -60, y: -40 },
-    { x: 620, y: -40 },
+    { x: -500, y: -40 },
+    { x: -173, y: -40 },
+    { x: 179, y: -40 },
   ];
 
   for (let i = 0; i < files.length; i++) {
@@ -266,6 +267,13 @@ export async function loadSampleProject(canvas: CanvasHandle | null): Promise<st
     const pos = positions[i] ?? { x: i * 260, y: 0 };
     const ids = await canvas.addFiles([file], pos);
     addedIds.push(...ids);
+  }
+
+  // Deselect items so the sample begins with no selection or auto-attached asset
+  try {
+    canvas.deselect(addedIds);
+  } catch {
+    // Optional deselect
   }
 
   // Frame all sample items in viewport
@@ -276,7 +284,7 @@ export async function loadSampleProject(canvas: CanvasHandle | null): Promise<st
       canvas.focusFile(files[0]);
     }
   } catch {
-    // Optional focus
+    // Optional focus/frame
   }
 
   return addedIds;
