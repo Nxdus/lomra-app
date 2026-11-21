@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { FolderOpenIcon, KeyIcon, SparklesIcon, ArrowRightIcon } from "lucide-react";
+import { FolderOpenIcon, KeyIcon, ArrowRightIcon } from "lucide-react";
 import type { CanvasHandle } from "@/components/image-canvas";
 import { loadSampleProject } from "./sample-project";
 import { toast } from "@/components/ui/toast";
@@ -66,17 +66,10 @@ export function FirstRunDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md gap-5 rounded-3xl p-6 shadow-2xl">
         <DialogHeader className="gap-2 pr-6">
-          <div className="flex items-center gap-2.5">
-            <div className="flex size-9 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
-              <SparklesIcon className="size-5" />
-            </div>
-            <div>
-              <DialogTitle className="text-xl font-semibold">Welcome to Lomra</DialogTitle>
-              <p className="text-xs text-muted-foreground">Local-first creative canvas for images, 3D, and video.</p>
-            </div>
-          </div>
-          <DialogDescription className="text-xs text-muted-foreground pt-1">
-            Get started by exploring a bundled sample project or start with a fresh blank canvas.
+          <DialogTitle>Welcome to Lomra</DialogTitle>
+          <DialogDescription className="flex flex-col gap-2 text-xs text-muted-foreground">
+            <span>Local-first creative canvas for images, 3D, and video.</span>
+            <span>Get started by exploring a bundled sample project or start with a fresh blank canvas.</span>
           </DialogDescription>
         </DialogHeader>
 
