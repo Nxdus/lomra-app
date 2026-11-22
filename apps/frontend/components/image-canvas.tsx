@@ -2,9 +2,10 @@
 
 import { ConfirmDelete } from "@/components/confirm-delete";
 import { CharacterDialog } from "@/components/character-dialog";
+import { CanvasCardDialog, CanvasHandoffDialog, CanvasLinks } from "@/components/canvas-harness";
 
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref } from "react";
-import { ArrowDownToLineIcon, ArrowUpToLineIcon, CopyIcon, DownloadIcon, GripVerticalIcon, InfoIcon, PencilIcon, PlusIcon, ScanIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
+import { ArrowDownToLineIcon, ArrowUpToLineIcon, CopyIcon, DownloadIcon, GripVerticalIcon, InfoIcon, PencilIcon, PlusIcon, ScanIcon, StickyNoteIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
 import { CanvasMedia } from "@/components/canvas-media";
 import dynamic from "next/dynamic";
 import { PictureEditor, type PictureEditorHandle } from "@/components/picture-editor";
@@ -15,6 +16,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, Con
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "@/components/ui/toast";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { canvasHistory, canvasTitle, canvasStorage, isCanvasFilePending, deleteCanvasStorage, canvasFileError, canvasFileKind, canvasFileSize, type CanvasImage, type CanvasHistoryItem } from "@/lib/image-canvas/image-canvas-storage";
 import { CANVAS_CAMERA_KEY, canvasPoint, parseCanvasCamera, zoomCamera, type CanvasCamera } from "@/lib/image-canvas/image-canvas-camera";
@@ -24,6 +26,7 @@ import { storyboardLayout } from "@/lib/image-canvas/storyboard-layout";
 import { reorganizeCanvas, fitCanvas } from "@/lib/image-canvas/image-canvas-layout";
 import { getSetting, saveSetting } from "@/lib/settings";
 import { canvasMediaVisible } from "@/lib/image-canvas/image-canvas-visibility";
+import { canvasCardType, type CanvasHarness } from "@/lib/image-canvas/canvas-harness";
 import {
   areCanvasItemsEqual,
   cloneCanvasItems,
@@ -70,7 +73,7 @@ function ImageResizeHandles({ name, onPointerDown, onKeyDown }: {
   ));
 }
 
-export type CanvasHandle = { addFiles: (files: File[], at?: { x: number; y: number }) => Promise<string[]>; removeItems: (ids: string[]) => void; focusFile: (file: File) => void; frameAll: () => void; modelPreview: (id: string) => string; deselect: (ids: string[]) => void };
+export type CanvasHandle = { addFiles: (files: File[], at?: { x: number; y: number }, harness?: CanvasHarness) => Promise<string[]>; removeItems: (ids: string[]) => void; focusFile: (file: File) => void; frameAll: () => void; modelPreview: (id: string) => string; deselect: (ids: string[]) => void };
 
 export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasChange, onStoryboardHost, onStoryboardOrigin, watchItem, onWatchedBounds }: { watchItem?: string; onWatchedBounds?: (bounds: ImageBounds | null) => void; onStoryboardHost?: (host: HTMLDivElement | null) => void; onStoryboardOrigin?: (origin: { x: number; y: number }) => void; ref?: Ref<CanvasHandle>; onSelectionChange?: (images: VisibleImage[]) => void; onReadyChange?: (ready: boolean) => void; onCanvasChange?: (id: string) => void }) {
   const viewport = useRef<HTMLDivElement>(null);
@@ -128,6 +131,8 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   const activeMediaRef = useRef(activeMedia);
   const [contextMenuId, setContextMenuId] = useState<string | null>(null);
   const contextMenuFiles = images.filter((image) => selected.includes(contextMenuId ?? "") ? selected.includes(image.id) : image.id === contextMenuId);
+  const [editingCard, setEditingCard] = useState<string | null>(null);
+  const [handoffIds, setHandoffIds] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const cameraLoaded = useRef(false);
   const zoomTarget = useRef<CanvasCamera | null>(null);
@@ -153,7 +158,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   }, [images, camera, selected]);
 
   useEffect(() => {
-    onSelectionChange?.(images.filter((image) => image.url && selected.includes(image.id)));
+    onSelectionChange?.(images.filter((image) => image.url && image.file.type !== canvasCardType && selected.includes(image.id)));
   }, [images, selected, onSelectionChange]);
 
   const mediaLoaded = useCallback((id: string, file: File) => {
@@ -305,8 +310,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
 
   function persist(next: VisibleImage[]) {
     if (!storageAvailable.current) return;
-    if (!next.length) return; // Don't save empty canvases to history.
-    const snapshot = next.map(({ id, file, x, y, width, height }) => ({ id, file, x, y, width, height }));
+    const snapshot = next;
     const id = activeCanvas.current;
     saves.current = saves.current.then(async () => {
       try {
@@ -327,7 +331,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       await saves.current;
       // Only save the outgoing canvas if it has images.
       if (current.current.length) {
-        await canvasStorage(current.current.map(({ id, file, x, y, width, height }) => ({ id, file, x, y, width, height })), activeCanvas.current);
+        await canvasStorage(current.current, activeCanvas.current);
       }
       clearTimeout(cameraSave.current);
       await cameraSaves.current;
@@ -414,6 +418,29 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     current.current = next;
     setImages(next);
     if (save) persist(next);
+  }
+
+  function saveCard(harness: CanvasHarness) {
+    const previous = current.current;
+    if (!ready || switching.current || !viewport.current) return;
+    if (editingCard === "") {
+      const element = viewport.current;
+      const center = canvasPoint(view.current, element.clientWidth / 2, element.clientHeight / 2);
+      const width = 280, height = 180;
+      const x = center.x - width / 2, y = center.y - height / 2;
+      let offset = 0;
+      while (previous.some(item => item.x === x + offset && item.y === y)) offset += width + 32;
+      const item = {
+        id: crypto.randomUUID(), file: new File(["{}"], "Card", { type: canvasCardType }), url: "",
+        x: x + offset, y, width, height, harness,
+      };
+      update([...previous, item]);
+      setSelected([item.id]);
+    } else {
+      update(previous.map(item => item.id === editingCard ? { ...item, harness } : item));
+    }
+    recordCanvasHistory({ items: previous, type: "generic" });
+    setEditingCard(null);
   }
 
   function undo() {
@@ -529,9 +556,14 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     const removed = current.current.filter((item) => ids.includes(item.id));
     if (!removed.length) return;
     const previous = current.current;
-    const next = previous.filter((item) => !ids.includes(item.id));
-    recordCanvasHistory({ items: previous, type: 'delete' });
+    const next = previous.filter((item) => !ids.includes(item.id)).map(item => {
+      const links = item.harness?.links;
+      return links?.some(link => ids.includes(link.to))
+        ? { ...item, harness: { ...item.harness, links: links.filter(link => !ids.includes(link.to)) } }
+        : item;
+    });
     update(next);
+    recordCanvasHistory({ items: previous, type: 'delete' });
     cleanupUnreferencedUrls();
     setSelected((previous) => previous.filter((id) => !ids.includes(id)));
     viewport.current?.focus({ preventScroll: true });
@@ -544,7 +576,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   }
 
   // `middle` centers only vertically: the point is the left edge of the file, halfway down.
-  function importFiles(files: File[], origin: { x: number; y: number }, centered = false, middle = false) {
+  function importFiles(files: File[], origin: { x: number; y: number }, centered = false, middle = false, harness?: CanvasHarness) {
     if (!ready) return;
     imports.current = imports.current.then(async () => {
       const failures: string[] = [];
@@ -559,6 +591,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           if (!mounted.current) { URL.revokeObjectURL(url); return; }
           const image = {
             id: crypto.randomUUID(), file, url, ...size,
+            ...(harness && { harness }),
             x: origin.x + offset - (centered ? size.width / 2 : 0),
             y: origin.y + offset - (centered || middle ? size.height / 2 : 0),
           };
@@ -615,11 +648,11 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     element.focus({ preventScroll: true });
   }, removeItems(ids) {
     remove(ids);
-  }, async addFiles(files, at) {
+  }, async addFiles(files, at, harness) {
     const element = viewport.current;
     if (!ready || switching.current || !element) throw new Error("Canvas is still loading. Try again.");
-    if (at) importFiles(files, at, false, true);
-    else importFiles(files, canvasPoint(view.current, element.clientWidth / 2, element.clientHeight / 2), true);
+    if (at) importFiles(files, at, false, true, harness);
+    else importFiles(files, canvasPoint(view.current, element.clientWidth / 2, element.clientHeight / 2), true, false, harness);
     await imports.current;
     const added = files.map((file) => current.current.find((image) => image.file === file));
     if (added.some((image) => !image)) throw new Error("Could not add this result to canvas. Check its format and try again.");
@@ -788,6 +821,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})` }}
         >
           <div ref={storyboardRef} data-canvas-interactive="" className="absolute top-0 left-0 size-0 cursor-auto overflow-visible select-text" />
+          <CanvasLinks items={images} />
           {images.map((image) => (
             <ContextMenu key={`${canvasId}:${image.id}`} open={contextMenuId === image.id} onOpenChange={(open) => setContextMenuId((id) => open ? image.id : id === image.id ? null : id)}>
             <ContextMenuTrigger
@@ -795,6 +829,11 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
               data-canvas-image={image.id}
               onContextMenu={(event) => { event.stopPropagation(); if (!selected.includes(image.id)) select(image.id); }}
               onDoubleClick={(event) => {
+                if (image.file.type === canvasCardType) {
+                  event.stopPropagation();
+                  setEditingCard(image.id);
+                  return;
+                }
                 if (!image.url || canvasFileKind(image.file) !== "image" || (event.target as HTMLElement).closest("button")) return;
                 event.stopPropagation();
                 setPreviewId(image.id);
@@ -837,7 +876,11 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
               onPointerCancel={finishDrag}
               onLostPointerCapture={finishDrag}
             >
-              {canvasFileKind(image.file) === "image" ? (activeMedia.has(image.id) && <CanvasMedia key={image.url} image={image} onLoaded={mediaLoaded} />) : <div className="flex size-full flex-col overflow-hidden rounded-xl border bg-card">
+              {image.file.type === canvasCardType ? <div className="flex size-full flex-col gap-2 overflow-hidden rounded-xl border bg-card p-3">
+                <Badge variant="secondary">{image.harness?.role}</Badge>
+                <p className="truncate font-medium">{image.harness?.title}</p>
+                <p className="overflow-hidden whitespace-pre-wrap break-words text-sm text-muted-foreground">{image.harness?.notes}</p>
+              </div> : canvasFileKind(image.file) === "image" ? (activeMedia.has(image.id) && <CanvasMedia key={image.url} image={image} onLoaded={mediaLoaded} />) : <div className="flex size-full flex-col overflow-hidden rounded-xl border bg-card">
                 <Button variant="secondary" size="sm" data-canvas-drag-handle className="h-7 w-full shrink-0 justify-start rounded-none border-0 pr-10 active:translate-y-0" aria-label={`Move ${image.file.name}`}>
                   <GripVerticalIcon /><span className="truncate">{image.file.name}</span>
                 </Button>
@@ -845,9 +888,10 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                   {activeMedia.has(image.id) && <CanvasMedia key={image.url} image={image} onLoaded={mediaLoaded} />}
                 </div>
               </div>}
+              {image.file.type !== canvasCardType && image.harness?.role && <Badge variant="secondary" className="pointer-events-none absolute bottom-1 left-1">{image.harness.role}</Badge>}
               {selected.includes(image.id) && (
                 <ImageResizeHandles
-                  name={image.file.name || "image"}
+                  name={image.harness?.title ?? (image.file.name || "image")}
                   onPointerDown={(event, corner) => startResize(event, image, corner)}
                   onKeyDown={(event, corner) => resizeWithKeyboard(event, image.id, corner)}
                 />
@@ -855,6 +899,12 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
             </ContextMenuTrigger>
             <ContextMenuContent data-canvas-interactive>
               <ContextMenuGroup>
+                {contextMenuFiles.length === 1 && <ContextMenuItem onClick={() => setEditingCard(contextMenuFiles[0].id)}>
+                  <PencilIcon /> Canvas details
+                </ContextMenuItem>}
+                <ContextMenuItem onClick={() => setHandoffIds(contextMenuFiles.map(item => item.id))}>
+                  <ArrowDownToLineIcon /> Export handoff
+                </ContextMenuItem>
                 {contextMenuFiles.length > 0 && contextMenuFiles.every(({ file, url }) => url && canvasFileKind(file) === "image") && (
                   <ContextMenuItem onClick={() => setCharacterSource(contextMenuFiles)}>
                     <UserRoundPlusIcon /> Save as Character{contextMenuFiles.length > 1 && ` (${contextMenuFiles.length})`}
@@ -870,7 +920,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                     <PencilIcon /> Open / Edit
                   </ContextMenuItem>
                 )}
-                <ContextMenuItem disabled={contextMenuFiles.some(image => !image.url)} onClick={duplicateSelection}>
+                <ContextMenuItem disabled={contextMenuFiles.some(image => !image.url && image.file.type !== canvasCardType)} onClick={duplicateSelection}>
                   <CopyIcon /> Duplicate{contextMenuFiles.length > 1 && ` (${contextMenuFiles.length})`}
                 </ContextMenuItem>
                 <ContextMenuItem onClick={() => reorderSelection(true)}>
@@ -879,7 +929,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                 <ContextMenuItem onClick={() => reorderSelection(false)}>
                   <ArrowDownToLineIcon /> Send to back
                 </ContextMenuItem>
-                <ContextMenuItem disabled={contextMenuFiles.some(image => !image.url)} onClick={() => {
+                <ContextMenuItem disabled={contextMenuFiles.some(image => !image.url || image.file.type === canvasCardType)} onClick={() => {
                   for (const file of contextMenuFiles) {
                     const link = document.createElement("a");
                     link.href = file.url;
@@ -903,12 +953,17 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       </ContextMenuTrigger>
       <ContextMenuContent data-canvas-interactive>
         <ContextMenuGroup>
+          <ContextMenuItem disabled={!ready} onClick={() => setEditingCard("")}>
+            <StickyNoteIcon /> Add canvas card
+          </ContextMenuItem>
           <ContextMenuItem disabled={!ready || !images.length} onClick={() => setSelected(images.map((image) => image.id))}>
             <ScanIcon /> Select all
           </ContextMenuItem>
         </ContextMenuGroup>
       </ContextMenuContent>
       </ContextMenu>
+      {editingCard !== null && <CanvasCardDialog item={images.find(item => item.id === editingCard)} items={images} onClose={() => setEditingCard(null)} onSave={saveCard} />}
+      {handoffIds.length > 0 && <CanvasHandoffDialog items={images} ids={handoffIds} onClose={() => setHandoffIds([])} />}
       <Dialog open={!!inspected} onOpenChange={open => { if (!open) setInspectId(null); }}>
         <DialogContent className="max-h-[calc(var(--app-content-height)*0.9)] gap-3 sm:max-w-5xl" aria-describedby={undefined}>
           <DialogTitle className="truncate pr-10"><span className="sr-only">Inspect model · </span>{inspected?.file.name}</DialogTitle>
@@ -919,7 +974,9 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
         <DialogContent className="w-fit max-w-[calc(100vw-2rem)] overflow-visible bg-transparent ring-0 sm:max-w-[calc(100vw-4rem)] [&>[data-slot=dialog-close]]:-top-3 [&>[data-slot=dialog-close]]:-right-3 [&>[data-slot=dialog-close]]:bg-popover [&>[data-slot=dialog-close]]:shadow-md" aria-describedby={undefined}>
           <DialogTitle className="sr-only">{preview?.file.name || "Image preview"}</DialogTitle>
           {preview && <PictureEditor ref={pictureEditor} key={preview.id} url={preview.url} name={preview.file.name} onClose={() => setPreviewId(null)} onSave={async (file) => {
-            importFiles([file], { x: preview.x + preview.width + 24, y: preview.y });
+            importFiles([file], { x: preview.x + preview.width + 24, y: preview.y }, false, false, {
+              role: "Output", links: [{ to: preview.id, relation: "Continues from" }],
+            });
             await imports.current;
             if (!current.current.some((image) => image.file === file)) throw new Error("Could not add edited picture to canvas.");
             toast.add({ title: "Edited picture saved to canvas", type: "success" });
@@ -937,6 +994,8 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           importFiles(files, canvasPoint(view.current, element.clientWidth / 2, element.clientHeight / 2), true);
         }} />
         <Button variant="ghost" size="icon-sm" aria-label="Add images, videos or 3D models" disabled={!ready} onClick={() => fileInput.current?.click()}><PlusIcon /></Button>
+        <Button variant="ghost" size="icon-sm" aria-label="Add canvas card" disabled={!ready} onClick={() => setEditingCard("")}><StickyNoteIcon /></Button>
+        {selected.length > 0 && <Button variant="ghost" size="icon-sm" aria-label="Export canvas selection" onClick={() => setHandoffIds(selected)}><ArrowDownToLineIcon /></Button>}
         <TooltipProvider>
           <Tooltip open={helpOpen} onOpenChange={setHelpOpen}>
             <TooltipTrigger

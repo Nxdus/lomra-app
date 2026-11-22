@@ -1,6 +1,7 @@
 import { parseOllamaUrl } from '../ollama-url';
 import { validStoryboard } from '../../components/prompt/storyboard-data';
 import { characterImageLimit, characterImageType, characterNameLimit, characterNamePattern, characterNotesLimit } from '../characters';
+import { canvasCardType, canvasLinkLimit, canvasRelations, canvasRoles, canvasTextLimit, canvasTitleLimit } from '../image-canvas/canvas-harness';
 
 export class StoreError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -20,11 +21,46 @@ export function validId(id: string) {
   return /^[\w-]{1,128}$/.test(id);
 }
 
+const bounded = (value: unknown, max: number) => typeof value === 'string' && value.length <= max;
+const oneOf = (value: unknown, options: readonly string[]) => typeof value === 'string' && options.includes(value);
+
+function validCanvasSources(value: unknown) {
+  return Array.isArray(value) && value.length <= 10 && value.every(source =>
+    record(source) && typeof source.id === 'string' && validId(source.id) && bounded(source.name, 512));
+}
+
+function validHarness(value: unknown, id: string, ids: Set<string>, card: boolean) {
+  if (value === undefined) return !card;
+  if (!record(value)) return false;
+  const { role, title, notes, links, provenance } = value;
+  if (card || role !== undefined) {
+    if (!oneOf(role, canvasRoles)) return false;
+  }
+  if (card || title !== undefined) {
+    if (typeof title !== 'string' || !title.trim() || title.length > canvasTitleLimit) return false;
+  }
+  if (notes !== undefined && !bounded(notes, canvasTextLimit)) return false;
+  if (provenance !== undefined && (!record(provenance) || !bounded(provenance.model, 512) ||
+    !bounded(provenance.prompt, canvasTextLimit) ||
+    (provenance.selectedInputs !== undefined && !validCanvasSources(provenance.selectedInputs)))) return false;
+  if (links === undefined) return true;
+  if (!Array.isArray(links) || links.length > canvasLinkLimit) return false;
+  const seen = new Set<string>();
+  return links.every(link => {
+    if (!record(link) || typeof link.to !== 'string' || link.to === id || !ids.has(link.to) ||
+      !oneOf(link.relation, canvasRelations)) return false;
+    const key = `${link.to}:${link.relation}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function validCanvas(id: string, value: unknown) {
   if (!canvasId.test(id) || !Array.isArray(value) || value.length > 5000) return false;
   const ids = new Set<string>();
-  return value.every((item: unknown) => {
-    if (!record(item) || typeof item.id !== 'string' || !/^[\w-]{1,128}$/.test(item.id) || ids.has(item.id)) return false;
+  const validItems = value.every((item: unknown) => {
+    if (!record(item) || typeof item.id !== 'string' || !validId(item.id) || ids.has(item.id)) return false;
     ids.add(item.id);
     return typeof item.name === 'string' && item.name.length <= 512 &&
       typeof item.type === 'string' && item.type.length <= 128 &&
@@ -32,6 +68,7 @@ function validCanvas(id: string, value: unknown) {
       ['x', 'y', 'width', 'height'].every((key) => finite(item[key])) &&
       (item.width as number) > 0 && (item.height as number) > 0;
   });
+  return validItems && value.every(item => validHarness(item.harness, item.id, ids, item.type === canvasCardType));
 }
 
 function validSetting(id: string, value: unknown) {
@@ -88,6 +125,7 @@ function validChat(id: string, value: unknown) {
           typeof image.url === 'string' && image.url.length <= 1024 * 1024 && /^data:image\/jpeg;base64,(?:[A-Za-z0-9+/]+={0,2})$/.test(image.url))))) &&
     chat.generations.every((task) => task && ['picture', 'video', '3d'].includes(task.category) &&
       ['id', 'model', 'prompt', 'status'].every((field) => typeof task[field] === 'string') &&
+      (task.canvasInputs === undefined || validCanvasSources(task.canvasInputs)) &&
       ['error', 'requestId'].every((field) => task[field] === undefined || typeof task[field] === 'string') &&
       (task.files === undefined || (Array.isArray(task.files) && task.files.every((file: Record<string, unknown>) =>
         file && typeof file.url === 'string' && typeof file.name === 'string' &&
