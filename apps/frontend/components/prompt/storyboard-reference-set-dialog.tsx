@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
-import { CheckIcon, SquareIcon, SquareCheckIcon } from "lucide-react";
+import { CheckIcon, ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { FieldError, FieldGroup, FieldLegend, FieldSet } from "@/components/ui/field";
+import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { ReferenceSet } from "@/lib/reference-sets";
 import { storage } from "@/lib/storage";
 import type { Shot } from "./storyboard-data";
 
-export function StoryboardReferenceSetDialog({ shots, onApply, onClose }: {
+export function StoryboardReferenceSetDialog({ shots, images, onApply, onClose }: {
   shots: Shot[];
+  images: { url: string }[];
   onApply: (set: ReferenceSet, shotIds: ReadonlySet<string>) => void;
   onClose: () => void;
 }) {
@@ -73,16 +75,25 @@ export function StoryboardReferenceSetDialog({ shots, onApply, onClose }: {
           </FieldSet>
           <FieldSet className="min-w-0">
             <FieldLegend variant="label" className="mb-1">Shots</FieldLegend>
-            <div className="flex max-h-48 flex-col gap-0.5 overflow-y-auto p-1">
-              {shots.map(({ id, scene, description }, index) => {
+            <div className="grid max-h-64 grid-cols-[repeat(auto-fill,minmax(min(100%,7.5rem),1fr))] gap-2 overflow-y-auto p-1">
+              {shots.map(({ id, scene, description, image, generatedId }, index) => {
                 if (!id) return null;
-                const checked = selected.has(id);
-                return <Button key={id} variant="ghost" size="sm" role="checkbox" aria-checked={checked}
-                  className="shrink-0 justify-start gap-2 rounded-lg" onClick={() => toggle(id)}>
-                  {checked ? <SquareCheckIcon data-icon="inline-start" /> : <SquareIcon data-icon="inline-start" />}
-                  <span className="w-12 shrink-0 text-left text-xs text-muted-foreground tabular-nums">Shot {index + 1}</span>
-                  <span className="truncate">{scene?.trim() || description.trim() || "Untitled shot"}</span>
-                </Button>;
+                const url = image !== null ? images[image]?.url : generatedId && `/api/storage/files/${generatedId}`;
+                const title = scene?.trim() || description.trim() || "Untitled shot";
+                return <Label key={id} className="group flex min-w-0 cursor-pointer flex-col items-stretch gap-2 rounded-xl border bg-card p-1.5 hover:bg-muted has-checked:border-primary has-checked:bg-muted has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring">
+                  <input type="checkbox" className="sr-only" checked={selected.has(id)} onChange={() => toggle(id)} />
+                  <span className="relative flex aspect-video items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
+                    {url
+                      // eslint-disable-next-line @next/next/no-img-element
+                      ? <img src={url} alt="" className="size-full object-cover" />
+                      : <ImageIcon aria-hidden="true" className="size-4" />}
+                    <span className="absolute top-1 left-1 rounded-md bg-background px-1.5 py-1 text-[11px] text-foreground tabular-nums">Shot {index + 1}</span>
+                    <span aria-hidden="true" className="absolute top-1 right-1 flex size-5 items-center justify-center rounded-md border border-input bg-background group-has-checked:border-primary group-has-checked:bg-primary group-has-checked:text-primary-foreground">
+                      <CheckIcon className="invisible size-3 group-has-checked:visible" />
+                    </span>
+                  </span>
+                  <span className="line-clamp-2 px-0.5 pb-0.5 text-xs leading-snug" title={title}>{title}</span>
+                </Label>;
               })}
             </div>
           </FieldSet>

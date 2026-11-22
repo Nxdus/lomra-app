@@ -1467,7 +1467,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
         </div>}
       </>, storyboardHost)}
       {storyboard?.shots && <>
-        {boardDialog === "references" && <StoryboardReferenceSetDialog key={boardOwner} shots={storyboard.shots}
+        {boardDialog === "references" && <StoryboardReferenceSetDialog key={boardOwner} shots={storyboard.shots} images={storyImages}
           onClose={() => setBoardDialog(null)}
           onApply={(set, shotIds) => {
             const next = applyReferenceSet(storyboard, storyImages, set.images, shotIds);
