@@ -49,7 +49,7 @@ export function StoryboardReferenceSetDialog({ shots, images, onApply, onClose }
 
   return <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
     <DialogContent className="flex min-w-0 flex-col gap-0 overflow-hidden rounded-3xl p-0">
-      <DialogHeader className="shrink-0 border-b px-4 pt-5 pb-4 pr-14 sm:px-5 sm:pr-14">
+      <DialogHeader className="shrink-0 px-4 pt-5 pb-4 pr-14 sm:px-5 sm:pr-14">
         <DialogTitle>Apply reference set</DialogTitle>
         <DialogDescription className="sr-only">Choose a set and the shots that should use it.</DialogDescription>
       </DialogHeader>
