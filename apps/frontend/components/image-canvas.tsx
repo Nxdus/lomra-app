@@ -887,7 +887,13 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                   <GripVerticalIcon /><span className="truncate">{image.file.name}</span>
                 </Button>
                 <div className="min-h-0 flex-1" data-canvas-interactive>
-                  {activeMedia.has(image.id) && <CanvasMedia key={image.url} image={image} onLoaded={mediaLoaded} />}
+                  {activeMedia.has(image.id) && <CanvasMedia key={image.url} image={image} onLoaded={mediaLoaded} onCaptureFrame={(file) => {
+                    if (!mounted.current || switching.current || activeCanvas.current !== canvasId || !ready) {
+                      toast.add({ title: "Canvas changed before the frame could be added. Try again.", type: "error" });
+                      return;
+                    }
+                    importFiles([file], { x: image.x + image.width + 24, y: image.y });
+                  }} />}
                 </div>
               </div>}
               {image.file.type !== canvasCardType && image.harness?.role && <Badge variant="secondary" className="pointer-events-none absolute bottom-1 left-1">{image.harness.role}</Badge>}
