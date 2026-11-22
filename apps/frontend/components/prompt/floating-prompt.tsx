@@ -3,7 +3,7 @@
 import { Tip } from "@/components/tip";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, Loader2Icon, MessageCircleIcon, MicIcon, PauseIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, Rows3Icon, ScanEyeIcon, TrashIcon } from "lucide-react";
+import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, ImagesIcon, Loader2Icon, MessageCircleIcon, MicIcon, PauseIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, Rows3Icon, ScanEyeIcon, TrashIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { chatStorage, persistentUrl, restoreGenerations, type Chat } from "./chat-storage";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,8 @@ import { saveAgentLimits } from "./agent-limits";
 import { draftedShots, draftShotsInstruction, draftStoryInstruction, ensureShotIds, mergeStoryCharacters, moveShot, shotImagePrompt, storyCharacterNotesLimit, storyLimit, storyReply, type Shot, type Storyboard, type StoryCharacter } from "./storyboard-data";
 import { storyboardLayout } from "@/lib/image-canvas/storyboard-layout";
 import { StoryboardShots, defaultSpot, shotsFrame } from "./storyboard-shots";
+import { StoryboardReferenceSetDialog } from "./storyboard-reference-set-dialog";
+import { applyReferenceSet } from "./storyboard-reference-sets";
 import { StoryboardCharacters } from "./storyboard-characters";
 import { StoryboardExport } from "./storyboard-export";
 import { StoryboardPreview } from "./storyboard-preview";
@@ -106,7 +108,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const multiview = isMultiview(threeDModel);
   const [history, setHistory] = useState<ConversationMessage[]>([]);
   const [storyboard, setStoryboard] = useState<Storyboard>();
-  const [boardDialog, setBoardDialog] = useState<"preview" | "export" | "timeline" | "review" | null>(null);
+  const [boardDialog, setBoardDialog] = useState<"preview" | "export" | "timeline" | "review" | "references" | null>(null);
   const [timelineDownload, setTimelineDownload] = useState<{ plan: StoryboardTimelinePlan; action: "preview" | "export"; bytes: number } | null>(null);
   const [timelinePreview, setTimelinePreview] = useState<{ video: string; captions?: string; blob: Blob } | null>(null);
   const renderedTimeline = useRef<{ key: string; blob: Blob } | null>(null);
@@ -353,10 +355,14 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     if (!storyboard || !boardOwner || boardOwner === chatId || !positionLoaded.current) return;
     saves.current = saves.current.then(async () => {
       const owner = (await chatStorage(undefined, canvasId)).find(({ id }) => id === boardOwner);
-      if (!owner || JSON.stringify(owner.storyboard) === JSON.stringify(storyboard)) return;
-      setChats(await chatStorage({ ...owner, storyboard }, canvasId));
+      if (!owner) return;
+      const [first, ...rest] = owner.history;
+      const imagesChanged = first?.role === "user" && JSON.stringify(first.images ?? []) !== JSON.stringify(storyImages);
+      if (!imagesChanged && JSON.stringify(owner.storyboard) === JSON.stringify(storyboard)) return;
+      const history = imagesChanged ? [{ ...first, images: storyImages }, ...rest] : owner.history;
+      setChats(await chatStorage({ ...owner, storyboard, history }, canvasId));
     }).catch(() => { setStorageError("Could not save the storyboard. Keep this tab open and check the backend connection before retrying."); });
-  }, [storyboard, boardOwner, chatId, canvasId]);
+  }, [storyboard, boardOwner, chatId, canvasId, storyImages]);
 
   async function deleteChat() {
     if (!deleting || status || saving) return;
@@ -1451,6 +1457,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
               else setTakePlan({ shotId: shot.id!, model: videoModel });
             }} />}
           toolbarActions={<>
+            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Apply reference set" onClick={() => setBoardDialog("references")} />}><ImagesIcon /></TooltipTrigger><TooltipContent>Apply reference set</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Preview storyboard" onClick={() => setBoardDialog("preview")} />}><PlayIcon /></TooltipTrigger><TooltipContent>Preview storyboard</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Export storyboard" onClick={() => setBoardDialog("export")} />}><DownloadIcon /></TooltipTrigger><TooltipContent>Export storyboard</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Edit timeline" onClick={() => setBoardDialog("timeline")} />}><Rows3Icon /></TooltipTrigger><TooltipContent>Edit timeline</TooltipContent></Tooltip>
@@ -1460,6 +1467,17 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
         </div>}
       </>, storyboardHost)}
       {storyboard?.shots && <>
+        {boardDialog === "references" && <StoryboardReferenceSetDialog key={boardOwner} shots={storyboard.shots}
+          onClose={() => setBoardDialog(null)}
+          onApply={(set, shotIds) => {
+            const next = applyReferenceSet(storyboard, storyImages, set.images, shotIds);
+            if (boardOwner === chatId) {
+              setHistory(([first, ...rest]) => [{ ...first, images: next.images }, ...rest]);
+            }
+            setStoryImages(next.images);
+            setStoryboard(next.board);
+            toast.add({ title: `Applied ${set.name}`, type: "success" });
+          }} />}
         <StoryboardPreview storyboard={storyboard} images={storyImages} open={boardDialog === "preview"} onOpenChange={(open) => setBoardDialog(open ? "preview" : null)} />
         <StoryboardExport storyboard={storyboard} images={storyImages} open={boardDialog === "export"} onOpenChange={(open) => setBoardDialog(open ? "export" : null)} />
         <StoryboardTimeline storyboard={storyboard} images={storyImages} open={boardDialog === "timeline"} onOpenChange={(open) => setBoardDialog(open ? "timeline" : null)}

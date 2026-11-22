@@ -50,6 +50,20 @@ test('Character metadata and its own reference survive deleting the source canva
   expect([...await s.readFile(`${id}-1`)]).toEqual([2]);
 });
 
+test('reference sets validate and persist independently of their source canvas', async () => {
+  const { store: s } = await store();
+  const id = 'harbor';
+  const image = { name: 'Harbor.jpg', url: 'data:image/jpeg;base64,/9j/' };
+  const value = { id, name: 'Harbor at dusk', images: [image] };
+  await s.save('canvas', 'default', [item('source')]);
+  await s.save('reference-sets', id, value);
+  await expect(s.save('reference-sets', id, { ...value, name: ' ' })).rejects.toMatchObject({ status: 400 });
+  await expect(s.save('reference-sets', id, { ...value, images: [image, image] })).rejects.toMatchObject({ status: 400 });
+  await expect(s.save('reference-sets', id, { ...value, images: [{ ...image, url: '/api/storage/files/source' }] })).rejects.toMatchObject({ status: 400 });
+  await s.remove('canvas', 'default');
+  expect(await s.list('reference-sets')).toEqual([{ id, value }]);
+});
+
 test('chat history preserves attached image previews alongside older text messages', async () => {
   const { store: s } = await store();
   const history = [

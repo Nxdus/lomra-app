@@ -2,9 +2,10 @@
 
 import { ConfirmDelete } from "@/components/confirm-delete";
 import { CharacterDialog } from "@/components/character-dialog";
+import { ReferenceSetDialog } from "@/components/reference-set-dialog";
 
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref } from "react";
-import { ArrowDownToLineIcon, ArrowUpToLineIcon, CopyIcon, DownloadIcon, GripVerticalIcon, InfoIcon, PencilIcon, PlusIcon, ScanIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
+import { ArrowDownToLineIcon, ArrowUpToLineIcon, CopyIcon, DownloadIcon, GripVerticalIcon, ImagesIcon, InfoIcon, PencilIcon, PlusIcon, ScanIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
 import { CanvasMedia } from "@/components/canvas-media";
 import dynamic from "next/dynamic";
 import { PictureEditor, type PictureEditorHandle } from "@/components/picture-editor";
@@ -123,6 +124,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   const [helpOpen, setHelpOpen] = useState(false);
   const [deletingFiles, setDeletingFiles] = useState<string[]>([]);
   const [characterSource, setCharacterSource] = useState<VisibleImage[] | null>(null);
+  const [referenceSetFiles, setReferenceSetFiles] = useState<File[] | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [activeMedia, setActiveMedia] = useState<Set<string>>(new Set());
   const activeMediaRef = useRef(activeMedia);
@@ -856,9 +858,14 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
             <ContextMenuContent data-canvas-interactive>
               <ContextMenuGroup>
                 {contextMenuFiles.length > 0 && contextMenuFiles.every(({ file, url }) => url && canvasFileKind(file) === "image") && (
-                  <ContextMenuItem onClick={() => setCharacterSource(contextMenuFiles)}>
-                    <UserRoundPlusIcon /> Save as Character{contextMenuFiles.length > 1 && ` (${contextMenuFiles.length})`}
-                  </ContextMenuItem>
+                  <>
+                    <ContextMenuItem onClick={() => setCharacterSource(contextMenuFiles)}>
+                      <UserRoundPlusIcon /> Save as Character{contextMenuFiles.length > 1 && ` (${contextMenuFiles.length})`}
+                    </ContextMenuItem>
+                    <ContextMenuItem onClick={() => setReferenceSetFiles(contextMenuFiles.map(({ file }) => file))}>
+                      <ImagesIcon /> Save reference set
+                    </ContextMenuItem>
+                  </>
                 )}
                 {contextMenuFiles.length === 1 && contextMenuFiles[0].url && canvasFileKind(contextMenuFiles[0].file) === "3d" && (
                   <ContextMenuItem onClick={() => setInspectId(contextMenuFiles[0].id)}>
@@ -927,6 +934,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
         </DialogContent>
       </Dialog>
       {characterSource && <CharacterDialog images={characterSource} onClose={() => setCharacterSource(null)} />}
+      {referenceSetFiles && <ReferenceSetDialog files={referenceSetFiles} onClose={() => setReferenceSetFiles(null)} />}
       <ConfirmDelete open={deletingFiles.length > 0} onOpenChange={(open) => { if (!open) setDeletingFiles([]); }} title="Delete canvas files?" description={`${deletingFiles.length} selected file(s) will be removed from this canvas.`} disabled={!ready} onConfirm={() => remove(deletingFiles)} />
       <CanvasMenu canvasId={canvasId} history={history} onHistory={refreshHistory} onNew={() => void openCanvas()} onOpen={(id) => void openCanvas(id)} onDelete={deleteCanvas} title={canvasId ? canvasTitle(canvasId) : 'Canvas'} scale={camera.scale} ready={ready} onZoom={zoom} onReset={() => changeView({ x: 0, y: 0, scale: 1 })} canReorganize={images.length > 0} onReorganize={reorganize} />
       <div className="absolute left-4 top-4 flex items-center gap-2 text-muted-foreground">
