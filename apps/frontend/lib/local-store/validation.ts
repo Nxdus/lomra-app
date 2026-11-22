@@ -1,6 +1,8 @@
 import { parseOllamaUrl } from '../ollama-url';
 import { validStoryboard } from '../../components/prompt/storyboard-data';
 import { characterImageLimit, characterImageType, characterNameLimit, characterNamePattern, characterNotesLimit } from '../characters';
+import { referenceSetNameLimit } from '../reference-sets';
+import { MAX_MEDIA_ITEMS } from '../../components/prompt/media';
 import { canvasCardType, canvasLinkLimit, canvasRelations, canvasRoles, canvasTextLimit, canvasTitleLimit } from '../image-canvas/canvas-harness';
 
 export class StoreError extends Error {
@@ -14,7 +16,7 @@ const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(
 const model = (value: unknown) => typeof value === 'string' && /^(llm|picture|video|3d):\S.{0,511}$/.test(value);
 const canvasId = /^(default|canvas-\d{13}-[a-f0-9-]{36})$/;
 
-export const kinds = ['chats', 'keys', 'canvas', 'settings', 'characters'] as const;
+export const kinds = ['chats', 'keys', 'canvas', 'settings', 'characters', 'reference-sets'] as const;
 export type Kind = (typeof kinds)[number];
 
 export function validId(id: string) {
@@ -108,6 +110,18 @@ function validSetting(id: string, value: unknown) {
   return false;
 }
 
+function validReferenceImage(image: unknown) {
+  return record(image) && typeof image.name === 'string' && image.name.length <= 512 &&
+    typeof image.url === 'string' && image.url.length <= 1024 * 1024 && /^data:image\/jpeg;base64,(?:[A-Za-z0-9+/]+={0,2})$/.test(image.url);
+}
+
+function validReferenceSet(id: string, value: unknown) {
+  return record(value) && value.id === id && typeof value.name === 'string' &&
+    value.name.trim().length > 0 && value.name.length <= referenceSetNameLimit &&
+    Array.isArray(value.images) && value.images.length > 0 && value.images.length <= MAX_MEDIA_ITEMS &&
+    value.images.every(validReferenceImage) && new Set(value.images.map(({ url }) => url)).size === value.images.length;
+}
+
 function validChat(id: string, value: unknown) {
   const chat = value as Record<string, unknown> | null;
   if (!chat || chat.id !== id ||
@@ -120,9 +134,8 @@ function validChat(id: string, value: unknown) {
     chat.models.every((entry) => typeof entry === 'string') &&
     chat.history.every((message) => message && ['user', 'assistant'].includes(message.role) && typeof message.content === 'string' &&
       (message.display === undefined || (message.role === 'user' && typeof message.display === 'string' && message.display.length <= 8100)) &&
-      (message.images === undefined || (message.role === 'user' && Array.isArray(message.images) && message.images.length <= 10 &&
-        message.images.every((image: unknown) => record(image) && typeof image.name === 'string' && image.name.length <= 512 &&
-          typeof image.url === 'string' && image.url.length <= 1024 * 1024 && /^data:image\/jpeg;base64,(?:[A-Za-z0-9+/]+={0,2})$/.test(image.url))))) &&
+      (message.images === undefined || (message.role === 'user' && Array.isArray(message.images) && message.images.length <= MAX_MEDIA_ITEMS &&
+        message.images.every(validReferenceImage)))) &&
     chat.generations.every((task) => task && ['picture', 'video', '3d'].includes(task.category) &&
       ['id', 'model', 'prompt', 'status'].every((field) => typeof task[field] === 'string') &&
       (task.canvasInputs === undefined || validCanvasSources(task.canvasInputs)) &&
@@ -156,6 +169,7 @@ export function validateValue(kind: Kind, id: string, value: unknown) {
   const valid = kind === 'canvas' ? validCanvas(id, value)
     : kind === 'settings' ? validSetting(id, value)
     : kind === 'characters' ? validCharacter(id, value)
+    : kind === 'reference-sets' ? validReferenceSet(id, value)
     : validChat(id, value);
   if (!valid) throw new StoreError(400, 'Invalid saved state');
 }
