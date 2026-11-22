@@ -26,7 +26,8 @@ import { MissingApiKeyError, useApiProviders, type KeyedProvider } from "@/compo
 import { ModelSetupDialog } from "@/components/first-run/model-setup-dialog";
 import { multiviewRequirements, resolveMultiview } from "./multiview";
 import { canvasResults, generate, llmProvider as providerOf, modelProvider, type Category, selectedModel, isMultiview, isSdModel, requiresImage, isLocal3dModel, videoStartImage, type ConversationMessage, type GeneratedFile, type Generation, type GenerationTask } from "./generation";
-import type { VisibleImage } from "@/components/image-canvas";
+import type { CanvasHandle, VisibleImage } from "@/components/image-canvas";
+import type { CanvasHarness } from "@/lib/image-canvas/canvas-harness";
 import { CanvasModelViewer } from "@/components/canvas-model-viewer";
 import { canvasFileError, canvasFileKind } from "@/lib/image-canvas/image-canvas-storage";
 import { getSetting, saveSetting } from "@/lib/settings";
@@ -76,7 +77,11 @@ function timelineCaptionsUrl(captions: StoryboardTimelinePlan["captions"]) {
   return URL.createObjectURL(new Blob(["WEBVTT\n\n", ...cues], { type: "text/vtt" }));
 }
 
-export function FloatingPrompt({ canvasId = "default", loading = false, onAddToCanvas, onFocusFile, selection = [], onModelPreview, onDeselect, storyboardHost, storyboardOrigin = { x: 0, y: 0 }, videoBounds, onVideoItem, onRemoveFromCanvas }: { videoBounds?: { x: number; y: number; width: number; height: number } | null; onVideoItem?: (id: string | undefined) => void; onRemoveFromCanvas?: (ids: string[]) => void; storyboardHost?: HTMLElement | null; storyboardOrigin?: { x: number; y: number }; canvasId?: string; loading?: boolean; onAddToCanvas?: (files: File[], at?: { x: number; y: number }) => Promise<string[]>; onFocusFile?: (file: File) => void; selection?: VisibleImage[]; onModelPreview?: (id: string) => string; onDeselect?: (ids: string[]) => void }) {
+function canvasInputNames(items: VisibleImage[]) {
+  return items.slice(0, MAX_MEDIA_ITEMS).map(item => ({ id: item.id, name: (item.harness?.title ?? item.file.name).slice(0, 512) }));
+}
+
+export function FloatingPrompt({ canvasId = "default", loading = false, onAddToCanvas, onFocusFile, selection = [], onModelPreview, onDeselect, storyboardHost, storyboardOrigin = { x: 0, y: 0 }, videoBounds, onVideoItem, onRemoveFromCanvas }: { videoBounds?: { x: number; y: number; width: number; height: number } | null; onVideoItem?: (id: string | undefined) => void; onRemoveFromCanvas?: (ids: string[]) => void; storyboardHost?: HTMLElement | null; storyboardOrigin?: { x: number; y: number }; canvasId?: string; loading?: boolean; onAddToCanvas?: CanvasHandle["addFiles"]; onFocusFile?: (file: File) => void; selection?: VisibleImage[]; onModelPreview?: (id: string) => string; onDeselect?: (ids: string[]) => void }) {
   const panel = useRef<HTMLElement>(null);
   const promptInput = useRef<HTMLTextAreaElement>(null);
   const storyboardInput = useRef<HTMLDivElement>(null);
@@ -370,7 +375,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     } catch { setStorageError("Could not delete this chat. Please try again."); }
   }
 
-  async function addToCanvas(file: GeneratedFile, files: GeneratedFile[] = [], signal?: AbortSignal, at?: { x: number; y: number }) {
+  async function addToCanvas(file: GeneratedFile, files: GeneratedFile[] = [], signal?: AbortSignal, at?: { x: number; y: number }, task?: Generation) {
     if (!mounted.current || !onAddToCanvas || importing.current) return;
     importing.current = true;
     setAdding(file.url);
@@ -388,7 +393,9 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       if (invalid) throw new Error(invalid);
       if (!mounted.current) return;
       signal?.throwIfAborted();
-      const [id] = await onAddToCanvas([imported], at);
+      const harness: CanvasHarness = { role: "Output" };
+      if (task) harness.provenance = { model: task.model.slice(0, 512), prompt: task.prompt.slice(0, 8000), selectedInputs: task.canvasInputs };
+      const [id] = await onAddToCanvas([imported], at, harness);
       setCanvasFiles((current) => ({ ...current, [file.url]: imported }));
       return id;
     } catch (cause) {
@@ -420,7 +427,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       let imported = candidates.length > 0;
       if (!imported && !summary) notifyError("No supported 3D model was returned. Download the result files to inspect them.");
       for (const file of candidates) {
-        if (!await addToCanvas(file, files)) imported = false;
+        if (!await addToCanvas(file, files, undefined, undefined, task)) imported = false;
       }
       if (imported) setExpanded((current) => current.filter((id) => id !== task.id));
       return summary || `${task.category} generated with ${task.model}: ${task.prompt}`;
@@ -464,7 +471,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     const views = needsViews ? resolveMultiview(model, args.viewIndices, images.map(({ image_url }, index) => ({ url: image_url.url, name: selectedImages[index].file.name }))) : undefined;
     if (category === "3d" && !needsViews && requiresImage(model) && images.length !== 1) throw new Error("This 3D model needs exactly one image selected on the canvas");
     const { task, images: generationImages } = characterGeneration(
-      { category, prompt: text, aspectRatio: typeof args.aspect_ratio === "string" ? args.aspect_ratio.slice(0, 16) : undefined, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: agentMessageIndex.current, views },
+      { category, prompt: text, aspectRatio: typeof args.aspect_ratio === "string" ? args.aspect_ratio.slice(0, 16) : undefined, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: agentMessageIndex.current, views, canvasInputs: canvasInputNames(needsViews ? selectedImages : selected) },
       images.map((image) => image.image_url.url), agentCharacters.current,
     );
     setGenerations((current) => [...current, task]);
@@ -1110,7 +1117,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           ? resolveMultiview(model, task.viewIndices, images.map(({ image_url }, index) => ({ url: image_url.url, name: `Selected image ${index + 1}` })))
           : undefined;
         return characterGeneration(
-          { ...task, views, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: fullHistory.length },
+          { ...task, views, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: fullHistory.length, canvasInputs: canvasInputNames(selection) },
           images.map((image) => image.image_url.url), characters,
         );
       });
@@ -1395,7 +1402,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
                   : <BoxIcon className="size-5" />}
             </div>
             <span className="min-w-0 flex-1 truncate text-sm" title={file.name}>{file.name}</span>
-            {!canvasFiles[file.url] && onAddToCanvas && canvasResults(task.files ?? [], task.category).includes(file) && <Tip label="Retry adding to canvas"><Button variant="ghost" size="icon-sm" aria-label="Retry adding to canvas" disabled={!!adding || !!status} onClick={() => void addToCanvas(file, task.files)}>{adding === file.url ? <Loader2Icon className="animate-spin" /> : <PlusIcon />}</Button></Tip>}
+            {!canvasFiles[file.url] && onAddToCanvas && canvasResults(task.files ?? [], task.category).includes(file) && <Tip label="Retry adding to canvas"><Button variant="ghost" size="icon-sm" aria-label="Retry adding to canvas" disabled={!!adding || !!status} onClick={() => void addToCanvas(file, task.files, undefined, undefined, task)}>{adding === file.url ? <Loader2Icon className="animate-spin" /> : <PlusIcon />}</Button></Tip>}
             <Tip label={`Download ${file.name}`}><Button variant="ghost" size="icon-sm" aria-label={`Download ${file.name}`} render={<a href={file.url} target="_blank" rel="noopener noreferrer" download={file.url.startsWith("/api/storage/files/") ? `${file.name}.glb` : file.url.startsWith("data:") || file.url.startsWith("blob:") ? file.name : undefined} />} nativeButton={false}><DownloadIcon /></Button></Tip>
           </div>)}
           </AccordionContent>

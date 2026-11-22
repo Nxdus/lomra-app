@@ -1,5 +1,6 @@
 import { storage, storageFile } from '../storage';
 import { saveSetting } from '../settings';
+import type { CanvasHarness } from './canvas-harness';
 
 export type CanvasImage = {
   id: string;
@@ -8,6 +9,7 @@ export type CanvasImage = {
   y: number;
   width: number;
   height: number;
+  harness?: CanvasHarness;
 };
 
 // Kept only to import existing browser data; server saves never overwrite it.
@@ -40,7 +42,7 @@ export async function localCanvasStorage(images?: CanvasImage[]): Promise<Canvas
   }
 }
 
-type SavedCanvasImage = Omit<CanvasImage, 'file'> & { name: string; type: string; lastModified: number };
+export type SavedCanvasImage = Omit<CanvasImage, 'file'> & { name: string; type: string; lastModified: number };
 const uploaded = new Set<string>();
 const pendingFiles = new WeakSet<File>();
 export const isCanvasFilePending = (file: File) => pendingFiles.has(file);
@@ -86,7 +88,9 @@ async function saveCanvas(images: CanvasImage[], id: string) {
       uploaded.add(image.id);
     }
   }
-  const manifest = images.map(({ file, ...item }) => ({ ...item, name: file.name, type: file.type, lastModified: file.lastModified }));
+  const manifest = images.map(({ file, id, x, y, width, height, harness }) => ({
+    id, x, y, width, height, harness, name: file.name, type: file.type, lastModified: file.lastModified,
+  }));
   await storage(`canvas/${encodeURIComponent(id)}`, 'PUT', manifest);
 }
 

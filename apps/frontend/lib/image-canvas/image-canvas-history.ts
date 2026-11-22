@@ -1,15 +1,8 @@
 import type { StoryboardLayout } from "./storyboard-layout";
 import type { CanvasCamera } from "./image-canvas-camera";
+import type { CanvasImage } from "./image-canvas-storage";
 
-export type CanvasItemSnapshot = {
-  id: string;
-  file: File;
-  url: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
+export type CanvasItemSnapshot = CanvasImage & { url: string };
 
 export type CanvasHistoryItem = CanvasItemSnapshot;
 
@@ -48,6 +41,7 @@ export function areCanvasItemsEqual(a: CanvasItemSnapshot[], b: CanvasItemSnapsh
       itemA.y !== itemB.y ||
       itemA.width !== itemB.width ||
       itemA.height !== itemB.height ||
+      itemA.harness !== itemB.harness ||
       itemA.file !== itemB.file ||
       itemA.url !== itemB.url
     ) {
