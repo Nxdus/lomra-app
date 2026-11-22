@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { strFromU8, unzipSync } from 'three/addons/libs/fflate.module.js';
 import { exportProject, importProject } from './import-export';
 import { createLocalStore } from './store';
+import { canvasCardType, type CanvasHarness } from '../image-canvas/canvas-harness';
+import { canvasHandoff, canvasHandoffZip } from '../image-canvas/canvas-harness-export';
 
 const item = (id: string, x = 0, y = 0) => ({
   id,
@@ -22,6 +24,35 @@ async function makeStore() {
   const root = await mkdtemp(join(tmpdir(), 'lomra-port-'));
   return { root, store: createLocalStore(root, Buffer.alloc(32, 7)) };
 }
+
+test('canvas cards and generation provenance survive project import, and handoffs include only selected assets', async () => {
+  const { store } = await makeStore();
+  const brief = { ...item('brief'), type: canvasCardType, harness: { role: 'Brief', title: 'Lamp brief' } satisfies CanvasHarness };
+  const output = { ...item('output'), harness: {
+    role: 'Output',
+    links: [{ to: brief.id, relation: 'Continues from' }],
+    provenance: { model: 'model', prompt: 'Warm lamp', selectedInputs: [{ id: 'ref', name: 'Reference' }] },
+  } satisfies CanvasHarness };
+  const reference = item('ref');
+  const saved = [brief, reference, output];
+  await Promise.all(saved.map(item => store.writeFile(item.id, Uint8Array.of(42))));
+  await store.save('canvas', 'default', saved);
+  await expect(store.save('canvas', 'default', [output])).rejects.toThrow('Invalid saved state');
+  const { archive } = await exportProject(store, 'default');
+  const imported = await importProject(store, archive);
+  const mapped = (await store.list('canvas')).find(row => row.id === imported.canvasId)!.value as typeof saved;
+  const [newBrief, newReference, newOutput] = mapped;
+  expect(newOutput).toMatchObject({ harness: {
+    links: [{ to: newBrief.id, relation: 'Continues from' }],
+    provenance: { prompt: 'Warm lamp', selectedInputs: [{ id: newReference.id, name: 'Reference' }] },
+  } });
+  const items = saved.map(item => ({ ...item, file: new File([Uint8Array.of(42)], item.name, { type: item.type }) }));
+  const handoff = canvasHandoff(items, new Set(['brief', 'output']));
+  expect(handoff.markdown).toContain('Continues from: Lamp brief (brief)');
+  expect(handoff.markdown).toContain('Warm lamp');
+  const zip = await canvasHandoffZip(handoff.markdown, handoff.assets);
+  expect(Object.keys(unzipSync(new Uint8Array(await zip.arrayBuffer())))).toEqual(['canvas.md', 'files/output-output.png']);
+});
 
 test('project export and import round-trip preserves canvas items, layout, chats, storyboard, takes, timeline audio and files with mapped IDs', async () => {
   const { store: s } = await makeStore();

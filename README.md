@@ -108,6 +108,14 @@
       In <strong>Settings → Agents</strong>, see which Claude Code, Codex, and OpenCode CLIs are installed and choose which appear in the model picker. View available Codex or Claude Code usage limits and OpenCode session and token counts.</p>
     </td>
   </tr>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <a href="docs/demos/canvas-handoff.webp"><picture><source srcset="docs/demos/canvas-handoff.webp" type="image/webp"><img src="docs/demos/canvas-handoff.poster.jpg" width="420" alt="A Roblox supply crate brief and reference linked to a concept image on the Lomra canvas, then exported as a ZIP"></picture></a>
+      <p><strong>Hand off work from the canvas</strong><br>
+      Link a brief, reference images, and an output in <strong>Canvas details</strong>. Select the items you want to share, edit the Markdown, and download a ZIP with the selected files.</p>
+    </td>
+    <td></td>
+  </tr>
 </table>
 
 Prompt-driven media tools need a tool-capable chat model. See the

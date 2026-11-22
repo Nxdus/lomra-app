@@ -3,6 +3,7 @@ import { animationInput, animationFiles, rigFiles } from "./animation";
 import { localMediaTool, mediaToolModel, validateMediaTool, type MediaTool, type ToolSource } from "./media-tools";
 import { desktopAgents, desktopLocal3d, desktopSd } from "@/lib/desktop";
 import type { Provider, ProviderRequest } from "@/components/api-provider";
+import type { CanvasSource } from "@/lib/image-canvas/canvas-harness";
 
 export type Category = "picture" | "video" | "3d";
 import { isMultiview, multiviewInput, type ModelView, type ModelViews } from "./multiview";
@@ -10,6 +11,7 @@ export { modelViews, isMultiview, multiviewError, type ModelView, type ModelView
 export type GenerationTask = { category: Category; prompt: string; aspectRatio?: string; startImage?: boolean; duration?: number; texture?: boolean; viewIndices?: Partial<Record<ModelView, number>>; operation?: ImageOperation; mediaTool?: MediaTool };
 export type GeneratedFile = { url: string; name: string; kind: "image" | "video" | "file" };
 export type Generation = GenerationTask & {
+  canvasInputs?: CanvasSource[];
   id: string; model: string; status: string; requestId?: string; files?: GeneratedFile[]; error?: string; views?: ModelViews; messageIndex?: number; summary?: string;
   motionJobs?: { rig?: string; motion?: string };
 };
