@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import { CheckIcon, ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { FieldError, FieldGroup, FieldLegend, FieldSet } from "@/components/ui/field";
+import { Field, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { ReferenceSet } from "@/lib/reference-sets";
 import { storage } from "@/lib/storage";
 import type { Shot } from "./storyboard-data";
@@ -55,24 +55,25 @@ export function StoryboardReferenceSetDialog({ shots, images, onApply, onClose }
       </DialogHeader>
       <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-4 py-4 sm:px-5">
         {sets?.length ? <FieldGroup className="gap-4">
-          <FieldSet className="min-w-0 gap-2">
-            <FieldLegend variant="label" className="mb-1">Reference set</FieldLegend>
-            <ToggleGroup orientation="vertical" aria-label="Reference set" spacing={0}
-              variant="outline" size="sm" value={setId ? [setId] : []}
-              onValueChange={([id]) => { if (id) { setSetId(id); setError(""); } }}
-              className="max-h-32 w-full overflow-y-auto p-1">
-              {sets.map(({ id, name, images }) => <ToggleGroupItem key={id} value={id} className="min-w-0 justify-start">
-                <span className="min-w-0 flex-1 truncate text-left">{name}</span>
-                <span className="shrink-0 text-xs text-muted-foreground">{images.length} {images.length === 1 ? "image" : "images"}</span>
-                <CheckIcon data-icon="inline-end" className={id === setId ? "visible" : "invisible"} />
-              </ToggleGroupItem>)}
-            </ToggleGroup>
-            {active && <div className="flex flex-wrap gap-1.5 px-1">
-              {active.images.map(({ url, name }) =>
+          <Field>
+            <FieldLabel htmlFor="storyboard-reference-set">Reference set</FieldLabel>
+            <Select value={setId} onValueChange={(id) => { setSetId(id); setError(""); }}
+              items={sets.map(({ id, name }) => ({ value: id, label: name }))}>
+              <SelectTrigger id="storyboard-reference-set" className="w-full min-w-0">
+                <SelectValue placeholder="Choose a set" />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}><SelectGroup>
+                {sets.map(({ id, name, images }) => <SelectItem key={id} value={id} label={name}>
+                  {name} · {images.length} {images.length === 1 ? "image" : "images"}
+                </SelectItem>)}
+              </SelectGroup></SelectContent>
+            </Select>
+            {active && <div className="flex flex-wrap gap-2">
+              {active.images.map(({ url, name }, index) =>
                 // eslint-disable-next-line @next/next/no-img-element
-                <img key={url} src={url} alt={name} className="size-9 rounded-md border object-cover" />)}
+                <img key={index} src={url} alt={name} className="size-12 rounded-md border object-cover" />)}
             </div>}
-          </FieldSet>
+          </Field>
           <FieldSet className="min-w-0">
             <FieldLegend variant="label" className="mb-1">Shots</FieldLegend>
             <div className="grid max-h-64 grid-cols-[repeat(auto-fill,minmax(min(100%,7.5rem),1fr))] gap-2 overflow-y-auto p-1">
