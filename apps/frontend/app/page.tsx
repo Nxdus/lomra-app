@@ -37,9 +37,9 @@ export default function Home() {
             <FloatingPrompt key={canvasId} canvasId={canvasId} storyboardHost={storyboardHost} storyboardOrigin={storyboardOrigin} videoBounds={videoBounds} onVideoItem={setVideoItem} onRemoveFromCanvas={(ids) => canvas.current?.removeItems(ids)} loading={!canvasReady} selection={selection} onDeselect={(ids) => canvas.current?.deselect(ids)} onModelPreview={(id) => {
               if (!canvas.current) throw new Error("Canvas is not ready");
               return canvas.current.modelPreview(id);
-            }} onAddToCanvas={(files, at) => {
+            }} onAddToCanvas={(files, at, harness) => {
               if (!canvas.current) throw new Error("Canvas is not ready");
-              return canvas.current.addFiles(files, at);
+              return canvas.current.addFiles(files, at, harness);
             }} onFocusFile={(file) => {
               if (!canvas.current) throw new Error("Canvas is not ready");
               canvas.current.focusFile(file);
