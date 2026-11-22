@@ -44,6 +44,13 @@ export function CanvasMedia({ image, onLoaded, onCaptureFrame }: {
     });
   }
 
+  function togglePlayback() {
+    const video = videoRef.current;
+    if (!video || video.controls) return;
+    if (video.paused) void video.play().catch(() => toast.add({ title: "Could not play video.", type: "error" }));
+    else video.pause();
+  }
+
   function openFullscreen(video: HTMLVideoElement) {
     // Keep the browser's playback controls available while the video itself is fullscreen.
     const restore = () => {
@@ -92,10 +99,11 @@ export function CanvasMedia({ image, onLoaded, onCaptureFrame }: {
       // eslint-disable-next-line @next/next/no-img-element
       <img key={attempt} src={image.url} alt={image.file.name || "Pasted image"} draggable={false} className="size-full rounded-xl object-contain" onLoad={() => setLoaded(true)} onError={() => setError(true)} />
     ) : kind === "video" ? (
-      <div className="flex size-full flex-col">
+      <div className="group/player relative size-full">
         <video
           ref={videoRef} key={attempt} src={image.url} controls={!onCaptureFrame} playsInline preload="metadata"
-          aria-label={image.file.name} className="min-h-0 w-full flex-1 object-contain"
+          aria-label={image.file.name} className="size-full object-contain"
+          onClick={onCaptureFrame ? togglePlayback : undefined}
           onLoadedMetadata={(event) => { setLoaded(true); updatePlayback(event.currentTarget); }}
           onDurationChange={(event) => updatePlayback(event.currentTarget)}
           onProgress={(event) => updatePlayback(event.currentTarget)}
@@ -106,27 +114,27 @@ export function CanvasMedia({ image, onLoaded, onCaptureFrame }: {
           onRateChange={(event) => updatePlayback(event.currentTarget)}
           onError={() => setError(true)}
         />
-        {onCaptureFrame && loaded && !error && <div className="shrink-0 overflow-x-auto" onKeyDown={(event) => event.stopPropagation()}>
+        {onCaptureFrame && loaded && !error && <div
+          className="absolute inset-x-0 bottom-0 overflow-x-auto bg-linear-to-t from-black/85 to-transparent text-white opacity-0 transition-opacity group-hover/player:opacity-100 group-focus-within/player:opacity-100 group-has-[[aria-expanded=true]]/player:opacity-100 motion-reduce:transition-none [@media(hover:none)]:opacity-100"
+          onKeyDown={(event) => event.stopPropagation()}
+        >
           <div className="flex min-w-28 items-center gap-1 p-1">
-            <Button variant="ghost" size="icon-xs" aria-label={playback.paused ? "Play" : "Pause"} onClick={() => {
-              const video = videoRef.current;
-              if (!video) return;
-              if (video.paused) void video.play().catch(() => toast.add({ title: "Could not play video.", type: "error" }));
-              else video.pause();
-            }}>
+            <Button variant="ghost" size="icon-xs" className="hover:bg-white/20" aria-label={playback.paused ? "Play" : "Pause"} onClick={togglePlayback}>
               {playback.paused ? <PlayIcon /> : <PauseIcon />}
             </Button>
-            <Slider aria-label="Video timeline (seconds)" className="min-w-0 flex-1" min={0} max={playback.duration || 1}
+            <Slider aria-label="Video timeline (seconds)"
+              className="min-w-0 flex-1 [&_[data-slot=slider-control]]:h-6 [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/40 [&_[data-slot=slider-range]]:bg-white [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-white"
+              min={0} max={playback.duration || 1}
               step={0.01} largeStep={5} disabled={!playback.duration} value={[Math.min(playback.time, playback.duration)]}
               onValueChange={(value) => {
                 if (videoRef.current) videoRef.current.currentTime = typeof value === "number" ? value : value[0];
               }} />
-            <Button variant="secondary" size="icon-xs" aria-label="Capture current frame as image" title="Capture current frame"
+            <Button variant="ghost" size="icon-xs" className="hover:bg-white/20" aria-label="Capture current frame as image" title="Capture current frame"
               disabled={capturing} onClick={captureFrame}>
               <CameraIcon aria-hidden="true" />
             </Button>
             <Popover>
-              <PopoverTrigger render={<Button variant="ghost" size="icon-xs" aria-label="Video options" />}>
+              <PopoverTrigger render={<Button variant="ghost" size="icon-xs" className="hover:bg-white/20 aria-expanded:bg-white/20" aria-label="Video options" />}>
                 <EllipsisIcon />
               </PopoverTrigger>
               <PopoverContent data-canvas-interactive onKeyDown={(event) => event.stopPropagation()} className="w-48" side="top">
