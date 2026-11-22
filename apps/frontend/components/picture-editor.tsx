@@ -1,6 +1,7 @@
 "use client";
 
 import { Tip } from "@/components/tip";
+import { BackgroundCleanup } from "@/components/background-cleanup";
 import { useEffect, useImperativeHandle, useReducer, useRef, useState, type PointerEvent, type Ref } from "react";
 import { ArrowRightIcon, CheckIcon, CircleIcon, EraserIcon, LoaderCircleIcon, MinusIcon, MousePointer2Icon, PenLineIcon, PictureInPicture2Icon, Redo2Icon, ScanIcon, ShapesIcon, SquareIcon, TypeIcon, Undo2Icon, XIcon } from "lucide-react";
 import { PictureTools, type PictureTool } from "@/components/picture-tools";
@@ -55,6 +56,7 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
   const [discard, setDiscard] = useState<"mode" | "viewer" | null>(null);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState("");
+  const [cleanup, setCleanup] = useState<{ original: HTMLCanvasElement; cutout: HTMLCanvasElement } | null>(null);
   const [color, setColor] = useState("#ef4444");
   const [size, setSize] = useState(4);
   const [brushCursor, setBrushCursor] = useState<{ x: number; y: number; diameter: number } | null>(null);
@@ -65,7 +67,8 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
   const painting = tool === "Markup" || tool === "Erase";
 
   useImperativeHandle(ref, () => ({ requestClose() {
-    if (dirty || job.current) { setDiscard("viewer"); return false; }
+    if (cleanup && job.current) return false;
+    if (dirty || cleanup || job.current) { setDiscard("viewer"); return false; }
     return true;
   } }));
 
@@ -157,6 +160,21 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
     await onSave(new File([blob], `${name.replace(/\.[^.]+$/, "")}-edited.png`, { type: "image/png" }));
   }
 
+  async function saveCutout(result: HTMLCanvasElement) {
+    if (job.current) return;
+    const controller = new AbortController();
+    job.current = controller;
+    setBusy("Saving…");
+    try {
+      await exportResult(result, controller.signal);
+      if (!controller.signal.aborted) setCleanup(null);
+    } catch (cause) {
+      if (!controller.signal.aborted) error(cause);
+    } finally {
+      if (!controller.signal.aborted) { setBusy(""); job.current = null; }
+    }
+  }
+
   async function run(action: PictureTool, aspectRatio?: string) {
     if (!ready || job.current) return;
     const controller = new AbortController(); job.current = controller;
@@ -204,6 +222,10 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
           const result = action === "Erase" ? surface(original.width, original.height) : surface(bitmap.width, bitmap.height);
           const ctx = result.getContext("2d")!;
           ctx.drawImage(bitmap, 0, 0, result.width, result.height);
+          if (background) {
+            setCleanup({ original, cutout: result });
+            return;
+          }
           if (action === "Erase") {
             const selection = surface(original.width, original.height);
             drawMarkup(selection.getContext("2d")!, history.items.map(item => ({ ...item, color: "white" })));
@@ -228,7 +250,8 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
   </>;
 
   return <>
-    <div className="relative mx-auto w-fit max-w-full">
+    {cleanup && <BackgroundCleanup {...cleanup} saving={!!busy} onSave={saveCutout} onCancel={() => setDiscard("mode")} />}
+    <div className={cn("relative mx-auto w-fit max-w-full", cleanup && "hidden")}>
       {/* Local blob URLs need no Next.js image optimization. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={url} alt={name || "Image preview"} className="block max-h-[min(80dvh,calc(var(--app-content-height)-5rem))] max-w-full rounded-4xl object-contain" />
@@ -288,7 +311,7 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
         <Slider className="[&_[data-slot=slider-control]]:min-h-0" orientation="vertical" aria-label={tool === "Erase" ? "Brush size" : "Stroke width"} min={1} max={tool === "Erase" ? 200 : 40} step={1} value={[size]} onValueChange={value => setSize(Array.isArray(value) ? value[0] : value)} disabled={!!busy} />
       </div>}
     </div>
-    <PictureTools>
+    {!cleanup && <PictureTools>
       {busy ? <><LoaderCircleIcon className="mx-2 size-4 shrink-0 animate-spin" /><span role="status" className="truncate text-sm text-muted-foreground">{busy}</span><Button variant="ghost" size="icon-sm" aria-label="Cancel processing" onClick={() => setDiscard("viewer")}><XIcon /></Button></>
       : tool === "Markup" ? <>
         <ToggleGroup value={[drawingTool]} onValueChange={value => { if (value[0]) { setDrawingTool(value[0] as typeof drawingTool); setSelected(null); } }} size="sm" aria-label="Drawing tools" spacing={0}>
@@ -316,10 +339,10 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
           <DropdownMenuContent side="top" align="end"><DropdownMenuGroup>{ratios.map(({ label, value, icon: Icon }) => <DropdownMenuItem key={value} onClick={() => void run("Resize", value)}><Icon /><span>{label}</span><span className="ml-auto text-xs text-muted-foreground">{value}</span></DropdownMenuItem>)}</DropdownMenuGroup></DropdownMenuContent>
         </DropdownMenu>
       </>}
-    </PictureTools>
+    </PictureTools>}
     <Dialog open={!!discard} onOpenChange={open => { if (!open) setDiscard(null); }}>
       <DialogContent showCloseButton={false}><DialogHeader><DialogTitle>{busy ? "Stop editing?" : "Discard changes?"}</DialogTitle><DialogDescription>{busy ? "The request will be cancelled where supported. The provider may still finish work already submitted." : "Your changes won’t be saved."}</DialogDescription></DialogHeader>
-        <DialogFooter><Button variant="outline" autoFocus onClick={() => setDiscard(null)}>Keep editing</Button><Button variant="destructive" onClick={() => { const closeViewer = discard === "viewer"; job.current?.abort(); reset(); setTool(null); setDiscard(null); if (closeViewer) onClose(); }}>Discard changes</Button></DialogFooter>
+        <DialogFooter><Button variant="outline" autoFocus onClick={() => setDiscard(null)}>Keep editing</Button><Button variant="destructive" onClick={() => { const closeViewer = discard === "viewer"; job.current?.abort(); reset(); setTool(null); setCleanup(null); setDiscard(null); if (closeViewer) onClose(); }}>Discard changes</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   </>;
