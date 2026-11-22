@@ -1,5 +1,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'three/addons/libs/fflate.module.js';
 import type { Storyboard } from '../../components/prompt/storyboard-data';
+import type { SavedCanvasImage } from '../image-canvas/image-canvas-storage';
+import type { CanvasSource } from '../image-canvas/canvas-harness';
 import type { LocalStore } from './store';
 import { StoreError, validId, validateValue } from './validation';
 
@@ -9,16 +11,11 @@ const MAX_FILE_BYTES = 100 * 1024 * 1024;
 export const PROJECT_FORMAT = 'lomra-project';
 export const PROJECT_VERSION = 1;
 
-export type SavedCanvasItem = {
-  id: string;
-  name: string;
-  type: string;
-  lastModified: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
+export type SavedCanvasItem = SavedCanvasImage;
+
+function remapSources(sources: CanvasSource[], fileIds: Map<string, string>) {
+  return sources.map(source => ({ ...source, id: fileIds.get(source.id) ?? source.id }));
+}
 
 export type ProjectManifest = {
   format: typeof PROJECT_FORMAT;
@@ -136,9 +133,12 @@ function remapChat(chat: unknown, newChatId: string, newCanvasId: string, fileId
     }
   }
 
-  const generations = raw.generations as Array<{ files?: Array<{ url?: string }> }> | undefined;
+  const generations = raw.generations as Array<{ files?: Array<{ url?: string }>; canvasInputs?: CanvasSource[] }> | undefined;
   if (Array.isArray(generations)) {
     for (const gen of generations) {
+      if (Array.isArray(gen.canvasInputs) && gen.canvasInputs.every(source => source && typeof source.id === 'string')) {
+        gen.canvasInputs = remapSources(gen.canvasInputs, fileIdMap);
+      }
       for (const file of gen.files ?? []) {
         const match = file.url?.match(/^\/api\/storage\/files\/([\w-]+)$/);
         if (match && fileIdMap.has(match[1])) {
@@ -278,6 +278,7 @@ export async function importProject(
   }
 
   const newCanvasId = `canvas-${Date.now()}-${crypto.randomUUID()}`;
+  validateValue('canvas', newCanvasId, manifest.canvas);
   const fileIdMap = new Map<string, string>();
 
   for (const entry of entries) {
@@ -299,10 +300,21 @@ export async function importProject(
     }
   }
 
-  const newCanvasItems: SavedCanvasItem[] = manifest.canvas.map((item) => ({
-    ...item,
-    id: fileIdMap.get(item.id)!,
-  }));
+  const newCanvasItems: SavedCanvasItem[] = manifest.canvas.map((item) => {
+    const harness = item.harness;
+    return {
+      ...item,
+      id: fileIdMap.get(item.id)!,
+      ...(harness && { harness: {
+        ...harness,
+        ...(harness.links && { links: harness.links.map(link => ({ ...link, to: fileIdMap.get(link.to)! })) }),
+        ...(harness.provenance?.selectedInputs && { provenance: {
+          ...harness.provenance,
+          selectedInputs: remapSources(harness.provenance.selectedInputs, fileIdMap),
+        } }),
+      } }),
+    };
+  });
 
   validateValue('canvas', newCanvasId, newCanvasItems);
 
