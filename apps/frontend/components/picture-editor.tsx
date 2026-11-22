@@ -1,6 +1,7 @@
 "use client";
 
 import { Tip } from "@/components/tip";
+import { BackgroundCleanup } from "@/components/background-cleanup";
 import { useEffect, useImperativeHandle, useReducer, useRef, useState, type PointerEvent, type Ref } from "react";
 import { ArrowRightIcon, CheckIcon, CircleIcon, EraserIcon, LoaderCircleIcon, MinusIcon, MousePointer2Icon, PenLineIcon, PictureInPicture2Icon, Redo2Icon, ScanIcon, ShapesIcon, SquareIcon, TypeIcon, Undo2Icon, XIcon } from "lucide-react";
 import { PictureTools, type PictureTool } from "@/components/picture-tools";
@@ -52,20 +53,23 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
   const [history, dispatch] = useReducer(markupHistory, emptyMarkup);
   const [selected, setSelected] = useState<string | null>(null);
   const [textDraft, setTextDraft] = useState<(Point & { value: string; left: number; top: number }) | null>(null);
+  const [editPrompt, setEditPrompt] = useState("");
   const [discard, setDiscard] = useState<"mode" | "viewer" | null>(null);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState("");
+  const [cleanup, setCleanup] = useState<{ original: HTMLCanvasElement; cutout: HTMLCanvasElement } | null>(null);
   const [color, setColor] = useState("#ef4444");
   const [size, setSize] = useState(4);
   const [brushCursor, setBrushCursor] = useState<{ x: number; y: number; diameter: number } | null>(null);
   const [resizeOpen, setResizeOpen] = useState(false);
   const [shapeOpen, setShapeOpen] = useState(false);
   const [colorOpen, setColorOpen] = useState(false);
-  const dirty = history.items.length > 0 || !!textDraft?.value.trim();
+  const dirty = history.items.length > 0 || !!textDraft?.value.trim() || !!editPrompt.trim();
   const painting = tool === "Markup" || tool === "Erase";
 
   useImperativeHandle(ref, () => ({ requestClose() {
-    if (dirty || job.current) { setDiscard("viewer"); return false; }
+    if (cleanup && job.current) return false;
+    if (dirty || cleanup || job.current) { setDiscard("viewer"); return false; }
     return true;
   } }));
 
@@ -117,6 +121,7 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
 
   function reset() {
     dispatch({ type: "reset" }); setSelected(null); setTextDraft(null); setBrushCursor(null); gesture.current = null;
+    setEditPrompt("");
   }
 
   function enter(next: "Markup" | "Erase") {
@@ -157,7 +162,22 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
     await onSave(new File([blob], `${name.replace(/\.[^.]+$/, "")}-edited.png`, { type: "image/png" }));
   }
 
-  async function run(action: PictureTool, aspectRatio?: string) {
+  async function saveCutout(result: HTMLCanvasElement) {
+    if (job.current) return;
+    const controller = new AbortController();
+    job.current = controller;
+    setBusy("Saving…");
+    try {
+      await exportResult(result, controller.signal);
+      if (!controller.signal.aborted) setCleanup(null);
+    } catch (cause) {
+      if (!controller.signal.aborted) error(cause);
+    } finally {
+      if (!controller.signal.aborted) { setBusy(""); job.current = null; }
+    }
+  }
+
+  async function run(action: PictureTool, aspectRatio?: string, edit = "") {
     if (!ready || job.current) return;
     const controller = new AbortController(); job.current = controller;
     setBusy(action === "Markup" ? "Adding markup…" : "Editing image…");
@@ -172,24 +192,25 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
         await exportResult(result, controller.signal);
       } else {
         const background = action === "Remove BG";
-        if (action === "Erase" && !history.items.length) throw new Error("Brush over what you want to remove first.");
+        if (action === "Erase" && !history.items.length) throw new Error("Brush over the area you want to change first.");
         const model = background ? "fal-ai/birefnet/v2" : selectedModel(await getSetting<string[]>("selected-models") ?? [], "picture");
         controller.signal.throwIfAborted();
         const keyProvider = background ? "fal" : modelProvider(model ?? "");
         if (!isBrowserModel(model ?? "") && !isSdModel(model ?? "") && !keys[keyProvider]) throw new Error(`Enter your ${{ fal: "Fal", google: "Google", openrouter: "OpenRouter" }[keyProvider]} API key in Settings first.`);
         if (!model) throw new Error("Select an Image model in the prompt toolbar first.");
         const references = [original.toDataURL("image/png")];
-        if (action === "Erase") {
-          const layer = surface(original.width, original.height);
-          drawMarkup(layer.getContext("2d")!, history.items);
+        const selection = action === "Erase" ? surface(original.width, original.height) : null;
+        if (selection) {
+          const mask = selection.getContext("2d")!;
+          drawMarkup(mask, history.items);
           const guide = surface(original.width, original.height), ctx = guide.getContext("2d")!;
-          ctx.drawImage(original, 0, 0); ctx.globalAlpha = 0.55; ctx.drawImage(layer, 0, 0);
-          drawMarkup(layer.getContext("2d")!, history.items.map(item => ({ ...item, color: "white" })));
-          references.push(guide.toDataURL("image/png"), layer.toDataURL("image/png"));
+          ctx.drawImage(original, 0, 0); ctx.globalAlpha = 0.55; ctx.drawImage(selection, 0, 0);
+          drawMarkup(mask, history.items.map(item => ({ ...item, color: "white" })));
+          references.push(guide.toDataURL("image/png"), selection.toDataURL("image/png"));
         }
         const prompt = background ? "Remove background" : action === "Resize"
           ? `Recompose this image into a ${aspectRatio} aspect ratio. Preserve the subject, identity, style, lighting and details. Naturally extend the scene or rearrange surrounding space to fit the new composition. Do not stretch the image, add letterboxing or crop away the main subject.`
-          : "Edit image 1. Image 2 highlights objects to remove; image 3 is a selection guide, not image content (white is selected). Remove the selected objects and naturally reconstruct the background from surrounding context. Return only the clean image at the original dimensions. Never render the mask, selection overlay, borders, frames, outlines or letterboxing. Preserve the composition and every unselected area.";
+          : `Edit image 1. Image 2 highlights the selection. Image 3 is a selection guide (white is selected). ${edit ? `Apply this instruction only within the selection: ${edit}` : "Remove the selected objects and naturally reconstruct the background from surrounding context."}\nReturn only the clean image at the original dimensions. Never render the mask, selection overlay, borders, frames, outlines or letterboxing. Preserve the composition and every unselected area.`;
         const files = await generate({ id: crypto.randomUUID(), category: "picture", prompt, model, status: "Waiting", ...(aspectRatio ? { aspectRatio } : {}), ...(background ? { mediaTool: { name: "remove_background" as const, image_index: 0 } } : {}) }, request, controller.signal, change => { if (change.status && !controller.signal.aborted) setBusy(change.status); }, references[0], references);
         const response = await fetch(files[0].url, { signal: controller.signal });
         if (!response.ok) throw new Error("Could not download the processed picture.");
@@ -201,12 +222,14 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
             const [w, h] = aspectRatio.split(":").map(Number);
             if (Math.abs(bitmap.width / bitmap.height / (w / h) - 1) > 0.03) throw new Error("The selected model did not return the requested aspect ratio. Try another Image model.");
           }
-          const result = action === "Erase" ? surface(original.width, original.height) : surface(bitmap.width, bitmap.height);
+          const result = selection ? surface(original.width, original.height) : surface(bitmap.width, bitmap.height);
           const ctx = result.getContext("2d")!;
           ctx.drawImage(bitmap, 0, 0, result.width, result.height);
-          if (action === "Erase") {
-            const selection = surface(original.width, original.height);
-            drawMarkup(selection.getContext("2d")!, history.items.map(item => ({ ...item, color: "white" })));
+          if (background) {
+            setCleanup({ original, cutout: result });
+            return;
+          }
+          if (selection) {
             // Only accept generated pixels inside the brush mask, including its antialiased edge.
             ctx.globalCompositeOperation = "destination-in";
             ctx.drawImage(selection, 0, 0);
@@ -223,16 +246,17 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
   }
 
   const historyControls = <>
-    <Tip label="Undo · Ctrl/⌘ Z"><Button variant="ghost" size="icon-sm" aria-label="Undo" disabled={!history.past.length || !!busy} onClick={() => dispatch({ type: "undo" })}><Undo2Icon /></Button></Tip>
-    <Tip label="Redo · Ctrl/⌘ Shift Z"><Button variant="ghost" size="icon-sm" aria-label="Redo" disabled={!history.future.length || !!busy} onClick={() => dispatch({ type: "redo" })}><Redo2Icon /></Button></Tip>
+    <Tip label="Undo · Ctrl/⌘ Z"><Button type="button" variant="ghost" size="icon-sm" aria-label="Undo" disabled={!history.past.length || !!busy} onClick={() => dispatch({ type: "undo" })}><Undo2Icon /></Button></Tip>
+    <Tip label="Redo · Ctrl/⌘ Shift Z"><Button type="button" variant="ghost" size="icon-sm" aria-label="Redo" disabled={!history.future.length || !!busy} onClick={() => dispatch({ type: "redo" })}><Redo2Icon /></Button></Tip>
   </>;
 
   return <>
-    <div className="relative mx-auto w-fit max-w-full">
+    {cleanup && <BackgroundCleanup {...cleanup} saving={!!busy} onSave={saveCutout} onCancel={() => setDiscard("mode")} />}
+    <div className={cn("relative mx-auto w-fit max-w-full", cleanup && "hidden")}>
       {/* Local blob URLs need no Next.js image optimization. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={url} alt={name || "Image preview"} className="block max-h-[min(80dvh,calc(var(--app-content-height)-5rem))] max-w-full rounded-4xl object-contain" />
-      <canvas ref={overlay} tabIndex={painting ? 0 : -1} aria-label={tool === "Markup" ? "Draw on image" : tool === "Erase" ? "Mark areas to remove" : undefined} aria-hidden={!painting} className={cn("absolute inset-0 size-full outline-none", painting && !busy ? "touch-none cursor-crosshair" : "pointer-events-none", tool === "Markup" && drawingTool === "select" && "cursor-default", tool === "Erase" && "opacity-50")}
+      <canvas ref={overlay} tabIndex={painting ? 0 : -1} aria-label={tool === "Markup" ? "Draw on image" : tool === "Erase" ? "Brush over the area to edit" : undefined} aria-hidden={!painting} className={cn("absolute inset-0 size-full outline-none", painting && !busy ? "touch-none cursor-crosshair" : "pointer-events-none", tool === "Markup" && drawingTool === "select" && "cursor-default", tool === "Erase" && "opacity-50")}
         onPointerDown={event => {
           if (!ready || busy || !painting || !event.isPrimary || event.button !== 0 || textDraft) return;
           event.preventDefault(); event.currentTarget.focus();
@@ -288,7 +312,7 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
         <Slider className="[&_[data-slot=slider-control]]:min-h-0" orientation="vertical" aria-label={tool === "Erase" ? "Brush size" : "Stroke width"} min={1} max={tool === "Erase" ? 200 : 40} step={1} value={[size]} onValueChange={value => setSize(Array.isArray(value) ? value[0] : value)} disabled={!!busy} />
       </div>}
     </div>
-    <PictureTools>
+    {!cleanup && <PictureTools>
       {busy ? <><LoaderCircleIcon className="mx-2 size-4 shrink-0 animate-spin" /><span role="status" className="truncate text-sm text-muted-foreground">{busy}</span><Button variant="ghost" size="icon-sm" aria-label="Cancel processing" onClick={() => setDiscard("viewer")}><XIcon /></Button></>
       : tool === "Markup" ? <>
         <ToggleGroup value={[drawingTool]} onValueChange={value => { if (value[0]) { setDrawingTool(value[0] as typeof drawingTool); setSelected(null); } }} size="sm" aria-label="Drawing tools" spacing={0}>
@@ -304,11 +328,18 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
         {historyControls}
         <Tip label="Cancel markup"><Button variant="ghost" size="icon-sm" aria-label="Cancel markup" onClick={cancel}><XIcon /></Button></Tip>
         <Tip label="Done · Add marked image to canvas"><Button size="icon-sm" aria-label="Done" disabled={!history.items.length || !!textDraft} onClick={() => void run("Markup")}><CheckIcon /></Button></Tip>
-      </> : tool === "Erase" ? <>
-        {history.items.length || history.past.length || history.future.length ? historyControls : <span className="px-2 text-sm text-muted-foreground">Brush over what you want to remove</span>}
-        <Button size="sm" disabled={!history.items.length} onClick={() => void run("Erase")}>Send</Button>
-        <Tip label="Cancel"><Button variant="ghost" size="icon-sm" aria-label="Cancel erase" onClick={cancel}><XIcon /></Button></Tip>
-      </> : <>
+      </> : tool === "Erase" ? <form className="flex w-80 min-w-0 flex-col gap-1" onSubmit={event => {
+        event.preventDefault();
+        if (history.items.length && editPrompt.trim()) void run("Erase", undefined, editPrompt.trim());
+      }}>
+        <Input aria-label="Describe the edit" placeholder="e.g. Change the shirt to green" maxLength={7500} value={editPrompt} onChange={event => setEditPrompt(event.target.value)} />
+        <div className="flex flex-wrap items-center gap-1">
+          {history.items.length || history.past.length || history.future.length ? historyControls : <span className="py-1 text-sm text-muted-foreground">Brush over the area to change</span>}
+          <Button className="ml-auto" type="button" variant="secondary" size="sm" disabled={!history.items.length} onClick={() => void run("Erase")}>Erase</Button>
+          <Button type="submit" size="sm" disabled={!history.items.length || !editPrompt.trim()}>Apply edit</Button>
+          <Tip label="Cancel"><Button type="button" variant="ghost" size="icon-sm" aria-label="Cancel erase" onClick={cancel}><XIcon /></Button></Tip>
+        </div>
+      </form> : <>
         <Button variant="ghost" size="sm" disabled={!ready} onClick={() => enter("Markup")}><PenLineIcon data-icon="inline-start" />Markup</Button>
         <Button variant="ghost" size="sm" disabled={!ready} onClick={() => void run("Remove BG")}><ScanIcon data-icon="inline-start" />Remove BG</Button>
         <Button variant="ghost" size="sm" disabled={!ready} onClick={() => enter("Erase")}><EraserIcon data-icon="inline-start" />Erase</Button>
@@ -316,10 +347,10 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
           <DropdownMenuContent side="top" align="end"><DropdownMenuGroup>{ratios.map(({ label, value, icon: Icon }) => <DropdownMenuItem key={value} onClick={() => void run("Resize", value)}><Icon /><span>{label}</span><span className="ml-auto text-xs text-muted-foreground">{value}</span></DropdownMenuItem>)}</DropdownMenuGroup></DropdownMenuContent>
         </DropdownMenu>
       </>}
-    </PictureTools>
+    </PictureTools>}
     <Dialog open={!!discard} onOpenChange={open => { if (!open) setDiscard(null); }}>
       <DialogContent showCloseButton={false}><DialogHeader><DialogTitle>{busy ? "Stop editing?" : "Discard changes?"}</DialogTitle><DialogDescription>{busy ? "The request will be cancelled where supported. The provider may still finish work already submitted." : "Your changes won’t be saved."}</DialogDescription></DialogHeader>
-        <DialogFooter><Button variant="outline" autoFocus onClick={() => setDiscard(null)}>Keep editing</Button><Button variant="destructive" onClick={() => { const closeViewer = discard === "viewer"; job.current?.abort(); reset(); setTool(null); setDiscard(null); if (closeViewer) onClose(); }}>Discard changes</Button></DialogFooter>
+        <DialogFooter><Button variant="outline" autoFocus onClick={() => setDiscard(null)}>Keep editing</Button><Button variant="destructive" onClick={() => { const closeViewer = discard === "viewer"; job.current?.abort(); reset(); setTool(null); setCleanup(null); setDiscard(null); if (closeViewer) onClose(); }}>Discard changes</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   </>;

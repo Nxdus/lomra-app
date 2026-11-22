@@ -1,6 +1,9 @@
 import { parseOllamaUrl } from '../ollama-url';
 import { validStoryboard } from '../../components/prompt/storyboard-data';
 import { characterImageLimit, characterImageType, characterNameLimit, characterNamePattern, characterNotesLimit } from '../characters';
+import { referenceSetNameLimit } from '../reference-sets';
+import { MAX_MEDIA_ITEMS } from '../../components/prompt/media';
+import { canvasCardType, canvasLinkLimit, canvasRelations, canvasRoles, canvasTextLimit, canvasTitleLimit } from '../image-canvas/canvas-harness';
 
 export class StoreError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -13,18 +16,53 @@ const finite = (value: unknown) => typeof value === 'number' && Number.isFinite(
 const model = (value: unknown) => typeof value === 'string' && /^(llm|picture|video|3d):\S.{0,511}$/.test(value);
 const canvasId = /^(default|canvas-\d{13}-[a-f0-9-]{36})$/;
 
-export const kinds = ['chats', 'keys', 'canvas', 'settings', 'characters'] as const;
+export const kinds = ['chats', 'keys', 'canvas', 'settings', 'characters', 'reference-sets'] as const;
 export type Kind = (typeof kinds)[number];
 
 export function validId(id: string) {
   return /^[\w-]{1,128}$/.test(id);
 }
 
+const bounded = (value: unknown, max: number) => typeof value === 'string' && value.length <= max;
+const oneOf = (value: unknown, options: readonly string[]) => typeof value === 'string' && options.includes(value);
+
+function validCanvasSources(value: unknown) {
+  return Array.isArray(value) && value.length <= 10 && value.every(source =>
+    record(source) && typeof source.id === 'string' && validId(source.id) && bounded(source.name, 512));
+}
+
+function validHarness(value: unknown, id: string, ids: Set<string>, card: boolean) {
+  if (value === undefined) return !card;
+  if (!record(value)) return false;
+  const { role, title, notes, links, provenance } = value;
+  if (card || role !== undefined) {
+    if (!oneOf(role, canvasRoles)) return false;
+  }
+  if (card || title !== undefined) {
+    if (typeof title !== 'string' || !title.trim() || title.length > canvasTitleLimit) return false;
+  }
+  if (notes !== undefined && !bounded(notes, canvasTextLimit)) return false;
+  if (provenance !== undefined && (!record(provenance) || !bounded(provenance.model, 512) ||
+    !bounded(provenance.prompt, canvasTextLimit) ||
+    (provenance.selectedInputs !== undefined && !validCanvasSources(provenance.selectedInputs)))) return false;
+  if (links === undefined) return true;
+  if (!Array.isArray(links) || links.length > canvasLinkLimit) return false;
+  const seen = new Set<string>();
+  return links.every(link => {
+    if (!record(link) || typeof link.to !== 'string' || link.to === id || !ids.has(link.to) ||
+      !oneOf(link.relation, canvasRelations)) return false;
+    const key = `${link.to}:${link.relation}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function validCanvas(id: string, value: unknown) {
   if (!canvasId.test(id) || !Array.isArray(value) || value.length > 5000) return false;
   const ids = new Set<string>();
-  return value.every((item: unknown) => {
-    if (!record(item) || typeof item.id !== 'string' || !/^[\w-]{1,128}$/.test(item.id) || ids.has(item.id)) return false;
+  const validItems = value.every((item: unknown) => {
+    if (!record(item) || typeof item.id !== 'string' || !validId(item.id) || ids.has(item.id)) return false;
     ids.add(item.id);
     return typeof item.name === 'string' && item.name.length <= 512 &&
       typeof item.type === 'string' && item.type.length <= 128 &&
@@ -32,6 +70,7 @@ function validCanvas(id: string, value: unknown) {
       ['x', 'y', 'width', 'height'].every((key) => finite(item[key])) &&
       (item.width as number) > 0 && (item.height as number) > 0;
   });
+  return validItems && value.every(item => validHarness(item.harness, item.id, ids, item.type === canvasCardType));
 }
 
 function validSetting(id: string, value: unknown) {
@@ -71,6 +110,18 @@ function validSetting(id: string, value: unknown) {
   return false;
 }
 
+function validReferenceImage(image: unknown) {
+  return record(image) && typeof image.name === 'string' && image.name.length <= 512 &&
+    typeof image.url === 'string' && image.url.length <= 1024 * 1024 && /^data:image\/jpeg;base64,(?:[A-Za-z0-9+/]+={0,2})$/.test(image.url);
+}
+
+function validReferenceSet(id: string, value: unknown) {
+  return record(value) && value.id === id && typeof value.name === 'string' &&
+    value.name.trim().length > 0 && value.name.length <= referenceSetNameLimit &&
+    Array.isArray(value.images) && value.images.length > 0 && value.images.length <= MAX_MEDIA_ITEMS &&
+    value.images.every(validReferenceImage) && new Set(value.images.map(({ url }) => url)).size === value.images.length;
+}
+
 function validChat(id: string, value: unknown) {
   const chat = value as Record<string, unknown> | null;
   if (!chat || chat.id !== id ||
@@ -83,11 +134,11 @@ function validChat(id: string, value: unknown) {
     chat.models.every((entry) => typeof entry === 'string') &&
     chat.history.every((message) => message && ['user', 'assistant'].includes(message.role) && typeof message.content === 'string' &&
       (message.display === undefined || (message.role === 'user' && typeof message.display === 'string' && message.display.length <= 8100)) &&
-      (message.images === undefined || (message.role === 'user' && Array.isArray(message.images) && message.images.length <= 10 &&
-        message.images.every((image: unknown) => record(image) && typeof image.name === 'string' && image.name.length <= 512 &&
-          typeof image.url === 'string' && image.url.length <= 1024 * 1024 && /^data:image\/jpeg;base64,(?:[A-Za-z0-9+/]+={0,2})$/.test(image.url))))) &&
+      (message.images === undefined || (message.role === 'user' && Array.isArray(message.images) && message.images.length <= MAX_MEDIA_ITEMS &&
+        message.images.every(validReferenceImage)))) &&
     chat.generations.every((task) => task && ['picture', 'video', '3d'].includes(task.category) &&
       ['id', 'model', 'prompt', 'status'].every((field) => typeof task[field] === 'string') &&
+      (task.canvasInputs === undefined || validCanvasSources(task.canvasInputs)) &&
       ['error', 'requestId'].every((field) => task[field] === undefined || typeof task[field] === 'string') &&
       (task.files === undefined || (Array.isArray(task.files) && task.files.every((file: Record<string, unknown>) =>
         file && typeof file.url === 'string' && typeof file.name === 'string' &&
@@ -118,6 +169,7 @@ export function validateValue(kind: Kind, id: string, value: unknown) {
   const valid = kind === 'canvas' ? validCanvas(id, value)
     : kind === 'settings' ? validSetting(id, value)
     : kind === 'characters' ? validCharacter(id, value)
+    : kind === 'reference-sets' ? validReferenceSet(id, value)
     : validChat(id, value);
   if (!valid) throw new StoreError(400, 'Invalid saved state');
 }

@@ -3,7 +3,7 @@
 import { Tip } from "@/components/tip";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, Loader2Icon, MessageCircleIcon, MicIcon, PauseIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, Rows3Icon, ScanEyeIcon, TrashIcon } from "lucide-react";
+import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, ImagesIcon, Loader2Icon, MessageCircleIcon, MicIcon, PauseIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, Rows3Icon, ScanEyeIcon, TrashIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { chatStorage, persistentUrl, restoreGenerations, type Chat } from "./chat-storage";
 import { Button } from "@/components/ui/button";
@@ -26,7 +26,8 @@ import { MissingApiKeyError, useApiProviders, type KeyedProvider } from "@/compo
 import { ModelSetupDialog } from "@/components/first-run/model-setup-dialog";
 import { multiviewRequirements, resolveMultiview } from "./multiview";
 import { canvasResults, generate, llmProvider as providerOf, modelProvider, type Category, selectedModel, isMultiview, isSdModel, requiresImage, isLocal3dModel, videoStartImage, type ConversationMessage, type GeneratedFile, type Generation, type GenerationTask } from "./generation";
-import type { VisibleImage } from "@/components/image-canvas";
+import type { CanvasHandle, VisibleImage } from "@/components/image-canvas";
+import type { CanvasHarness } from "@/lib/image-canvas/canvas-harness";
 import { CanvasModelViewer } from "@/components/canvas-model-viewer";
 import { canvasFileError, canvasFileKind } from "@/lib/image-canvas/image-canvas-storage";
 import { getSetting, saveSetting } from "@/lib/settings";
@@ -39,6 +40,8 @@ import { saveAgentLimits } from "./agent-limits";
 import { draftedShots, draftShotsInstruction, draftStoryInstruction, ensureShotIds, mergeStoryCharacters, moveShot, shotImagePrompt, storyCharacterNotesLimit, storyLimit, storyReply, type Shot, type Storyboard, type StoryCharacter } from "./storyboard-data";
 import { storyboardLayout } from "@/lib/image-canvas/storyboard-layout";
 import { StoryboardShots, defaultSpot, shotsFrame } from "./storyboard-shots";
+import { StoryboardReferenceSetDialog } from "./storyboard-reference-set-dialog";
+import { applyReferenceSet } from "./storyboard-reference-sets";
 import { StoryboardCharacters } from "./storyboard-characters";
 import { StoryboardExport } from "./storyboard-export";
 import { StoryboardPreview } from "./storyboard-preview";
@@ -76,7 +79,11 @@ function timelineCaptionsUrl(captions: StoryboardTimelinePlan["captions"]) {
   return URL.createObjectURL(new Blob(["WEBVTT\n\n", ...cues], { type: "text/vtt" }));
 }
 
-export function FloatingPrompt({ canvasId = "default", loading = false, onAddToCanvas, onFocusFile, selection = [], onModelPreview, onDeselect, storyboardHost, storyboardOrigin = { x: 0, y: 0 }, videoBounds, onVideoItem, onRemoveFromCanvas }: { videoBounds?: { x: number; y: number; width: number; height: number } | null; onVideoItem?: (id: string | undefined) => void; onRemoveFromCanvas?: (ids: string[]) => void; storyboardHost?: HTMLElement | null; storyboardOrigin?: { x: number; y: number }; canvasId?: string; loading?: boolean; onAddToCanvas?: (files: File[], at?: { x: number; y: number }) => Promise<string[]>; onFocusFile?: (file: File) => void; selection?: VisibleImage[]; onModelPreview?: (id: string) => string; onDeselect?: (ids: string[]) => void }) {
+function canvasInputNames(items: VisibleImage[]) {
+  return items.slice(0, MAX_MEDIA_ITEMS).map(item => ({ id: item.id, name: (item.harness?.title ?? item.file.name).slice(0, 512) }));
+}
+
+export function FloatingPrompt({ canvasId = "default", loading = false, onAddToCanvas, onFocusFile, selection = [], onModelPreview, onDeselect, storyboardHost, storyboardOrigin = { x: 0, y: 0 }, videoBounds, onVideoItem, onRemoveFromCanvas }: { videoBounds?: { x: number; y: number; width: number; height: number } | null; onVideoItem?: (id: string | undefined) => void; onRemoveFromCanvas?: (ids: string[]) => void; storyboardHost?: HTMLElement | null; storyboardOrigin?: { x: number; y: number }; canvasId?: string; loading?: boolean; onAddToCanvas?: CanvasHandle["addFiles"]; onFocusFile?: (file: File) => void; selection?: VisibleImage[]; onModelPreview?: (id: string) => string; onDeselect?: (ids: string[]) => void }) {
   const panel = useRef<HTMLElement>(null);
   const promptInput = useRef<HTMLTextAreaElement>(null);
   const storyboardInput = useRef<HTMLDivElement>(null);
@@ -106,7 +113,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const multiview = isMultiview(threeDModel);
   const [history, setHistory] = useState<ConversationMessage[]>([]);
   const [storyboard, setStoryboard] = useState<Storyboard>();
-  const [boardDialog, setBoardDialog] = useState<"preview" | "export" | "timeline" | "review" | null>(null);
+  const [boardDialog, setBoardDialog] = useState<"preview" | "export" | "timeline" | "review" | "references" | null>(null);
   const [timelineDownload, setTimelineDownload] = useState<{ plan: StoryboardTimelinePlan; action: "preview" | "export"; bytes: number } | null>(null);
   const [timelinePreview, setTimelinePreview] = useState<{ video: string; captions?: string; blob: Blob } | null>(null);
   const renderedTimeline = useRef<{ key: string; blob: Blob } | null>(null);
@@ -353,10 +360,14 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     if (!storyboard || !boardOwner || boardOwner === chatId || !positionLoaded.current) return;
     saves.current = saves.current.then(async () => {
       const owner = (await chatStorage(undefined, canvasId)).find(({ id }) => id === boardOwner);
-      if (!owner || JSON.stringify(owner.storyboard) === JSON.stringify(storyboard)) return;
-      setChats(await chatStorage({ ...owner, storyboard }, canvasId));
+      if (!owner) return;
+      const [first, ...rest] = owner.history;
+      const imagesChanged = first?.role === "user" && JSON.stringify(first.images ?? []) !== JSON.stringify(storyImages);
+      if (!imagesChanged && JSON.stringify(owner.storyboard) === JSON.stringify(storyboard)) return;
+      const history = imagesChanged ? [{ ...first, images: storyImages }, ...rest] : owner.history;
+      setChats(await chatStorage({ ...owner, storyboard, history }, canvasId));
     }).catch(() => { setStorageError("Could not save the storyboard. Keep this tab open and check the backend connection before retrying."); });
-  }, [storyboard, boardOwner, chatId, canvasId]);
+  }, [storyboard, boardOwner, chatId, canvasId, storyImages]);
 
   async function deleteChat() {
     if (!deleting || status || saving) return;
@@ -370,7 +381,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     } catch { setStorageError("Could not delete this chat. Please try again."); }
   }
 
-  async function addToCanvas(file: GeneratedFile, files: GeneratedFile[] = [], signal?: AbortSignal, at?: { x: number; y: number }) {
+  async function addToCanvas(file: GeneratedFile, files: GeneratedFile[] = [], signal?: AbortSignal, at?: { x: number; y: number }, task?: Generation) {
     if (!mounted.current || !onAddToCanvas || importing.current) return;
     importing.current = true;
     setAdding(file.url);
@@ -388,7 +399,9 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       if (invalid) throw new Error(invalid);
       if (!mounted.current) return;
       signal?.throwIfAborted();
-      const [id] = await onAddToCanvas([imported], at);
+      const harness: CanvasHarness = { role: "Output" };
+      if (task) harness.provenance = { model: task.model.slice(0, 512), prompt: task.prompt.slice(0, 8000), selectedInputs: task.canvasInputs };
+      const [id] = await onAddToCanvas([imported], at, harness);
       setCanvasFiles((current) => ({ ...current, [file.url]: imported }));
       return id;
     } catch (cause) {
@@ -420,7 +433,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       let imported = candidates.length > 0;
       if (!imported && !summary) notifyError("No supported 3D model was returned. Download the result files to inspect them.");
       for (const file of candidates) {
-        if (!await addToCanvas(file, files)) imported = false;
+        if (!await addToCanvas(file, files, undefined, undefined, task)) imported = false;
       }
       if (imported) setExpanded((current) => current.filter((id) => id !== task.id));
       return summary || `${task.category} generated with ${task.model}: ${task.prompt}`;
@@ -464,7 +477,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     const views = needsViews ? resolveMultiview(model, args.viewIndices, images.map(({ image_url }, index) => ({ url: image_url.url, name: selectedImages[index].file.name }))) : undefined;
     if (category === "3d" && !needsViews && requiresImage(model) && images.length !== 1) throw new Error("This 3D model needs exactly one image selected on the canvas");
     const { task, images: generationImages } = characterGeneration(
-      { category, prompt: text, aspectRatio: typeof args.aspect_ratio === "string" ? args.aspect_ratio.slice(0, 16) : undefined, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: agentMessageIndex.current, views },
+      { category, prompt: text, aspectRatio: typeof args.aspect_ratio === "string" ? args.aspect_ratio.slice(0, 16) : undefined, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: agentMessageIndex.current, views, canvasInputs: canvasInputNames(needsViews ? selectedImages : selected) },
       images.map((image) => image.image_url.url), agentCharacters.current,
     );
     setGenerations((current) => [...current, task]);
@@ -1110,7 +1123,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           ? resolveMultiview(model, task.viewIndices, images.map(({ image_url }, index) => ({ url: image_url.url, name: `Selected image ${index + 1}` })))
           : undefined;
         return characterGeneration(
-          { ...task, views, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: fullHistory.length },
+          { ...task, views, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: fullHistory.length, canvasInputs: canvasInputNames(selection) },
           images.map((image) => image.image_url.url), characters,
         );
       });
@@ -1395,7 +1408,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
                   : <BoxIcon className="size-5" />}
             </div>
             <span className="min-w-0 flex-1 truncate text-sm" title={file.name}>{file.name}</span>
-            {!canvasFiles[file.url] && onAddToCanvas && canvasResults(task.files ?? [], task.category).includes(file) && <Tip label="Retry adding to canvas"><Button variant="ghost" size="icon-sm" aria-label="Retry adding to canvas" disabled={!!adding || !!status} onClick={() => void addToCanvas(file, task.files)}>{adding === file.url ? <Loader2Icon className="animate-spin" /> : <PlusIcon />}</Button></Tip>}
+            {!canvasFiles[file.url] && onAddToCanvas && canvasResults(task.files ?? [], task.category).includes(file) && <Tip label="Retry adding to canvas"><Button variant="ghost" size="icon-sm" aria-label="Retry adding to canvas" disabled={!!adding || !!status} onClick={() => void addToCanvas(file, task.files, undefined, undefined, task)}>{adding === file.url ? <Loader2Icon className="animate-spin" /> : <PlusIcon />}</Button></Tip>}
             <Tip label={`Download ${file.name}`}><Button variant="ghost" size="icon-sm" aria-label={`Download ${file.name}`} render={<a href={file.url} target="_blank" rel="noopener noreferrer" download={file.url.startsWith("/api/storage/files/") ? `${file.name}.glb` : file.url.startsWith("data:") || file.url.startsWith("blob:") ? file.name : undefined} />} nativeButton={false}><DownloadIcon /></Button></Tip>
           </div>)}
           </AccordionContent>
@@ -1451,6 +1464,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
               else setTakePlan({ shotId: shot.id!, model: videoModel });
             }} />}
           toolbarActions={<>
+            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Apply reference set" onClick={() => setBoardDialog("references")} />}><ImagesIcon /></TooltipTrigger><TooltipContent>Apply reference set</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Preview storyboard" onClick={() => setBoardDialog("preview")} />}><PlayIcon /></TooltipTrigger><TooltipContent>Preview storyboard</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Export storyboard" onClick={() => setBoardDialog("export")} />}><DownloadIcon /></TooltipTrigger><TooltipContent>Export storyboard</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Edit timeline" onClick={() => setBoardDialog("timeline")} />}><Rows3Icon /></TooltipTrigger><TooltipContent>Edit timeline</TooltipContent></Tooltip>
@@ -1460,6 +1474,17 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
         </div>}
       </>, storyboardHost)}
       {storyboard?.shots && <>
+        {boardDialog === "references" && <StoryboardReferenceSetDialog key={boardOwner} shots={storyboard.shots} images={storyImages}
+          onClose={() => setBoardDialog(null)}
+          onApply={(set, shotIds) => {
+            const next = applyReferenceSet(storyboard, storyImages, set.images, shotIds);
+            if (boardOwner === chatId) {
+              setHistory(([first, ...rest]) => [{ ...first, images: next.images }, ...rest]);
+            }
+            setStoryImages(next.images);
+            setStoryboard(next.board);
+            toast.add({ title: `Applied ${set.name}`, type: "success" });
+          }} />}
         <StoryboardPreview storyboard={storyboard} images={storyImages} open={boardDialog === "preview"} onOpenChange={(open) => setBoardDialog(open ? "preview" : null)} />
         <StoryboardExport storyboard={storyboard} images={storyImages} open={boardDialog === "export"} onOpenChange={(open) => setBoardDialog(open ? "export" : null)} />
         <StoryboardTimeline storyboard={storyboard} images={storyImages} open={boardDialog === "timeline"} onOpenChange={(open) => setBoardDialog(open ? "timeline" : null)}
