@@ -9,9 +9,11 @@ import { fileURLToPath } from 'node:url';
 import { createAgentSessions, isTrustedSender } from './agents.mjs';
 import { claudeLiveWindows, codexWindows } from './limits.mjs';
 import { createOllama } from './ollama.mjs';
+import { unloadOllama } from './ollama-unload.mjs';
+import { createGpuQueue } from './gpu-queue.mjs';
 import { createFfmpeg } from './ffmpeg.mjs';
 import { createSd } from './sd.mjs';
-import { createLocal3d } from './local3d.mjs';
+import { createLocal3d, nvidiaMemory } from './local3d.mjs';
 import { createToolBridge, toolConfig } from './tool-bridge.mjs';
 import { generateBrowserImage } from './browser-image.mjs';
 import { generateGeminiMedia } from './browser-gemini.mjs';
@@ -29,13 +31,15 @@ let appOrigin;
 let mainWindow;
 let quitting = false;
 const ollama = createOllama();
+// Local pictures and local 3D share one graphics card: one run at a time, after an Ollama on this computer has let go of its models.
+const gpuQueue = createGpuQueue({ prepare: (signal) => unloadOllama({ workspace: workspaceDir(), signal }) });
 const updates = createUpdates({ currentVersion: app.getVersion(), isPackaged: app.isPackaged });
 let updateController = null;
 // Local image generation (stable-diffusion.cpp); created on first use because userData is only known once the app is ready.
 let ffmpegInstance;
 const ffmpeg = () => ffmpegInstance ??= createFfmpeg({ dir: join(app.getPath('userData'), 'ffmpeg') });
 let sdInstance;
-const sd = () => sdInstance ??= createSd({ dir: join(app.getPath('userData'), 'stable-diffusion') });
+const sd = () => sdInstance ??= createSd({ dir: join(app.getPath('userData'), 'stable-diffusion'), gpuQueue, gpuMemory: async () => await nvidiaMemory({ env: process.env, spawnProcess: spawn }) * 1024 * 1024 });
 let local3dInstance;
 // The first version of local 3D only had Hunyuan3D and kept it in `hunyuan3d`; carry that install over instead of downloading it again.
 const local3dDir = () => {
@@ -44,7 +48,7 @@ const local3dDir = () => {
   if (!existsSync(dir) && existsSync(old)) try { renameSync(old, dir); } catch { /* the old folder stays unused */ }
   return dir;
 };
-const local3d = () => local3dInstance ??= createLocal3d({ dir: local3dDir() });
+const local3d = () => local3dInstance ??= createLocal3d({ dir: local3dDir(), gpuQueue });
 
 if (!app.requestSingleInstanceLock()) app.quit();
 
@@ -270,19 +274,20 @@ ipcMain.handle('speech:deleteModel', async (event, id) => {
   spawnWhisper();
   return true;
 });
-// Local image generation. The app asks before downloading (components/sd-settings.tsx); the renderer only names a model, never a command.
-ipcMain.handle('sd:status', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sd().status(); });
+// Local image generation. The app asks before downloading (components/sd-settings.tsx); the renderer only names a model and sends prompts, bounded settings and picture bytes (checked in sd-input.mjs), never a path or command.
+ipcMain.handle('sd:status', async (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); await sd().probe(); return sd().status(); });
 // `request` is a preset id, or `{ repo, file, family }` for a Hugging Face checkpoint; sd.mjs validates both.
 ipcMain.handle('sd:download', (event, request) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sd().download(request); });
 const sdLookup = async (lookup) => { try { return { result: await lookup() }; } catch (cause) { return { error: cause instanceof Error ? cause.message : 'Could not reach Hugging Face.' }; } };
 ipcMain.handle('sd:search', (event, query) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sdLookup(() => sd().search(query)); });
 ipcMain.handle('sd:files', (event, repo) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sdLookup(() => sd().files(repo)); });
-ipcMain.handle('sd:cancelDownload', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); sd().cancelDownload(); });
+ipcMain.handle('sd:inspect', (event, repo, file) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sdLookup(() => sd().inspect(repo, file)); });
+ipcMain.handle('sd:cancelDownload', async (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); if (id === undefined || typeof id === 'string') await sd().cancelDownload(id); });
 ipcMain.handle('sd:remove', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return typeof id === 'string' && sd().remove(id); });
 ipcMain.handle('sd:generate', async (event, runId, input) => {
   if (!trusted(event)) throw new Error('Untrusted sender');
   try {
-    return { image: await sd().generate(runId, input, (progress) => { if (!event.sender.isDestroyed()) event.sender.send('sd:progress', { runId, ...progress }); }) };
+    return await sd().generate(runId, input, (progress) => { if (!event.sender.isDestroyed()) event.sender.send('sd:progress', { runId, ...progress }); });
   } catch (cause) {
     return { error: cause instanceof Error && cause.name !== 'AbortError' ? cause.message : 'Stopped.' };
   }
@@ -306,7 +311,7 @@ ipcMain.on('video:cancel', (event, runId) => { if (trusted(event) && typeof runI
 // Local 3D generation. The app asks before installing (components/local3d-settings.tsx); the renderer only names a model and passes a picture.
 ipcMain.handle('local3d:status', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return local3d().status(); });
 ipcMain.handle('local3d:install', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return typeof id === 'string' && local3d().install(id); });
-ipcMain.handle('local3d:cancelInstall', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); local3d().cancelInstall(); });
+ipcMain.handle('local3d:cancelInstall', async (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); if (id === undefined || typeof id === 'string') await local3d().cancelInstall(id); });
 ipcMain.handle('local3d:remove', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return typeof id === 'string' && local3d().remove(id); });
 ipcMain.handle('local3d:generate', async (event, runId, input) => {
   if (!trusted(event)) throw new Error('Untrusted sender');

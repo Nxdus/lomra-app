@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -80,7 +80,7 @@ test('a corrupted download installs nothing and says so', async () => {
   ffmpeg.download();
   await wait(() => !ffmpeg.status().downloading);
   expect(ffmpeg.status()).toMatchObject({ installed: false, error: 'The download was corrupted. Try again.' });
-  expect(existsSync(join(dir, 'engine', 'ffmpeg.zip.part'))).toBe(false);
+  expect(readdirSync(join(dir, 'engine'))).toEqual([]);
   rmSync(dir, { recursive: true, force: true });
 });
 

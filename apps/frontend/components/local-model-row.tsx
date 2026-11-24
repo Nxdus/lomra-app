@@ -2,12 +2,16 @@ import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/tip";
 
-export function LocalModelRow({ name, description, size, status, action }: {
+type Action = { label: string; icon: ReactNode; onClick: () => void; disabled?: boolean };
+
+export function LocalModelRow({ name, description, size, status, action, secondary }: {
   name: string;
   description: string;
   size: string;
   status?: string;
-  action?: { label: string; icon: ReactNode; onClick: () => void; disabled?: boolean };
+  action?: Action;
+  /** Shown before `action`. */
+  secondary?: Action;
 }) {
   return <div className="flex items-center gap-3 py-2.5 text-sm">
     <div className="min-w-0 flex-1">
@@ -18,12 +22,12 @@ export function LocalModelRow({ name, description, size, status, action }: {
         {description}{status && <> · <span role="status">{status}</span></>}
       </div>
     </div>
-    <div className="size-8 shrink-0">
-      {action && <Tip label={action.label}>
-        <Button type="button" variant="ghost" size="icon-sm" aria-label={`${action.label} ${name}`} disabled={action.disabled} onClick={action.onClick}>
-          {action.icon}
+    <div className="flex h-8 min-w-8 shrink-0">
+      {[secondary, action].map((item) => item && <Tip key={item.label} label={item.label}>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label={`${item.label} ${name}`} disabled={item.disabled} onClick={item.onClick}>
+          {item.icon}
         </Button>
-      </Tip>}
+      </Tip>)}
     </div>
   </div>;
 }

@@ -975,7 +975,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
         </ContextMenuGroup>
       </ContextMenuContent>
       </ContextMenu>
-      {editingCard !== null && <CanvasCardDialog item={images.find(item => item.id === editingCard)} items={images} onClose={() => setEditingCard(null)} onSave={saveCard} />}
+      {editingCard !== null && <CanvasCardDialog item={images.find(item => item.id === editingCard)} items={images} onLoaded={mediaLoaded} onClose={() => setEditingCard(null)} onSave={saveCard} />}
       {handoffIds.length > 0 && <CanvasHandoffDialog items={images} ids={handoffIds} onClose={() => setHandoffIds([])} />}
       <Dialog open={!!inspected} onOpenChange={open => { if (!open) setInspectId(null); }}>
         <DialogContent className="max-h-[calc(var(--app-content-height)*0.9)] gap-3 sm:max-w-5xl" aria-describedby={undefined}>
@@ -986,9 +986,10 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       <Dialog open={!!preview} onOpenChange={(open) => { if (!open && (pictureEditor.current?.requestClose() ?? true)) setPreviewId(null); }}>
         <DialogContent className="w-fit max-w-[calc(100vw-2rem)] overflow-visible bg-transparent ring-0 sm:max-w-[calc(100vw-4rem)] [&>[data-slot=dialog-close]]:-top-3 [&>[data-slot=dialog-close]]:-right-3 [&>[data-slot=dialog-close]]:bg-popover [&>[data-slot=dialog-close]]:shadow-md" aria-describedby={undefined}>
           <DialogTitle className="sr-only">{preview?.file.name || "Image preview"}</DialogTitle>
-          {preview && <PictureEditor ref={pictureEditor} key={preview.id} url={preview.url} name={preview.file.name} onClose={() => setPreviewId(null)} onSave={async (file) => {
+          {preview && <PictureEditor ref={pictureEditor} key={preview.id} url={preview.url} name={preview.file.name} onClose={() => setPreviewId(null)} onSave={async (file, provenance) => {
             importFiles([file], { x: preview.x + preview.width + 24, y: preview.y }, false, false, {
               role: "Output", links: [{ to: preview.id, relation: "Continues from" }],
+              ...(provenance && { provenance: { ...provenance, selectedInputs: [{ id: preview.id, name: (preview.harness?.title ?? preview.file.name).slice(0, 512) }] } }),
             });
             await imports.current;
             if (!current.current.some((image) => image.file === file)) throw new Error("Could not add edited picture to canvas.");

@@ -32,7 +32,7 @@ export function useSd() {
     void read().then((next) => { if (!cancelled) setStatus(next); });
     return () => { cancelled = true; };
   }, [read]);
-  const downloading = !!status?.downloading;
+  const downloading = !!status?.downloading || !!status?.queued.length;
   useEffect(() => {
     if (!downloading) return;
     const timer = setInterval(() => void refresh(), 1000);
@@ -44,7 +44,7 @@ export function useSd() {
     await refresh();
     return !!started;
   }, [refresh]);
-  const cancel = useCallback(async () => { await desktopSd()?.cancelDownload(); await refresh(); }, [refresh]);
+  const cancel = useCallback(async (id: string) => { await desktopSd()?.cancelDownload(id); await refresh(); }, [refresh]);
   const remove = useCallback(async (id: string) => {
     if (!await desktopSd()?.remove(id)) throw new Error("Could not remove the model");
     window.dispatchEvent(new Event("sd-model-removed"));

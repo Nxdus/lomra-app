@@ -26,6 +26,7 @@ export function ModelSetupDialog({
   defaultTab = "api",
   targetProvider,
   modelName,
+  imageSearch,
   onContinue,
 }: {
   open: boolean;
@@ -33,12 +34,14 @@ export function ModelSetupDialog({
   defaultTab?: "api" | "local";
   targetProvider?: KeyedProvider | null;
   modelName?: string | null;
+  /** Opens the local models and looks for this image model on Hugging Face. */
+  imageSearch?: string;
   onContinue?: () => Promise<void>;
 }) {
   const [continuing, setContinuing] = useState(false);
   const [error, setError] = useState("");
   const [userTab, setUserTab] = useState<"api" | "local" | null>(null);
-  const activeTab = userTab ?? defaultTab;
+  const activeTab = userTab ?? (imageSearch ? "local" : defaultTab);
 
   async function finishSetup() {
     if (!onContinue) {
@@ -69,7 +72,9 @@ export function ModelSetupDialog({
         <DialogHeader className="mb-4 shrink-0 gap-1.5 pr-8">
           <DialogTitle>Set up models to generate</DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">
-            {onContinue
+            {imageSearch
+              ? "Find an image model on Hugging Face and download it."
+              : onContinue
               ? "Save an API key or install a local model. Lomra checks that at least one provider is ready before starting the tutorial."
               : targetProvider && modelName
                 ? `Add your ${providerLabel(targetProvider)} API key to start using ${modelName}.`
@@ -96,7 +101,7 @@ export function ModelSetupDialog({
           <TabsContent value="local" className={`${panelClassName} flex flex-col gap-5`}>
             <OllamaSettings />
             <Separator />
-            <SdSettings />
+            <SdSettings search={imageSearch} />
             <Separator />
             <Local3dSettings />
           </TabsContent>

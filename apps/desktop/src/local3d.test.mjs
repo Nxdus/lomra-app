@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -121,10 +121,10 @@ test('an install from an older version of the engine is brought up to date witho
 test('a download that does not match its SHA-256 fails the installation and leaves nothing behind', async () => {
   const { local3d, dir } = make({ fetchImpl: fakeFetch({ 'big.bin': 'tampered' }) });
   const status = await install(local3d, 'big');
-  expect(status).toMatchObject({ error: 'The download was corrupted. Try again.' });
+  expect(status).toMatchObject({ error: 'Big: The download was corrupted. Try again.' });
   expect(status.models[0].installed).toBe(false);
   expect(existsSync(join(dir, 'models/tencent/big/dit/model.bin'))).toBe(false);
-  expect(existsSync(join(dir, 'models/tencent/big/dit/model.bin.part'))).toBe(false);
+  expect(readdirSync(join(dir, 'models/tencent/big/dit'))).toEqual([]);
 });
 
 test('generate runs the Hunyuan worker with the model repo and a clean environment, and reports progress', async () => {

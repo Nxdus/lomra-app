@@ -2,6 +2,9 @@ import { processImage, type ImageOperation } from "./image-tools";
 import { animationInput, animationFiles, rigFiles } from "./animation";
 import { localMediaTool, mediaToolModel, validateMediaTool, type MediaTool, type ToolSource } from "./media-tools";
 import { desktopAgents, desktopLocal3d, desktopSd } from "@/lib/desktop";
+import type { SdSettings, SdUsed } from "@/lib/sd-settings";
+import { loadSdSettings, rememberSdSeed, sdSettingsOf } from "@/lib/sd-settings-store";
+import { restoreRatio, sdPicture } from "./sd-image";
 import type { Provider, ProviderRequest } from "@/components/api-provider";
 import type { CanvasSource } from "@/lib/image-canvas/canvas-harness";
 
@@ -14,6 +17,10 @@ export type Generation = GenerationTask & {
   canvasInputs?: CanvasSource[];
   id: string; model: string; status: string; requestId?: string; files?: GeneratedFile[]; error?: string; views?: ModelViews; messageIndex?: number; summary?: string;
   motionJobs?: { rig?: string; motion?: string };
+  /** What a local Stable Diffusion model used, for repeating the result. */
+  sd?: SdUsed;
+  /** A local Stable Diffusion edit: redraw only what is white in `mask` (a picture URL), with settings that replace the saved ones. */
+  sdEdit?: SdSettings & { mask: string };
 };
 /** `display` is the user's prompt with badge markers (commands and @Characters) so history can show them again. */
 export type ConversationMessage = { role: "user" | "assistant"; content: string; display?: string; images?: { name: string; url: string }[] };
@@ -34,6 +41,8 @@ export const isSdModel = (model: string) => model.startsWith(sdPrefix);
 /** Models installed in the desktop app (Hunyuan3D, TripoSR) make 3D models from one picture on this computer and carry this prefix. */
 export const local3dPrefix = "local3d/";
 export const isLocal3dModel = (model: string) => model.startsWith(local3dPrefix);
+/** Local pictures and local 3D take turns on the graphics card; `ahead` is only set on progress about that. */
+const waitingStatus = (ahead?: number) => ahead === undefined ? undefined : ahead > 0 ? `Waiting for the graphics card… ${ahead} ahead` : "Generating locally…";
 export const browserImageModel = "chatgpt-browser/create-image";
 export const geminiImageModel = "gemini-browser/create-image";
 export const geminiVideoModel = "gemini-browser/create-video";
@@ -187,16 +196,31 @@ export async function generate(
   if (task.category === "picture" && isSdModel(task.model) && !task.mediaTool) {
     const bridge = desktopSd();
     if (!bridge) throw new Error("Local image models require the Lomra desktop app.");
-    if (images.length) throw new Error("Local Stable Diffusion makes pictures from text only. Deselect the images or choose another model.");
+    // Kept with the job, so trying again asks for the picture instead of quietly drawing from the text alone.
+    if (images.length) update({ startImage: true });
+    else if (task.startImage) throw new Error("Select the picture to edit on the canvas, then try again.");
+    if (images.length > 1) throw new Error("Local Stable Diffusion works from one picture at a time. Select a single picture or choose another image model.");
     const abort = () => bridge.cancel(task.id);
     signal.addEventListener("abort", abort, { once: true });
-    const stopProgress = bridge.onProgress((event) => { if (event.runId === task.id) update({ status: `Generating locally… ${event.step}/${event.total}` }); });
+    const stopProgress = bridge.onProgress((event) => { if (event.runId === task.id) update({ status: waitingStatus(event.waiting) ?? `Generating locally… ${event.step}/${event.total}` }); });
     try {
       update({ status: "Generating locally…" });
-      const result = await bridge.generate(task.id, { model: task.model.slice(sdPrefix.length), prompt: task.prompt, ...(task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}) });
+      await loadSdSettings();
+      const model = task.model.slice(sdPrefix.length);
+      const { mask: maskUrl, ...override } = task.sdEdit ?? {};
+      const { strength, ...settings } = { ...sdSettingsOf(model), ...override };
+      const source = images.length ? await sdPicture(images[0], signal, maskUrl ? {} : { aspectRatio: task.aspectRatio }) : undefined;
+      const mask = maskUrl ? (await sdPicture(maskUrl, signal, { background: "#000" })).url : undefined;
       signal.throwIfAborted();
+      const result = await bridge.generate(task.id, {
+        model, prompt: task.prompt, ...settings,
+        ...(source ? { image: source.url, ...(mask ? { mask } : {}), ...(strength === undefined ? {} : { strength }) } : task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}),
+      });
       if ("error" in result) throw new Error(result.error);
-      return [{ url: result.image, name: "Image 1", kind: "image" }];
+      signal.throwIfAborted();
+      rememberSdSeed(result.settings.seed);
+      update({ sd: result.settings });
+      return [{ url: source && !mask ? await restoreRatio(result.image, source.ratio, signal) : result.image, name: "Image 1", kind: "image" }];
     } finally {
       stopProgress();
       signal.removeEventListener("abort", abort);
@@ -209,12 +233,15 @@ export async function generate(
     const abort = () => bridge.cancel(task.id);
     signal.addEventListener("abort", abort, { once: true });
     const labels: Record<string, string> = { loading: "Starting the 3D engine…", background: "Removing the background…", model: "Loading the model…", shape: "Making the 3D shape…", mesh: "Cleaning up the mesh…" };
-    const stopProgress = bridge.onProgress((event) => { if (event.runId === task.id && labels[event.stage]) update({ status: labels[event.stage] }); });
+    const stopProgress = bridge.onProgress((event) => {
+      const status = waitingStatus(event.waiting) ?? labels[event.stage];
+      if (event.runId === task.id && status) update({ status });
+    });
     try {
       update({ status: "Generating locally…" });
       const result = await bridge.generate(task.id, { model: task.model.slice(local3dPrefix.length), image: imageUrl });
-      signal.throwIfAborted();
       if ("error" in result) throw new Error(result.error);
+      signal.throwIfAborted();
       return [{ url: result.model, name: "GLB", kind: "file" }];
     } finally {
       stopProgress();

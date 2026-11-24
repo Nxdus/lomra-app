@@ -176,6 +176,31 @@ test("image generation forwards a requested aspect ratio with its source referen
   assert.equal(files.length, 1);
 });
 
+/** The browser pieces the local image path needs: the settings request, pictures loaded by URL and a canvas that records its size. */
+function fakeBrowser(sd: unknown, settings: unknown[] = [], picture = { width: 1500, height: 1000 }) {
+  const original = globalThis.fetch;
+  const loaded: string[] = [];
+  globalThis.fetch = (async (url: unknown) => {
+    if (url === "/api/storage/settings") return Response.json(settings);
+    loaded.push(String(url));
+    return new Response(String(url));
+  }) as typeof fetch;
+  Object.assign(globalThis, {
+    window: { lomra: { sd } },
+    createImageBitmap: async (blob: Blob) => ({ ...(await blob.text() === "data:image/png;base64,cmVzdWx0" ? { width: 576, height: 384 } : picture), close() {} }),
+    document: { createElement: () => {
+      const canvas = { width: 0, height: 0, fill: "", getContext: () => ({ set fillStyle(value: string) { canvas.fill = value; }, fillRect() {}, drawImage() {} }), toDataURL: () => `data:image/png;base64,${canvas.width}x${canvas.height}${canvas.fill}` };
+      return canvas;
+    } },
+  });
+  return { loaded, restore() {
+    globalThis.fetch = original;
+    for (const name of ["window", "document", "createImageBitmap"]) delete (globalThis as Record<string, unknown>)[name];
+  } };
+}
+
+const used = { seed: 7, steps: 4, cfg: 1 };
+
 test("local Stable Diffusion runs through the desktop bridge, reports progress and stops with the signal", async () => {
   const task: Generation = { id: "11111111-1111-1111-1111-111111111111", category: "picture", prompt: "a fox", aspectRatio: "16:9", model: "sd/sd-turbo", status: "Waiting" };
   const calls: unknown[] = [];
@@ -183,26 +208,103 @@ test("local Stable Diffusion runs through the desktop bridge, reports progress a
   let cancelled = "";
   const sd = {
     onProgress: (callback: typeof progress) => { progress = callback; return () => { progress = undefined; }; },
-    generate: async (runId: string, input: unknown): Promise<{ image: string } | { error: string }> => { calls.push([runId, input]); progress?.({ runId, step: 2, total: 4 }); return { image: "data:image/png;base64,YQ==" }; },
+    generate: async (runId: string, input: unknown): Promise<{ image: string; settings: unknown } | { error: string }> => { calls.push([runId, input]); progress?.({ runId, step: 2, total: 4 }); return { image: "data:image/png;base64,YQ==", settings: used }; },
     cancel: (runId: string) => { cancelled = runId; },
   };
-  Object.assign(globalThis, { window: { lomra: { sd } } });
+  const browser = fakeBrowser(sd);
   try {
     const statuses: string[] = [];
-    const files = await generate(task, async () => { throw new Error("no provider call"); }, new AbortController().signal, (change) => { if (change.status) statuses.push(change.status); });
+    let kept: Partial<Generation> = {};
+    const files = await generate(task, async () => { throw new Error("no provider call"); }, new AbortController().signal, (change) => { kept = { ...kept, ...change }; if (change.status) statuses.push(change.status); });
     assert.deepEqual(files, [{ url: "data:image/png;base64,YQ==", name: "Image 1", kind: "image" }]);
+    assert.deepEqual(kept.sd, used);
+    assert.equal(kept.startImage, undefined);
     assert.deepEqual(calls, [[task.id, { model: "sd-turbo", prompt: "a fox", aspectRatio: "16:9" }]]);
     assert.ok(statuses.includes("Generating locally… 2/4"));
     assert.equal(progress, undefined);
-    await assert.rejects(generate(task, async () => ({}), new AbortController().signal, () => {}, "data:image/png;base64,YQ==", ["data:image/png;base64,YQ=="]), /text only/);
+    await assert.rejects(generate(task, async () => ({}), new AbortController().signal, (change) => { kept = change; }, undefined, ["data:image/png;base64,YQ==", "data:image/png;base64,Yg=="]), /one picture at a time/);
+    assert.equal(kept.startImage, true);
+    await assert.rejects(generate({ ...task, startImage: true }, async () => ({}), new AbortController().signal, () => {}), /Select the picture to edit/);
+    assert.equal(calls.length, 1);
     const controller = new AbortController();
     sd.generate = async () => { controller.abort(); return { error: "Stopped." }; };
-    await assert.rejects(generate(task, async () => ({}), controller.signal, () => {}));
+    // Not an abort error, which the chat words as a hosted request that may still be charged.
+    await assert.rejects(generate(task, async () => ({}), controller.signal, () => {}), /^Error: Stopped\.$/);
     assert.equal(cancelled, task.id);
     Object.assign(globalThis, { window: { lomra: {} } });
     await assert.rejects(generate(task, async () => ({}), new AbortController().signal, () => {}), /desktop app/);
   } finally {
-    delete (globalThis as { window?: unknown }).window;
+    browser.restore();
+  }
+});
+
+test("local Stable Diffusion redraws one selected picture with the saved settings, and a masked area with the edit's own", async () => {
+  const task: Generation = { id: "11111111-1111-1111-1111-111111111111", category: "picture", prompt: "a fox", model: "sd/edit-model", status: "Waiting" };
+  const calls: Record<string, unknown>[] = [];
+  const sd = {
+    onProgress: () => () => {}, cancel: () => {},
+    generate: async (_runId: string, input: Record<string, unknown>) => { calls.push(input); return { image: "data:image/png;base64,cmVzdWx0", settings: { ...used, image: true } }; },
+  };
+  const source = "data:image/jpeg;base64,c291cmNl";
+  const { rememberSdSeed, lastSdSeed, changeSdSettings } = await import("@/lib/sd-settings-store");
+  rememberSdSeed(1);
+  changeSdSettings("edit-model", { seed: 5, strength: 0.4, negativePrompt: "blur" });
+  const browser = fakeBrowser(sd);
+  const run = (change: Partial<Generation> = {}, images = [source]) => generate({ ...task, ...change }, async () => ({}), new AbortController().signal, () => {}, undefined, images);
+  try {
+    // Saved strength applies only to edits.
+    await run({}, []);
+    assert.deepEqual(calls.pop(), { model: "edit-model", prompt: "a fox", seed: 5, negativePrompt: "blur" });
+    // The source keeps its shape, and the engine-sized result (576 x 384, also 3:2) is returned untouched.
+    assert.deepEqual(await run(), [{ url: "data:image/png;base64,cmVzdWx0", name: "Image 1", kind: "image" }]);
+    assert.deepEqual(calls.pop(), { model: "edit-model", prompt: "a fox", seed: 5, negativePrompt: "blur", strength: 0.4, image: "data:image/png;base64,1500x1000#fff" });
+    assert.equal(lastSdSeed(), 7);
+    // Another aspect ratio crops the source and stretches the result to exactly that shape.
+    assert.equal((await run({ aspectRatio: "1:1" }))[0].url, "data:image/png;base64,384x384");
+    assert.equal(calls.pop()!.image, "data:image/png;base64,1000x1000#fff");
+    // An inpaint keeps the whole picture, a black-backed mask of the same size, and its own settings.
+    const mask = "data:image/png;base64,bWFzaw==";
+    assert.equal((await run({ aspectRatio: "1:1", sdEdit: { mask, strength: 1, negativePrompt: "object" } }))[0].url, "data:image/png;base64,cmVzdWx0");
+    assert.deepEqual(calls.pop(), { model: "edit-model", prompt: "a fox", seed: 5, negativePrompt: "object", strength: 1, image: "data:image/png;base64,1500x1000#fff", mask: "data:image/png;base64,1500x1000#000" });
+    assert.ok(browser.loaded.includes(mask));
+  } finally {
+    browser.restore();
+    changeSdSettings("edit-model", {});
+  }
+});
+
+test("every kind of local run says how many are ahead on the graphics card, then that it is generating", async () => {
+  const picture = "data:image/png;base64,YQ==";
+  const other = "22222222-2222-2222-2222-222222222222";
+  const task = { id: "11111111-1111-1111-1111-111111111111", prompt: "a fox", status: "Waiting" };
+  let progress: ((event: Record<string, unknown>) => void) | undefined;
+  const api = {
+    onProgress: (callback: typeof progress) => { progress = callback; return () => {}; },
+    cancel: () => {},
+    generate: async (runId: string) => {
+      const sd = { step: 0, total: 4 };
+      for (const [id, waiting] of [[runId, 2], [other, 5], [runId, 1], [runId, 0]] as const) progress?.({ runId: id, stage: "waiting", ...sd, waiting });
+      progress?.({ runId, stage: "shape", step: 1, total: 4 });
+      return { image: picture, settings: used, model: "data:model/gltf-binary;base64,Z2xi" };
+    },
+  };
+  const browser = fakeBrowser(api);
+  Object.assign(globalThis, { window: { lomra: { sd: api, local3d: api } } });
+  const local = { ...task, category: "picture", model: "sd/sd-turbo" } as Generation;
+  const runs: [string, Generation, string[]][] = [
+    ["text only", local, []],
+    ["image to image", local, [picture]],
+    ["Picture Editor", { ...local, sdEdit: { mask: picture } }, [picture]],
+    ["3D", { ...task, category: "3d", model: "local3d/triposr" } as Generation, [picture]],
+  ];
+  try {
+    for (const [name, run, images] of runs) {
+      const statuses: string[] = [];
+      await generate(run, async () => { throw new Error("no provider call"); }, new AbortController().signal, (change) => { if (change.status) statuses.push(change.status); }, images[0], images);
+      assert.deepEqual(statuses, ["Generating locally…", "Waiting for the graphics card… 2 ahead", "Waiting for the graphics card… 1 ahead", "Generating locally…", name === "3D" ? "Making the 3D shape…" : "Generating locally… 1/4"], name);
+    }
+  } finally {
+    browser.restore();
   }
 });
 

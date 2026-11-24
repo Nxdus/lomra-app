@@ -1,142 +1,118 @@
 "use client";
 
-import { useState } from "react";
-import { ArrowLeftIcon, DownloadIcon, LoaderCircleIcon, SearchIcon } from "lucide-react";
-import { Tip } from "@/components/tip";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { toast } from "@/components/ui/toast";
+import { useEffect, useRef, useState } from "react";
+import { DownloadIcon } from "lucide-react";
 import { localModelSize } from "@/components/ollama-settings";
-import { desktopSd, type SdDownloadRequest, type SdFamily } from "@/lib/desktop";
+import { SdDownloadDialog, type SdRepo } from "@/components/sd-download-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList } from "@/components/ui/combobox";
+import { InputGroupAddon, InputGroupButton } from "@/components/ui/input-group";
+import { useSdFiles } from "@/hooks/use-sd-files";
+import { desktopSd, type SdDownloadRequest, type SdStatus } from "@/lib/desktop";
 
-type Found = { id: string; downloads: number };
-type Checkpoint = { file: string; bytes: number };
+type Found = SdRepo & { downloads?: number };
 
-const rowClass = "flex items-center gap-3 py-2.5 text-sm";
+/** Nothing is sent to Hugging Face before this many characters, or while the user is still typing. */
+const minQuery = 3;
+const typingPause = 400;
 
-/** The checkpoint type a file name most likely is; the user can change it before downloading. */
-export const guessFamily = (file: string) => /turbo|lightning|lcm|hyper/i.test(file) ? "turbo" : /xl/i.test(file) ? "sdxl" : "sd15";
+const count = (value: number) => value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `${(value / 1e3).toFixed(1)}K` : String(value);
 
-const downloads = (count: number) => count >= 1e6 ? `${(count / 1e6).toFixed(1)}M` : count >= 1e3 ? `${Math.round(count / 1e3)}K` : String(count);
-
-/** Settings → Local models → Image models: find any single-file Stable Diffusion checkpoint on Hugging Face and download it. */
-export function SdHuggingFace({ families, busy, onDownload }: { families: SdFamily[]; busy: boolean; onDownload: (request: SdDownloadRequest) => Promise<void> }) {
-  const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [found, setFound] = useState<Found[] | null>(null);
-  const [repo, setRepo] = useState<string | null>(null);
-  const [files, setFiles] = useState<Checkpoint[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [picked, setPicked] = useState<Checkpoint | null>(null);
-  const [family, setFamily] = useState("sd15");
-
-  async function open(next: string, preferred?: string) {
-    const api = desktopSd();
-    if (!api) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const reply = await api.files(next);
-      if ("error" in reply) { setError(reply.error); return; }
-      setRepo(next);
-      setFound(null);
-      setFiles(reply.result);
-      const match = preferred ? reply.result.find((item) => item.file === preferred) : undefined;
-      if (match) { setFamily(guessFamily(match.file)); setPicked(match); }
-    } catch {
-      setError("Restart Lomra to use this, then try again.");
-    } finally { setLoading(false); }
-  }
-
-  async function submit() {
-    const text = query.trim();
-    const api = desktopSd();
-    if (!text || !api || loading) return;
-    setLoading(true);
-    setError(null);
-    setRepo(null);
-    setFiles(null);
-    try {
-      const reply = await api.search(text);
-      if ("error" in reply) { setError(reply.error); setFound(null); return; }
-      if (reply.result.repo) { setLoading(false); await open(reply.result.repo, reply.result.file); return; }
-      setFound(reply.result.models);
-    } catch {
-      setError("Restart Lomra to use this, then try again.");
-    } finally { setLoading(false); }
-  }
-
-  const back = () => { setRepo(null); setFiles(null); setError(null); };
-
-  return <section aria-label="Add a model from Hugging Face" className="flex flex-col gap-1.5">
-    <Dialog open={!!picked} onOpenChange={(open) => { if (!open) setPicked(null); }}>
-      <DialogContent showCloseButton={false}>
-        <DialogHeader>
-          <DialogTitle>Download {picked?.file}?</DialogTitle>
-          <DialogDescription>
-            {picked && `${localModelSize(picked.bytes)} from huggingface.co/${repo}. Its size and checksum are verified against Hugging Face. Check the model’s license on its page before using the images; Lomra cannot check it.`}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="sd-family" className="text-xs font-medium text-muted-foreground">What kind of model is it?</label>
-          <Select value={family} onValueChange={(value) => { if (value) setFamily(value); }}>
-            <SelectTrigger id="sd-family" className="w-full"><SelectValue>{families.find((item) => item.id === family)?.name ?? "Choose"}</SelectValue></SelectTrigger>
-            <SelectContent>
-              {families.map((item) => <SelectItem key={item.id} value={item.id}>{item.name} · {item.note}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-muted-foreground">This sets the picture size and number of steps. Pick the wrong one and images may look broken.</p>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setPicked(null)}>Not now</Button>
-          <Button autoFocus onClick={() => { const file = picked; setPicked(null); if (file && repo) void onDownload({ repo, file: file.file, family }).catch(() => toast.add({ title: "Could not start the download.", type: "error" })); }}>Download</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-
-    <h3 className="text-xs font-medium text-muted-foreground">Add from Hugging Face</h3>
-    <form onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-      <InputGroup className="h-10 rounded-lg">
-        <InputGroupInput aria-label="Search Hugging Face or paste a model link" value={query} onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search models or paste a link" autoComplete="off" spellCheck={false} maxLength={200} disabled={busy} />
-        <InputGroupAddon align="inline-end">
-          <InputGroupButton type="submit" size="icon-sm" aria-label="Search" disabled={busy || loading || !query.trim()}>
-            {loading ? <LoaderCircleIcon aria-hidden="true" className="animate-spin" /> : <SearchIcon aria-hidden="true" />}
-          </InputGroupButton>
-        </InputGroupAddon>
-      </InputGroup>
-    </form>
-    {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
-
-    {found && (found.length
-      ? <ul className="divide-y" aria-label="Search results">
-        {found.map((item) => <li key={item.id}>
-          <Button type="button" variant="ghost" className="h-auto w-full justify-start gap-3 py-2.5 text-left" onClick={() => void open(item.id)}>
-            <span className="min-w-0 flex-1 truncate" title={item.id}>{item.id}</span>
-            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{downloads(item.downloads)} downloads</span>
-          </Button>
-        </li>)}
-      </ul>
-      : <p role="status" className="text-xs text-muted-foreground">No text-to-image models found.</p>)}
-
-    {repo && files && <div className="flex flex-col gap-1.5">
-      <div className="flex items-center gap-1">
-        <Tip label="Back"><Button type="button" variant="ghost" size="icon-xs" aria-label="Back to results" onClick={back}><ArrowLeftIcon aria-hidden="true" /></Button></Tip>
-        <span className="min-w-0 flex-1 truncate text-xs font-medium" title={repo}>{repo}</span>
+function RepoOption({ item }: { item: Found }) {
+  const { files, rowRef } = useSdFiles(item.id);
+  const sizes = files?.map((file) => file.bytes).sort((a, b) => a - b) ?? [];
+  const [smallest, largest] = [sizes[0], sizes[sizes.length - 1]].map((bytes) => bytes === undefined ? "" : localModelSize(bytes));
+  // "1.7–2.1 GB" rather than "1.7 GB–2.1 GB".
+  const size = smallest === largest ? largest : `${smallest.endsWith(" GB") === largest.endsWith(" GB") ? smallest.slice(0, -3) : smallest}–${largest}`;
+  const [owner, name] = item.id.split("/");
+  return <ComboboxItem value={item.id} className="group/repo-option pr-3">
+    <div ref={rowRef} className="min-w-0 flex-1 space-y-1">
+      <div className="flex min-h-5 items-center justify-between gap-3">
+        <span className="truncate font-medium" title={item.id}>{name}</span>
+        {(size || files !== undefined) && <Badge variant="outline" className="tabular-nums">{size || "Size unavailable"}</Badge>}
       </div>
-      {files.length
-        ? <ul className="divide-y" aria-label={`Files in ${repo}`}>
-          {files.map((item) => <li key={item.file} className={rowClass}>
-            <div className="min-w-0 flex-1">
-              <div className="truncate" title={item.file}>{item.file}</div>
-              <div className="text-xs text-muted-foreground">{localModelSize(item.bytes)}</div>
-            </div>
-            <Tip label="Download"><Button type="button" variant="ghost" size="icon-sm" aria-label={`Download ${item.file}`} disabled={busy} onClick={() => { setFamily(guessFamily(item.file)); setPicked(item); }}><DownloadIcon aria-hidden="true" /></Button></Tip>
-          </li>)}
-        </ul>
-        : <p role="status" className="text-xs text-muted-foreground">No single-file .safetensors or .gguf checkpoint at the top of this repository. Models split into folders are not supported.</p>}
-    </div>}
+      <div className="min-h-4 truncate text-xs/4 text-foreground/65 group-data-highlighted/repo-option:opacity-70">
+        {[owner, files?.length && `${files.length} ${files.length === 1 ? "version" : "versions"}`, item.downloads !== undefined && `${count(item.downloads)} downloads`].filter(Boolean).join(" · ")}
+      </div>
+    </div>
+  </ComboboxItem>;
+}
+
+/** Settings → Local models → Stable Diffusion: find a checkpoint on Hugging Face and download it. Searches as the user types. */
+export function SdHuggingFace({ status, onDownload, initialQuery = "" }: {
+  status: SdStatus;
+  onDownload: (request: SdDownloadRequest) => Promise<void>;
+  /** Searched for right away, with the field focused. */
+  initialQuery?: string;
+}) {
+  const searchBar = useRef<HTMLFormElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const latest = useRef(0);
+  const [query, setQuery] = useState(initialQuery);
+  const [open, setOpen] = useState(false);
+  const [found, setFound] = useState<Found[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [picked, setPicked] = useState<SdRepo | null>(null);
+
+  async function search(text: string) {
+    const run = ++latest.current;
+    let models: Found[] = [];
+    let problem = "";
+    try {
+      const reply = await desktopSd()!.search(text);
+      if ("error" in reply) problem = reply.error;
+      else models = reply.result.repo ? [{ id: reply.result.repo, file: reply.result.file }] : reply.result.models;
+    } catch { problem = "Restart Lomra to use this, then try again."; }
+    if (run !== latest.current) return;
+    setFound(models);
+    setError(problem);
+    setLoading(false);
+  }
+
+  function change(text: string) {
+    setQuery(text);
+    clearTimeout(timer.current);
+    latest.current++;
+    setError("");
+    const ready = text.trim().length >= minQuery;
+    setLoading(ready);
+    if (ready) timer.current = setTimeout(() => void search(text.trim()), typingPause);
+    else setFound([]);
+  }
+
+  useEffect(() => {
+    // After the dialog around it has moved focus to its first control.
+    const start = initialQuery ? setTimeout(() => {
+      input.current?.focus();
+      input.current?.scrollIntoView({ block: "center" });
+      setOpen(true);
+      change(initialQuery);
+    }, 300) : undefined;
+    return () => { clearTimeout(start); clearTimeout(timer.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only once, when the field appears
+  }, []);
+
+  const pick = (id: string) => { const item = found.find((entry) => entry.id === id); if (item) { setOpen(false); setPicked(item); } };
+  const message = error || (query.trim().length < minQuery ? "Type at least 3 characters." : loading ? "Searching Hugging Face…" : "No usable models found.");
+
+  return <section aria-label="Add a model from Hugging Face" className="flex flex-col gap-3">
+    {picked && <SdDownloadDialog repo={picked} status={status} onClose={() => { setPicked(null); input.current?.focus(); }} onDownload={(request) => void onDownload(request)} />}
+    <form ref={searchBar} onSubmit={(event) => { event.preventDefault(); if (!loading && found.length) pick(found[0].id); }}>
+      <Combobox items={found.map((item) => item.id)} filter={null} value={null} open={open} onOpenChange={setOpen} inputValue={query}
+        onInputValueChange={(text, { reason }) => { if (reason === "input-change") change(text); }}
+        onValueChange={(value) => { if (typeof value === "string") pick(value); }}>
+        <ComboboxInput ref={input} className="h-11" showTrigger={false} placeholder="Search Hugging Face or paste a link" aria-label="Hugging Face model to download" autoComplete="off" spellCheck={false} maxLength={200}>
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton type="submit" size="icon-sm" aria-label="Choose a version to download" disabled={loading || !found.length}><DownloadIcon aria-hidden="true" /></InputGroupButton>
+          </InputGroupAddon>
+        </ComboboxInput>
+        <ComboboxContent anchor={searchBar} side="top">
+          <ComboboxEmpty className="px-3">{message}</ComboboxEmpty>
+          <ComboboxList className="space-y-0.5">{(id: string) => { const item = found.find((entry) => entry.id === id); return item && <RepoOption key={id} item={item} />; }}</ComboboxList>
+        </ComboboxContent>
+      </Combobox>
+    </form>
   </section>;
 }

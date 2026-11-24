@@ -42,7 +42,8 @@ contextBridge.exposeInMainWorld('lomra', {
     download: (request) => ipcRenderer.invoke('sd:download', request),
     search: (query) => ipcRenderer.invoke('sd:search', query),
     files: (repo) => ipcRenderer.invoke('sd:files', repo),
-    cancelDownload: () => ipcRenderer.invoke('sd:cancelDownload'),
+    inspect: (repo, file) => ipcRenderer.invoke('sd:inspect', repo, file),
+    cancelDownload: (id) => ipcRenderer.invoke('sd:cancelDownload', id),
     remove: (id) => ipcRenderer.invoke('sd:remove', id),
     generate: (runId, input) => ipcRenderer.invoke('sd:generate', runId, input),
     cancel: (runId) => ipcRenderer.send('sd:cancel', runId),
@@ -60,7 +61,7 @@ contextBridge.exposeInMainWorld('lomra', {
   local3d: {
     status: () => ipcRenderer.invoke('local3d:status'),
     install: (id) => ipcRenderer.invoke('local3d:install', id),
-    cancelInstall: () => ipcRenderer.invoke('local3d:cancelInstall'),
+    cancelInstall: (id) => ipcRenderer.invoke('local3d:cancelInstall', id),
     remove: (id) => ipcRenderer.invoke('local3d:remove', id),
     generate: (runId, input) => ipcRenderer.invoke('local3d:generate', runId, input),
     cancel: (runId) => ipcRenderer.send('local3d:cancel', runId),

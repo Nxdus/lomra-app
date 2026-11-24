@@ -1,0 +1,108 @@
+name: Tester feedback
+description: Results from the Lomra tester guide (docs/testing)
+title: "Tester feedback: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is **public**. Do not paste API keys, passwords, private files, or personal details, and check screenshots first (Settings → Agents can show your email). You can write in Thai or English.
+        Report a security vulnerability [privately](https://github.com/Nxdus/lomra-app/security/advisories/new) instead.
+  - type: input
+    id: code
+    attributes:
+      label: Tester code
+      description: The code you were given. Leave it empty if you have none.
+      placeholder: T3
+  - type: input
+    id: version
+    attributes:
+      label: Lomra version
+      description: Shown at the bottom of Settings.
+      placeholder: 0.0.7
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics card and its memory (VRAM)
+      description: Task Manager → Performance → GPU. Write "none" if there is no dedicated card.
+      placeholder: NVIDIA RTX 3060, 12 GB
+    validations:
+      required: true
+  - type: input
+    id: memory
+    attributes:
+      label: Computer memory (RAM)
+      placeholder: 16 GB
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Which models did you use?
+      options:
+        - Local models only
+        - Hosted models only
+        - Both
+        - I did not get that far
+    validations:
+      required: true
+  - type: dropdown
+    id: warning
+    attributes:
+      label: What did Windows do when you opened the installer?
+      options:
+        - No warning
+        - Windows protected your PC, and I chose Run anyway
+        - Windows protected your PC, and I stopped
+        - Blocked with no way to continue
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Results
+      description: For each step, write done, done with help, failed or skipped, and the minutes it took without downloads.
+      value: |
+        - Install:
+        - First run and downloads:
+        - Local chat:
+        - Local image:
+        - Local 3D:
+        - Storyboard:
+        - Reopen Lomra:
+    validations:
+      required: true
+  - type: textarea
+    id: hardest
+    attributes:
+      label: What was the hardest moment, and what did you expect instead?
+      description: Copy the exact error text and remove keys, names, and file paths you do not want public.
+    validations:
+      required: true
+  - type: dropdown
+    id: again
+    attributes:
+      label: How likely are you to open Lomra again?
+      options:
+        - 1 - Not at all
+        - "2"
+        - "3"
+        - "4"
+        - 5 - Very likely
+    validations:
+      required: true
+  - type: checkboxes
+    id: safe
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed API keys, passwords, private files, and personal details.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

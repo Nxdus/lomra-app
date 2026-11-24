@@ -70,7 +70,8 @@ export function PictureTools({ children }: { children: ReactNode }) {
       >
         <GripVerticalIcon />
       </Button>
-      <div className="flex min-w-0 items-center gap-1 overflow-x-auto">{children}</div>
+      {/* The padding keeps focus rings inside the scroll area, which would cut them off. */}
+      <div className="-m-1 flex min-w-0 items-center gap-1 overflow-x-auto p-1">{children}</div>
 
     </div>
   );
