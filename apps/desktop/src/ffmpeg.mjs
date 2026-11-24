@@ -2,8 +2,8 @@ import { spawn } from 'node:child_process';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentEnv } from './agents.mjs';
+import { downloadFile, extractZip } from './download.mjs';
 import { buildStitchArgs, ffmpegBuilds, ffmpegRelease, ffmpegUrl, formatCaptions, maxAudioTracks, maxCaptions, maxClipBytes, maxClips, maxTotalBytes, mediaInputArgs, parseProbe, videoSize } from './ffmpeg-models.mjs';
-import { downloadFile, extractZip } from './sd.mjs';
 
 const binaryName = (platform) => platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
 const isBytes = (data) => (data instanceof Uint8Array || data instanceof ArrayBuffer) && data.byteLength > 0;

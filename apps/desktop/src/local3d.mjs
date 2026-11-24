@@ -1,11 +1,10 @@
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { Readable, Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { agentEnv } from './agents.mjs';
+import { createGpuQueue, whenGone } from './gpu-queue.mjs';
+import { createDownloadQueue, downloadFile, extractZip, partBytes, removeParts } from './download.mjs';
 import { defaultLocal3dModel, local3dDownloads, local3dModels, local3dPackages, local3dPackagesBytes, local3dSource, local3dTorch, local3dUv, local3dVersion } from './local3d-models.mjs';
 
 const exeName = (platform) => platform === 'win32' ? '.exe' : '';
@@ -13,37 +12,8 @@ const pythonPath = (venv, platform) => platform === 'win32' ? join(venv, 'Script
 const maxImageBytes = 20 * 1024 * 1024;
 const workerFiles = ['worker.py', 'torchmcubes.py'];
 
-/** Streams `url` to `file`, checking its SHA-256. Nothing is left at `file` unless the hash matches. */
-async function downloadFile(fetchImpl, url, file, { sha256, signal, onBytes }) {
-  const response = await fetchImpl(url, { signal });
-  if (response.status === 401 || response.status === 403) throw new Error('This download needs a login, which Lomra does not support.');
-  if (!response.ok || !response.body) throw new Error(`The download failed (${response.status}).`);
-  const part = `${file}.part`;
-  const hash = createHash('sha256');
-  const meter = new Transform({ transform(chunk, _encoding, done) { hash.update(chunk); onBytes(chunk.length); done(null, chunk); } });
-  try {
-    await pipeline(Readable.fromWeb(response.body), meter, createWriteStream(part), { signal });
-    if (hash.digest('hex') !== sha256) throw new Error('The download was corrupted. Try again.');
-    renameSync(part, file);
-  } catch (cause) {
-    rmSync(part, { force: true });
-    throw cause;
-  }
-}
-
-/** Unpacks a zip with the system's tar (Windows, macOS) or unzip (Linux). */
-function extractZip(zip, dest, { platform, env, spawnProcess }) {
-  const [command, args] = platform === 'linux' ? ['unzip', ['-q', '-o', zip, '-d', dest]]
-    : [platform === 'win32' ? join(env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar', ['-xf', zip, '-C', dest]];
-  return new Promise((resolve, reject) => {
-    const proc = spawnProcess(command, args, { windowsHide: true, stdio: 'ignore' });
-    proc.on('error', () => reject(new Error('Could not unpack a download.')));
-    proc.on('exit', (code) => code === 0 ? resolve() : reject(new Error('Could not unpack a download.')));
-  });
-}
-
 /** The video memory (MiB) of the first NVIDIA graphics card, or 0 when there is none. */
-function nvidiaMemory({ env, spawnProcess }) {
+export function nvidiaMemory({ env, spawnProcess }) {
   return new Promise((resolve) => {
     let out = '';
     let proc;
@@ -73,7 +43,7 @@ export function workerError(output) {
  * SHA-256 and packages are exact versions. A run starts a fresh worker process, one at a time. The renderer can only name
  * a model id and pass a picture; it never supplies a path or a command line.
  */
-export function createLocal3d({ dir, platform = process.platform, arch = process.arch, env = process.env, fetchImpl = fetch, spawnProcess = spawn, extract = extractZip, gpuMemory = () => nvidiaMemory({ env, spawnProcess }), uv = local3dUv, downloads = local3dDownloads, source = local3dSource, models = local3dModels, workerDir: workerSource = join(dirname(fileURLToPath(import.meta.url)), 'local3d-worker') } = {}) {
+export function createLocal3d({ dir, platform = process.platform, arch = process.arch, env = process.env, fetchImpl = fetch, spawnProcess = spawn, extract = extractZip, gpuMemory = () => nvidiaMemory({ env, spawnProcess }), uv = local3dUv, downloads = local3dDownloads, source = local3dSource, models = local3dModels, gpuQueue = createGpuQueue(), workerDir: workerSource = join(dirname(fileURLToPath(import.meta.url)), 'local3d-worker') } = {}) {
   const tool = uv[`${platform}-${arch}`];
   const venv = join(dir, 'venv');
   const python = pythonPath(venv, platform);
@@ -91,12 +61,14 @@ export function createLocal3d({ dir, platform = process.platform, arch = process
     return existsSync(python) && downloads.every((item) => existsSync(join(dir, item.path)));
   };
   const hasFiles = (model) => model.weights.every((item) => existsSync(join(modelsDir, item.path))) && (!model.source || existsSync(marker(model)));
+  /** Bytes of `model` on disk while its download is unfinished. */
+  const partial = (model) => hasFiles(model) ? 0 : model.weights.reduce((sum, item) => sum + (existsSync(join(modelsDir, item.path)) ? item.bytes : partBytes(join(modelsDir, item.path), item.sha256)), 0)
+    + (!model.source ? 0 : existsSync(marker(model)) ? model.source.bytes : partBytes(archive(model.source), model.source.sha256));
+  const archive = (item) => join(dir, `${item.path.replace(/\W+/g, '-')}.zip`);
   const installed = (model) => engineReady() && hasFiles(model);
-  let job;
-  let lastError = null;
+  const installs = createDownloadQueue(install, failure);
   let gpu;
   const runs = new Map();
-  let queue = Promise.resolve();
 
   const uvEnv = () => ({ ...agentEnv(env), UV_PYTHON_INSTALL_DIR: join(dir, 'python'), UV_CACHE_DIR: join(dir, 'cache'), UV_NO_CONFIG: '1', UV_PYTHON_PREFERENCE: 'only-managed', UV_NO_PROGRESS: '1', VIRTUAL_ENV: '' });
 
@@ -122,7 +94,7 @@ export function createLocal3d({ dir, platform = process.platform, arch = process
 
   /** Unpacks a source archive that wraps everything in one folder into `target`, replacing what is there. */
   async function unpackSource(item, state, signal) {
-    const zip = join(dir, `${item.path.replace(/\W+/g, '-')}.zip`);
+    const zip = archive(item);
     await downloadFile(fetchImpl, item.url, zip, { sha256: item.sha256, signal, onBytes: (n) => { state.received += n; } });
     const unpack = join(dir, 'unpack');
     rmSync(unpack, { recursive: true, force: true });
@@ -143,12 +115,13 @@ export function createLocal3d({ dir, platform = process.platform, arch = process
   }
 
   async function fetchFile(item, target, state, signal) {
-    if (existsSync(target)) return;
+    if (existsSync(target)) { state.received += item.bytes; return; }
     mkdirSync(dirname(target), { recursive: true });
     await downloadFile(fetchImpl, item.url, target, { sha256: item.sha256, signal, onBytes: (n) => { state.received += n; } });
   }
 
-  async function install(model, state) {
+  async function install(state) {
+    const { model } = state;
     const { signal } = state.controller;
     mkdirSync(dir, { recursive: true });
     const stage = (name, label, total = 0) => { state.stage = name; state.label = label; state.received = 0; state.total = total; };
@@ -235,8 +208,7 @@ export function createLocal3d({ dir, platform = process.platform, arch = process
           for (const line of lines) { try { const event = JSON.parse(line); if (typeof event?.stage === 'string' && event.stage !== 'error') onProgress?.({ stage: event.stage }); } catch { /* library noise */ } }
         });
         proc.stderr?.on('data', () => {});
-        proc.on('error', () => reject(new Error('The 3D engine could not start.')));
-        proc.on('exit', (status) => { controller.signal.removeEventListener('abort', stop); resolve(status); });
+        whenGone(proc).then((status) => { controller.signal.removeEventListener('abort', stop); resolve(status); }, () => reject(new Error('The 3D engine could not start.')));
       });
       if (controller.signal.aborted) throw new Error('Stopped.');
       if (code !== 0 || !existsSync(out)) throw new Error(workerError(output));
@@ -256,40 +228,44 @@ export function createLocal3d({ dir, platform = process.platform, arch = process
         if (!gpu) reason = 'Local 3D generation needs an NVIDIA graphics card.';
         else if (gpu < Math.min(...models.map((model) => model.needs))) reason = 'Local 3D generation needs an NVIDIA graphics card with at least 6 GB of memory.';
       }
+      const job = installs.running;
       return {
         supported: !reason,
         reason,
         engine: engineReady(),
         engineBytes: engineBytes(),
-        installing: job ? { id: job.id, name: job.name, stage: job.stage, label: job.label, received: job.received, total: job.total } : null,
-        error: lastError,
+        installing: job ? { id: job.id, name: job.name, stage: job.stage, label: job.label, received: Math.min(job.received, job.total), total: job.total } : null,
+        queued: installs.waiting,
+        error: installs.error,
         models: models.map((model) => ({
           id: model.id, name: model.name, quality: model.quality, note: model.note, license: model.license, bytes: modelBytes(model),
-          recommended: !!model.default, installed: installed(model), fits: !!gpu && gpu >= model.needs,
+          recommended: !!model.default, installed: installed(model), partial: partial(model), fits: !!gpu && gpu >= model.needs,
         })),
       };
     },
-    /** Starts installing the engine (if missing) and a model in the background; progress is in `status()`. */
+    /** Installs the engine (if missing) and a model in the background, after the ones already waiting; progress is in `status()`. Continues an unfinished download. */
     async install(id) {
       const model = find(id);
-      if (!tool || !model || job) return false;
+      if (!tool || !model) return false;
       if ((gpu ??= await gpuMemory()) < model.needs) return false;
-      const state = job = { id: model.id, name: model.name, stage: 'download', label: 'Installer', received: 0, total: 0, controller: new AbortController() };
-      lastError = null;
-      install(model, state).catch((cause) => { lastError = state.controller.signal.aborted ? null : failure(cause); }).finally(() => { if (job === state) job = undefined; });
-      return true;
+      return installs.add({ id: model.id, name: model.name, model, stage: 'download', label: 'Installer', received: 0, total: 0 });
     },
-    cancelInstall() { job?.controller.abort(); },
-    /** Deletes a model's files; the engine goes with the last one. */
+    /** Stops the installation of one model, or the running one; what was downloaded is kept. */
+    cancelInstall(id) { return installs.cancel(id); },
+    /** Deletes a model's files or its unfinished download; the engine goes with the last one. */
     remove(id) {
       const model = models.find((item) => item.id === id);
-      if (!model || job || runs.size) return false;
+      if (!model || installs.has(id) || (runs.size && hasFiles(model))) return false;
       rmSync(join(modelsDir, model.folder), { recursive: true, force: true });
-      if (model.source) rmSync(join(dir, model.source.path), { recursive: true, force: true });
-      if (!models.some((item) => item.weights.some((weight) => existsSync(join(modelsDir, weight.path))))) rmSync(dir, { recursive: true, force: true });
+      if (model.source) {
+        rmSync(join(dir, model.source.path), { recursive: true, force: true });
+        removeParts(archive(model.source));
+      }
+      installs.forget(id);
+      if (installs.idle && !runs.size && !models.some((item) => hasFiles(item) || partial(item))) rmSync(dir, { recursive: true, force: true });
       return true;
     },
-    /** Makes one 3D model (a GLB data URL) from a picture (an image data URL). Rejects with a message the user can read; one runs at a time. */
+    /** Makes one 3D model (a GLB data URL) from a picture (an image data URL). Rejects with a message the user can read; `gpuQueue` runs one at a time. */
     generate(runId, input, onProgress) {
       const image = input && typeof input === 'object' ? input.image : undefined;
       const model = input && typeof input === 'object' ? models.find((item) => item.id === input.model) : undefined;
@@ -298,13 +274,14 @@ export function createLocal3d({ dir, platform = process.platform, arch = process
       if (typeof image !== 'string' || !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/.test(image) || image.length > maxImageBytes * 1.4) return Promise.reject(new Error('Select one PNG, JPEG or WebP picture of up to 20 MB.'));
       const controller = new AbortController();
       runs.set(runId, controller);
-      const run = queue.then(() => execute(runId, model, image, controller, onProgress));
-      queue = run.catch(() => {});
+      const run = gpuQueue.run(() => execute(runId, model, image, controller, onProgress), {
+        signal: controller.signal, onWait: (waiting) => onProgress?.({ stage: 'waiting', waiting }),
+      });
       return run.finally(() => { runs.delete(runId); });
     },
     cancel(runId) { runs.get(runId)?.abort(); },
     stop() {
-      job?.controller.abort();
+      installs.stop();
       for (const controller of runs.values()) controller.abort();
     },
   };

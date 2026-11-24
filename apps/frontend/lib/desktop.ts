@@ -1,3 +1,5 @@
+import type { SdSettings, SdUsed } from "./sd-settings";
+
 export type AgentStats = { days: number; sessions: number; prompts: number; tokens: number; cost: number };
 export type AgentInfo = { id: string; label: string; available: boolean };
 export type AgentToolResult = { text: string; isError?: boolean; images?: string[] };
@@ -81,13 +83,23 @@ export function desktopOllama(): DesktopOllamaApi | undefined {
   return (window as unknown as { lomra?: { ollama?: DesktopOllamaApi } }).lomra?.ollama;
 }
 
+/** A model waiting for the downloads before it. */
+export type QueuedModel = { id: string; name: string };
+
 export type SdModel = {
   id: string; name: string; quality: string; note: string; bytes: number; recommended: boolean; installed: boolean;
+  /** Bytes of an unfinished download kept on disk; `download` continues it and `remove` deletes it. 0 when there is none. */
+  partial: number;
   /** Added from Hugging Face rather than one of the built-in models; `note` is then its repository. */
   custom: boolean;
+  /** Made for filling in a brushed area; only known for models the user added. */
+  inpaint: boolean;
 };
-/** What a checkpoint is, which decides the image size and steps used: `sd15`, `sdxl` or `turbo`. */
+/** What a checkpoint is, which decides the image size and steps used, such as `sd15` or `sdxl`. */
 export type SdFamily = { id: string; name: string; note: string };
+/** What a Hugging Face file is, from its header. `fewStep` is a guess from its name; the two families are what to download it as. */
+export type SdInspection = { known: false } | { known: true; supported: false }
+  | { known: true; supported: true; label: string; inpaint: boolean; family: string; fewStepFamily: string; fewStep: boolean };
 export type SdDownloadRequest = string | { repo: string; file: string; family: string };
 export type SdStatus = {
   /** False on a computer the image engine has no build for. */
@@ -95,9 +107,12 @@ export type SdStatus = {
   /** The image engine (stable-diffusion.cpp) is downloaded. */
   engine: boolean;
   engineBytes: number;
+  /** Graphics memory, or 0 when it is not known. */
+  gpuBytes: number;
   /** The download in progress; `stage` says whether it is the engine or the model, and the byte counts cover that stage. */
   downloading: { id: string; name: string; stage: "engine" | "model"; received: number; total: number } | null;
-  /** Why the last download failed, ready to show. */
+  queued: QueuedModel[];
+  /** Why downloads failed, one line per model, ready to show. */
   error: string | null;
   families: SdFamily[];
   models: SdModel[];
@@ -106,19 +121,23 @@ export type SdStatus = {
 /** Local image generation (Stable Diffusion) of the desktop app. */
 export type DesktopSdApi = {
   status(): Promise<SdStatus>;
-  /** Download the engine (if missing) and a built-in model by id, or a Hugging Face checkpoint, in the background; the caller asks the user first. Resolves false if it could not start. */
+  /** Download the engine (if missing) and a model by id, or a Hugging Face checkpoint, in the background after the ones already waiting; continues an unfinished download. The caller asks the user first. Resolves false if it was not added. */
   download(request?: SdDownloadRequest): Promise<boolean>;
-  /** A Hugging Face `owner/name` or link gives `repo` (and `file` for a file link); other text searches text-to-image models. */
-  search(query: string): Promise<{ result: { repo?: string; file?: string; models: { id: string; downloads: number }[] } } | { error: string }>;
-  /** Single-file checkpoints at the top of a Hugging Face repository. */
-  files(repo: string): Promise<{ result: { file: string; bytes: number; sha256: string }[] } | { error: string }>;
-  cancelDownload(): Promise<void>;
-  /** Delete a downloaded model; the engine goes with the last one. */
+  /** A Hugging Face `owner/name` or link gives `repo` (and `file` for a file link); other text searches text-to-image models with a usable file. */
+  search(query: string): Promise<{ result: { repo?: string; file?: string; models: { id: string; downloads: number; license?: string }[] } } | { error: string }>;
+  /** Single-file checkpoints at the top of a Hugging Face repository; `id` is the model each one becomes in `status()`. */
+  files(repo: string): Promise<{ result: { id: string; file: string; bytes: number; sha256: string }[] } | { error: string }>;
+  /** What one of those files is, read from its first bytes. */
+  inspect(repo: string, file: string): Promise<{ result: SdInspection } | { error: string }>;
+  /** Stop the download of one model (the running one when omitted); what was downloaded is kept. */
+  cancelDownload(id?: string): Promise<void>;
+  /** Delete a downloaded model or its unfinished download; the engine goes with the last one. */
   remove(id: string): Promise<boolean>;
-  /** Make one image from a downloaded model. `runId` is a UUID. */
-  generate(runId: string, input: { model: string; prompt: string; aspectRatio?: string }): Promise<{ image: string } | { error: string }>;
+  /** Make one image from a downloaded model, from text or by redrawing `image` (white in `mask` marks the only part redrawn). `runId` is a UUID. */
+  generate(runId: string, input: { model: string; prompt: string; aspectRatio?: string; image?: string; mask?: string } & SdSettings): Promise<{ image: string; settings: SdUsed } | { error: string }>;
   cancel(runId: string): void;
-  onProgress(callback: (event: { runId: string; step: number; total: number }) => void): () => void;
+  /** `waiting` is set while the run waits for the graphics card (how many runs are ahead), then 0 when its turn comes. */
+  onProgress(callback: (event: { runId: string; step: number; total: number; waiting?: number }) => void): () => void;
 };
 
 export function desktopSd(): DesktopSdApi | undefined {
@@ -160,6 +179,8 @@ export function desktopVideo(): DesktopVideoApi | undefined {
 
 export type Local3dModel = {
   id: string; name: string; quality: string; note: string; license: string; bytes: number; recommended: boolean; installed: boolean;
+  /** Bytes on disk of an unfinished download; `install` continues it and `remove` deletes it. 0 when there is none. */
+  partial: number;
   /** The graphics card has enough memory for this model. */
   fits: boolean;
 };
@@ -172,7 +193,8 @@ export type Local3dStatus = {
   engineBytes: number;
   /** The installation in progress; `received` and `total` are 0 while packages install and no size is known. */
   installing: { id: string; name: string; stage: "download" | "python" | "packages" | "model"; label: string; received: number; total: number } | null;
-  /** Why the last installation failed, ready to show. */
+  queued: QueuedModel[];
+  /** Why installations failed, one line per model, ready to show. */
   error: string | null;
   models: Local3dModel[];
 };
@@ -180,15 +202,17 @@ export type Local3dStatus = {
 /** Local image-to-3D generation (Hunyuan3D, TripoSR) of the desktop app. */
 export type DesktopLocal3dApi = {
   status(): Promise<Local3dStatus>;
-  /** Install the 3D engine (if missing) and a model by id in the background; the caller asks the user first. Resolves false if it could not start. */
+  /** Install the 3D engine (if missing) and a model by id in the background after the ones already waiting; continues an unfinished download. The caller asks the user first. Resolves false if it was not added. */
   install(id: string): Promise<boolean>;
-  cancelInstall(): Promise<void>;
-  /** Delete a model; the engine goes with the last one. */
+  /** Stop the installation of one model (the running one when omitted); what was downloaded is kept. */
+  cancelInstall(id?: string): Promise<void>;
+  /** Delete a model or its unfinished download; the engine goes with the last one. */
   remove(id: string): Promise<boolean>;
   /** Make one 3D model (a GLB data URL) from one picture (an image data URL). `runId` is a UUID. */
   generate(runId: string, input: { model: string; image: string }): Promise<{ model: string } | { error: string }>;
   cancel(runId: string): void;
-  onProgress(callback: (event: { runId: string; stage: string }) => void): () => void;
+  /** `waiting` comes with stage "waiting": how many runs are ahead on the graphics card, then 0 when its turn comes. */
+  onProgress(callback: (event: { runId: string; stage: string; waiting?: number }) => void): () => void;
 };
 
 export function desktopLocal3d(): DesktopLocal3dApi | undefined {

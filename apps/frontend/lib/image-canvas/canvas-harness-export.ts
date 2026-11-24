@@ -1,4 +1,5 @@
 import { strToU8, zipSync } from "three/addons/libs/fflate.module.js";
+import { sdDetails } from "../sd-settings";
 import { canvasCardType } from "./canvas-harness";
 import { isCanvasFilePending, loadCanvasFile, type CanvasImage } from "./image-canvas-storage";
 
@@ -23,6 +24,7 @@ export function canvasHandoff(items: CanvasImage[], selected: ReadonlySet<string
     if (provenance) {
       lines.push("", `- Model: ${inline(provenance.model)}`);
       for (const input of provenance.selectedInputs ?? []) lines.push(`- Selected input: ${inline(input.name)} (${input.id})`);
+      if (provenance.sd) for (const { label, value } of sdDetails(provenance.sd)) lines.push(`- ${label}: ${inline(value)}`);
       if (provenance.prompt) lines.push("", "Prompt", "", quote(provenance.prompt));
     }
   }

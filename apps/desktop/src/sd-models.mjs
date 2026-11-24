@@ -37,12 +37,16 @@ export const sdModels = [
 export const defaultSdModel = sdModels.find((model) => model.default).id;
 export const sdModelUrl = (model) => `https://huggingface.co/${model.repo}/resolve/main/${model.file}`;
 
+/** The number a `W:H` aspect ratio stands for; 1 when it is missing or makes no sense. */
+export function aspectRatioOf(aspectRatio) {
+  const match = /^(\d{1,3}(?:\.\d+)?):(\d{1,3}(?:\.\d+)?)$/.exec(aspectRatio ?? '');
+  const ratio = match ? Number(match[1]) / Number(match[2]) : 1;
+  return ratio > 0 && Number.isFinite(ratio) ? ratio : 1;
+}
+
 /** Width and height for an `W:H` aspect ratio with the long side at `size`, rounded to the multiples of 8 the engine needs. */
 export function sdDimensions(aspectRatio, size) {
-  const match = /^(\d{1,3}(?:\.\d+)?):(\d{1,3}(?:\.\d+)?)$/.exec(aspectRatio ?? '');
-  const [w, h] = match ? [Number(match[1]), Number(match[2])] : [1, 1];
-  if (!(w > 0 && h > 0)) return { width: size, height: size };
-  const ratio = Math.min(Math.max(w / h, 1 / 4), 4);
+  const ratio = Math.min(Math.max(aspectRatioOf(aspectRatio), 1 / 4), 4);
   const snap = (value) => Math.max(64, Math.round(value / 8) * 8);
   return ratio >= 1 ? { width: size, height: snap(size / ratio) } : { width: snap(size * ratio), height: size };
 }
@@ -54,7 +58,8 @@ export function sdDimensions(aspectRatio, size) {
 export const sdFamilies = [
   { id: 'sd15', name: 'Stable Diffusion 1.x / 2.x', note: '512 px, 20 steps', size: 512, steps: 20, cfg: 7 },
   { id: 'sdxl', name: 'SDXL', note: '1024 px, 25 steps', size: 1024, steps: 25, cfg: 7 },
-  { id: 'turbo', name: 'Turbo or Lightning (few steps)', note: '512 px, 4 steps', size: 512, steps: 4, cfg: 1 },
+  { id: 'turbo', name: 'Turbo (few steps)', note: '512 px, 4 steps', size: 512, steps: 4, cfg: 1 },
+  { id: 'sdxl-few', name: 'SDXL Lightning or Turbo (few steps)', note: '1024 px, 6 steps', size: 1024, steps: 6, cfg: 1 },
 ];
 
 export const hfRepoPattern = /^[A-Za-z0-9][\w.-]{0,95}\/[A-Za-z0-9][\w.-]{0,95}$/;

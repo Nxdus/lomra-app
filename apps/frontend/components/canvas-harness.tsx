@@ -1,21 +1,27 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
+import { PlusIcon, XIcon } from "lucide-react";
+import { CanvasItemSummary, ItemThumbnail } from "@/components/canvas-details";
+import type { VisibleImage } from "@/components/image-canvas";
+import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Field, FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { canvasCardType, canvasLinkLimit, canvasRoles, canvasRelations, canvasTextLimit, canvasTitleLimit, type CanvasHarness, type CanvasLink } from "@/lib/image-canvas/canvas-harness";
 import type { CanvasImage } from "@/lib/image-canvas/image-canvas-storage";
 import { canvasHandoff, canvasHandoffZip } from "@/lib/image-canvas/canvas-harness-export";
 
 const itemTitle = (item: CanvasImage) => item.harness?.title ?? item.file.name;
 
-export function CanvasCardDialog({ item, items, onClose, onSave }: {
-  item?: CanvasImage;
-  items: CanvasImage[];
+export function CanvasCardDialog({ item, items, onLoaded, onClose, onSave }: {
+  item?: VisibleImage;
+  items: VisibleImage[];
+  onLoaded: (id: string, file: File) => void;
   onClose: () => void;
   onSave: (harness: CanvasHarness) => void;
 }) {
@@ -25,72 +31,80 @@ export function CanvasCardDialog({ item, items, onClose, onSave }: {
   const [title, setTitle] = useState(item?.harness?.title ?? "");
   const [notes, setNotes] = useState(item?.harness?.notes ?? "");
   const [links, setLinks] = useState(item?.harness?.links ?? []);
+  const [linking, setLinking] = useState(false);
   const [target, setTarget] = useState<string | null>(null);
   const [relation, setRelation] = useState<CanvasLink["relation"]>("Uses reference");
+  const addLink = useRef<HTMLButtonElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const titleInput = useRef<HTMLInputElement>(null);
   const targets = items.filter(other => other.id !== item?.id);
   const byId = new Map(targets.map(other => [other.id, other]));
   const targetItems = targets.map(other => ({ value: other.id, label: `${itemTitle(other)} · ${other.id.slice(0, 8)}` }));
   const provenance = item?.harness?.provenance;
 
   return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
-    <DialogContent>
-      <DialogTitle className="pr-8">{item ? "Canvas details" : "Add canvas card"}</DialogTitle>
-      <DialogDescription>{item ? itemTitle(item) : "Add a brief, reference note or output note to the canvas."}</DialogDescription>
-      <form onSubmit={event => {
+    <DialogContent initialFocus={card ? titleInput : heading} className={card ? undefined : "sm:max-w-3xl"}>
+      <DialogHeader className="pr-10">
+        <DialogTitle ref={heading} tabIndex={-1} className="truncate leading-normal outline-none" title={item && itemTitle(item)}>{item && <span className="sr-only">Canvas details · </span>}{item ? itemTitle(item) : "Add canvas card"}</DialogTitle>
+        <DialogDescription className={item ? "sr-only" : undefined}>{item ? "Role, title, notes and links of this item." : "Add a brief, reference note or output note to the canvas."}</DialogDescription>
+      </DialogHeader>
+      <div className={card ? undefined : "grid gap-6 md:grid-cols-2"}>
+      {!card && <CanvasItemSummary item={item} items={items} onLoaded={onLoaded} />}
+      <form className="flex min-w-0 flex-col gap-6" onSubmit={event => {
         event.preventDefault();
         if (card && !title.trim()) return;
         onSave({ role: role === "Unassigned" ? undefined : role, title: title.trim() || undefined, notes: notes.trim() || undefined, links, provenance });
       }}>
-        <FieldGroup>
+        <FieldGroup className="gap-5">
           <Field>
-            <FieldLabel htmlFor={`${id}-role`}>Role</FieldLabel>
-            <Select value={role} onValueChange={value => { if (value) setRole(value); }}>
-              <SelectTrigger id={`${id}-role`}><SelectValue /></SelectTrigger>
-              <SelectContent><SelectGroup>
-                {!card && <SelectItem value="Unassigned">Unassigned</SelectItem>}
-                {canvasRoles.map(value => <SelectItem key={value} value={value}>{value}</SelectItem>)}
-              </SelectGroup></SelectContent>
-            </Select>
+            <FieldTitle id={`${id}-role`}>Role</FieldTitle>
+            <ToggleGroup aria-labelledby={`${id}-role`} className="w-full rounded-4xl bg-muted p-[3px]" spacing={0} size="sm" value={[role]} onValueChange={([value]) => { if (value) setRole(value as typeof role); }}>
+              {(card ? canvasRoles : ["Unassigned", ...canvasRoles] as const).map(value => <ToggleGroupItem key={value} value={value} className="min-w-0 flex-1 rounded-4xl! px-2 text-foreground/60 aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm dark:aria-pressed:bg-input/30">{value === "Unassigned" ? "None" : value}</ToggleGroupItem>)}
+            </ToggleGroup>
           </Field>
           <Field>
             <FieldLabel htmlFor={`${id}-title`}>Title</FieldLabel>
-            <Input id={`${id}-title`} value={title} required={card} maxLength={canvasTitleLimit} onChange={event => setTitle(event.target.value)} />
+            <Input ref={titleInput} id={`${id}-title`} value={title} required={card} maxLength={canvasTitleLimit} placeholder={item && !card ? item.file.name : undefined} onChange={event => setTitle(event.target.value)} />
           </Field>
           <Field>
             <FieldLabel htmlFor={`${id}-notes`}>Notes</FieldLabel>
-            <Textarea id={`${id}-notes`} value={notes} maxLength={canvasTextLimit} onChange={event => setNotes(event.target.value)} />
+            <Textarea id={`${id}-notes`} className="max-h-48" value={notes} maxLength={canvasTextLimit} onChange={event => setNotes(event.target.value)} />
           </Field>
-          {targets.length > 0 && <Field>
-            <FieldLabel htmlFor={`${id}-target`}>Link to another canvas item</FieldLabel>
-            <Select value={target} onValueChange={setTarget} items={targetItems}>
-              <SelectTrigger id={`${id}-target`} className="w-full"><SelectValue placeholder="Choose an item" /></SelectTrigger>
-              <SelectContent><SelectGroup>{targetItems.map(other =>
-                <SelectItem key={other.value} value={other.value}>{other.label}</SelectItem>
-              )}</SelectGroup></SelectContent>
-            </Select>
-            <div className="flex gap-2">
-              <Select value={relation} onValueChange={value => { if (value) setRelation(value); }}>
-                <SelectTrigger aria-label="Link type"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectGroup>{canvasRelations.map(value => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectGroup></SelectContent>
+          {(targets.length > 0 || links.length > 0) && <Field>
+            <FieldTitle id={`${id}-links`}>Links</FieldTitle>
+            {links.length > 0 && <ul aria-labelledby={`${id}-links`} className="flex flex-col gap-2">{links.map((link, index) => {
+              const name = byId.has(link.to) ? itemTitle(byId.get(link.to)!) : "Missing item";
+              return <li key={`${link.to}:${link.relation}`} className="flex items-center gap-3">
+                <ItemThumbnail item={byId.get(link.to)} />
+                <div className="min-w-0 flex-1"><div className="truncate" title={name}>{name}</div><div className="text-xs text-muted-foreground">{link.relation}</div></div>
+                <Tip label="Remove link"><Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove link to ${name}`} onClick={() => { setLinks(links.filter((_, i) => i !== index)); addLink.current?.focus(); }}><XIcon /></Button></Tip>
+              </li>;
+            })}</ul>}
+            {linking ? <div className="flex flex-col gap-2 rounded-3xl border p-3">
+              <Select value={target} onValueChange={setTarget} items={targetItems}>
+                <SelectTrigger autoFocus aria-label="Item to link to" className="w-full min-w-0"><SelectValue placeholder="Choose an item" className="truncate" /></SelectTrigger>
+                <SelectContent><SelectGroup>{targetItems.map(other =>
+                  <SelectItem key={other.value} value={other.value}>{other.label}</SelectItem>
+                )}</SelectGroup></SelectContent>
               </Select>
-              <Button type="button" variant="outline" disabled={!target || links.length >= canvasLinkLimit || links.some(link => link.to === target && link.relation === relation)} onClick={() => {
-                if (target) setLinks([...links, { to: target, relation }]);
-              }}>Add link</Button>
-            </div>
-            {links.map((link, index) => <div key={`${link.to}:${link.relation}`} className="flex items-center justify-between gap-2">
-              <span className="min-w-0 break-words">{link.relation} · {byId.has(link.to) ? itemTitle(byId.get(link.to)!) : "Missing item"}</span>
-              <Button type="button" variant="ghost" size="sm" onClick={() => setLinks(links.filter((_, i) => i !== index))}>Remove</Button>
-            </div>)}
+              <div className="flex flex-wrap gap-2">
+                <Select value={relation} onValueChange={value => { if (value) setRelation(value); }}>
+                  <SelectTrigger aria-label="Link type"><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectGroup>{canvasRelations.map(value => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectGroup></SelectContent>
+                </Select>
+                <Button type="button" variant="ghost" className="ml-auto" onClick={() => { setLinking(false); setTarget(null); }}>Cancel</Button>
+                <Button type="button" variant="secondary" disabled={!target || links.length >= canvasLinkLimit || links.some(link => link.to === target && link.relation === relation)} onClick={() => {
+                  if (target) setLinks([...links, { to: target, relation }]);
+                  setLinking(false);
+                  setTarget(null);
+                }}>Add</Button>
+              </div>
+            </div> : targets.length > 0 && <Button ref={addLink} type="button" variant="outline" size="sm" className="w-fit!" disabled={links.length >= canvasLinkLimit} onClick={() => setLinking(true)}><PlusIcon data-icon="inline-start" />Add link</Button>}
           </Field>}
-          {provenance && <section className="flex flex-col gap-2">
-            <h3 className="font-medium">Generation</h3>
-            <p className="break-words">Model · {provenance.model}</p>
-            <p className="whitespace-pre-wrap break-words">{provenance.prompt}</p>
-            {!!provenance.selectedInputs?.length && <p className="break-words">Selected inputs · {provenance.selectedInputs.map(input => input.name).join(", ")}</p>}
-          </section>}
         </FieldGroup>
-        <DialogFooter className="mt-6"><Button type="submit" disabled={card && !title.trim()}>Save</Button></DialogFooter>
+        <DialogFooter className="mt-auto"><Button type="submit" disabled={card && !title.trim()}>Save</Button></DialogFooter>
       </form>
+      </div>
     </DialogContent>
   </Dialog>;
 }

@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { engineError, createSd } from './sd.mjs';
+import { editDimensions, imageSize, sdInput } from './sd-input.mjs';
 import { sdDimensions, sdEngines, sdModels } from './sd-models.mjs';
 
 const sha = (text) => createHash('sha256').update(text).digest('hex');
@@ -85,7 +86,7 @@ test('a download whose hash does not match is discarded', async () => {
   await wait(() => !sd.status().downloading);
   expect(sd.status().error).toContain('corrupted');
   expect(sd.status().models[0].installed).toBe(false);
-  expect(existsSync(join(dir, 'models', 'tiny.safetensors.part'))).toBe(false);
+  expect(readdirSync(join(dir, 'models'))).toEqual([]);
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -134,14 +135,18 @@ test('generate runs the engine with preset arguments only and returns a data URL
   await wait(() => !sd.status().downloading);
   const progress = [];
   const result = await sd.generate(runId, { model: 'tiny', prompt: '--rm -rf', aspectRatio: '16:9' }, (event) => progress.push(event));
-  expect(result).toBe(`data:image/png;base64,${Buffer.from('png-bytes').toString('base64')}`);
+  expect(result.image).toBe(`data:image/png;base64,${Buffer.from('png-bytes').toString('base64')}`);
+  expect(result.settings).toEqual({ seed: expect.any(Number), steps: 4, cfg: 1 });
   expect(progress).toEqual([{ step: 2, total: 4 }]);
   const { args, command, options } = calls[0];
   expect(command).toEndWith('sd-cli.exe');
   expect(args.slice(args.indexOf('-p'), args.indexOf('-p') + 2)).toEqual(['-p', '--rm -rf']);
   expect(args.slice(args.indexOf('-W'), args.indexOf('-W') + 4)).toEqual(['-W', '512', '-H', '288']);
   expect(options.env.LOMRA_SECRET).toBeUndefined();
-  expect(existsSync(join(dir, 'out', `${runId}.png`))).toBe(false);
+  expect(args[args.indexOf('-s') + 1]).toBe(String(result.settings.seed));
+  expect(args).toContain('--vae-tiling');
+  for (const flag of ['-n', '-i', '--mask', '--strength']) expect(args).not.toContain(flag);
+  expect(existsSync(join(dir, 'out', runId))).toBe(false);
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -171,6 +176,126 @@ test('a failing engine reports its error and cancel stops a running image', asyn
   rmSync(dir, { recursive: true, force: true });
 });
 
+const png = (width, height, color = 'x') => {
+  const bytes = Buffer.alloc(40, color);
+  Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').copy(bytes);
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return `data:image/png;base64,${bytes.toString('base64')}`;
+};
+
+test('a picture and mask become the run’s own files with engine-sized edges, bounded settings and its own progress', async () => {
+  const { fetchImpl } = fakeFetch();
+  let seen;
+  const { spawnProcess, calls } = fakeProcess((proc, args) => {
+    const at = (flag) => args[args.indexOf(flag) + 1];
+    seen = { image: readFileSync(at('-i')), mask: readFileSync(at('--mask')) };
+    writeFileSync(at('-o'), 'png');
+    proc.stdout.emit('data', '|=> | 4/4 - 11.0it/s');
+    proc.stdout.emit('data', '[I] generating image: 1/1 - seed 7\r|=> | 1/3 - 2.0it/s');
+    proc.stdout.emit('data', '|=> | 3/3 - 2.0it/s\n[I] sampling completed, taking 1s\r|=> | 4/4 - 9it/s');
+    proc.stdout.emit('data', '|=> | 9/9 - 9it/s');
+    proc.emit('exit', 0);
+  });
+  const { sd, dir } = make({ fetchImpl, spawnProcess });
+  sd.download('tiny');
+  await wait(() => !sd.status().downloading);
+  const progress = [];
+  const image = png(1500, 1000), mask = png(1500, 1000, 'm');
+  const result = await sd.generate(runId, { model: 'tiny', prompt: 'a pear', negativePrompt: '--seed 9', seed: 7, steps: 8, cfg: 2.5, strength: 0.5, image, mask, aspectRatio: '1:1' }, (event) => progress.push(event));
+  const { args } = calls[0];
+  expect(args.slice(args.indexOf('-p'))).toEqual([
+    '-p', 'a pear', '-o', join(dir, 'out', runId, 'out.png'), '-W', '576', '-H', '384', '--steps', '8', '--cfg-scale', '2.5', '-s', '7', '-n', '--seed 9',
+    '-i', join(dir, 'out', runId, 'init.png'), '--image-preprocess', 'target=init,mode=stretch,filter=bicubic,antialias=true',
+    '--mask', join(dir, 'out', runId, 'mask.png'), '--image-preprocess', 'target=mask,mode=stretch', '--strength', '0.5',
+  ]);
+  expect(`data:image/png;base64,${seen.image.toString('base64')}`).toBe(image);
+  expect(`data:image/png;base64,${seen.mask.toString('base64')}`).toBe(mask);
+  expect(progress).toEqual([{ step: 1, total: 3 }, { step: 3, total: 3 }]);
+  expect(result.settings).toEqual({ seed: 7, steps: 8, cfg: 2.5, negativePrompt: '--seed 9', strength: 0.5, image: true, mask: true });
+  expect(existsSync(join(dir, 'out', runId))).toBe(false);
+  await sd.generate(runId, { model: 'tiny', prompt: 'a pear', image, mask });
+  expect(calls[1].args[calls[1].args.indexOf('--strength') + 1]).toBe('1');
+  expect(sdInput({ prompt: 'x', image }, { steps: 20, cfg: 7 }).settings).toMatchObject({ strength: 0.75, cfg: 7 });
+  expect(sdInput({ prompt: 'x', image, mask }, { steps: 20, cfg: 7 }).settings).toMatchObject({ strength: 1, cfg: 4 });
+  expect(sdInput({ prompt: 'x', image, mask, strength: 0.75 }, { steps: 20, cfg: 7 }).settings).toMatchObject({ strength: 0.75, cfg: 7 });
+  const sd15 = { steps: 20, cfg: 7 };
+  expect(sdInput({ prompt: 'x', image, mask, strength: 1 }, sd15).settings.cfg).toBe(4);
+  expect(sdInput({ prompt: 'x', image, mask, strength: 1, cfg: 9 }, sd15).settings.cfg).toBe(9);
+  expect(sdInput({ prompt: 'x', image, strength: 1 }, sd15).settings.cfg).toBe(7);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('bad settings and pictures are refused before the engine starts', async () => {
+  const { fetchImpl } = fakeFetch();
+  const { spawnProcess, calls } = fakeProcess((proc) => proc.emit('exit', 0));
+  const { sd, dir } = make({ fetchImpl, spawnProcess });
+  sd.download('tiny');
+  await wait(() => !sd.status().downloading);
+  const image = png(64, 64);
+  for (const [bad, message] of [
+    [{ negativePrompt: 'x'.repeat(2001) }, 'negative prompt'], [{ negativePrompt: 'a\0b' }, 'negative prompt'], [{ negativePrompt: ['-o'] }, 'negative prompt'],
+    ...[-1, 1.5, 2147483648, '7', NaN, null].map((seed) => [{ seed }, 'seed']),
+    ...[0, 51, 2.5, '4'].map((steps) => [{ steps }, 'steps']),
+    ...[-1, 20.5, Infinity, '1'].map((cfg) => [{ cfg }, 'CFG']),
+    [{ strength: 0.5 }, 'needs a picture'], [{ mask: image }, 'needs a picture'],
+    ...[-0.1, 1.1, '1'].map((strength) => [{ image, strength }, 'strength']),
+    [{ image, strength: 0.2 }, 'unchanged'],
+    ...['C:/secret.png', 'file:///a.png', 'data:image/gif;base64,YQ==', 'data:image/png;base64,YQ==', png(0, 4), png(9000, 4), `${image}\n`, 5, null].map((value) => [{ image: value }, 'PNG, JPEG or WebP']),
+    ...['data:image/jpeg;base64,YQ==', '../mask.png', null].map((mask) => [{ image, mask }, 'mask must be a PNG']),
+    [{ image, mask: png(32, 64) }, 'same size'],
+    [{ aspectRatio: 1 }, 'aspect ratio'],
+  ]) await expect(sd.generate(runId, { model: 'tiny', prompt: 'a cat', ...bad })).rejects.toThrow(message);
+  expect(calls).toHaveLength(0);
+  expect(existsSync(join(dir, 'out'))).toBe(false);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('the run’s pictures are deleted when it is cancelled or fails, and leftovers go with the next run', async () => {
+  const { fetchImpl } = fakeFetch();
+  let hold = true;
+  const { spawnProcess } = fakeProcess((proc) => { if (!hold) proc.emit('exit', 1); });
+  const { sd, dir } = make({ fetchImpl, spawnProcess });
+  sd.download('tiny');
+  await wait(() => !sd.status().downloading);
+  const runDir = join(dir, 'out', runId);
+  const caught = sd.generate(runId, { model: 'tiny', prompt: 'a cat', image: png(64, 64), mask: png(64, 64) }).catch((cause) => cause.message);
+  await wait(() => existsSync(join(runDir, 'mask.png')));
+  expect(existsSync(join(runDir, 'init.png'))).toBe(true);
+  sd.cancel(runId);
+  expect(await caught).toBe('Stopped.');
+  expect(existsSync(runDir)).toBe(false);
+  hold = false;
+  mkdirSync(join(dir, 'out', 'crashed'), { recursive: true });
+  await expect(sd.generate(runId, { model: 'tiny', prompt: 'a cat', image: png(64, 64) })).rejects.toThrow('failed');
+  expect(readdirSync(join(dir, 'out'))).toEqual([]);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('edits keep the source’s shape within the model’s area on edges the engine does not change', () => {
+  expect(editDimensions(1, 512)).toEqual({ width: 512, height: 512 });
+  expect(editDimensions(3 / 2, 512)).toEqual({ width: 576, height: 384 });
+  expect(editDimensions(16 / 9, 512)).toEqual({ width: 576, height: 320 });
+  expect(editDimensions(9 / 16, 512)).toEqual({ width: 320, height: 576 });
+  for (const size of [512, 1024]) for (const ratio of [0.01, 0.4, 0.9, 1.2, 2.2, 3.9, 50]) {
+    const { width, height } = editDimensions(ratio, size);
+    expect([width % 64, height % 64]).toEqual([0, 0]);
+    expect(width * height).toBeLessThanOrEqual(size * size);
+    expect(Math.abs(Math.log(width / height / Math.min(Math.max(ratio, 0.25), 4)))).toBeLessThan(0.1);
+  }
+});
+
+test('imageSize reads PNG, JPEG and WebP headers', () => {
+  const header = (hex) => Buffer.concat([Buffer.from(hex, 'hex'), Buffer.alloc(40)]);
+  expect(imageSize(Buffer.from(png(300, 200).split(',')[1], 'base64'))).toEqual({ width: 300, height: 200 });
+  expect(imageSize(header('ffd8ffe000040000ffc0001108012c01f4'))).toEqual({ width: 500, height: 300 });
+  expect(imageSize(header('52494646000000005745425056503858' + '0a00000000000000f301002b0100'))).toEqual({ width: 500, height: 300 });
+  expect(imageSize(header('52494646000000005745425056503820' + '00000000000000' + '9d012af4012c01'))).toEqual({ width: 500, height: 300 });
+  expect(imageSize(header('5249464600000000574542505650384c' + '000000002f' + (499 | (299 << 14)).toString(16).padStart(8, '0').match(/../g).reverse().join('')))).toEqual({ width: 500, height: 300 });
+  expect(imageSize(Buffer.from('not a picture at all, really not one'))).toBeNull();
+  expect(imageSize(Buffer.alloc(0))).toBeNull();
+});
+
 import { customModelId, parseHuggingFace } from './sd-models.mjs';
 
 const tree = [
@@ -187,7 +312,12 @@ function hubFetch({ status = 200 } = {}) {
     const text = String(url);
     seen.push(text);
     if (text.includes('/api/models/')) return status === 200 ? Response.json(text.includes('/tree/') ? tree : [{ id: 'a/b', downloads: 5 }, { id: '../bad', downloads: 1 }]) : new Response('', { status });
-    if (text.includes('/api/models?')) return Response.json([{ id: 'a/b', downloads: 5 }, { id: '../bad', downloads: 1 }]);
+    const siblings = [{ rfilename: 'my.safetensors' }];
+    if (text.includes('/api/models?')) return Response.json([
+      { id: 'a/b', downloads: 5, gated: false, tags: ['x', 'license:openrail++'], siblings }, { id: 'a/plain', downloads: 4, siblings }, { id: '../bad', downloads: 1, siblings },
+      { id: 'a/gated', downloads: 9, gated: 'auto', siblings }, { id: 'a/folders', downloads: 9, siblings: [{ rfilename: 'unet/model.safetensors' }, { rfilename: 'old.ckpt' }] }, { id: 'a/none', downloads: 9 },
+      { id: 'a/adult', downloads: 9, tags: ['not-for-all-audiences'], siblings }, { id: 'a/style', downloads: 9, tags: ['lora'], siblings }, { id: 'a/my_controlnet_canny', downloads: 9, siblings },
+    ]);
     const body = text.endsWith('engine.zip') ? engineBody : modelBody;
     return new Response(Readable.toWeb(Readable.from([Buffer.from(body)])), { status: 200 });
   };
@@ -204,15 +334,31 @@ test('parseHuggingFace accepts owner/name and huggingface.co links only', () => 
 
 test('files lists top-level checkpoints with Hugging Face’s hashes and explains failures', async () => {
   const { sd } = make({ fetchImpl: hubFetch().fetchImpl });
-  expect(await sd.files('a/b')).toEqual([{ file: 'my.safetensors', bytes: modelBody.length, sha256: sha(modelBody) }]);
+  expect(await sd.files('a/b')).toEqual([{ id: customModelId('a/b', 'my.safetensors'), file: 'my.safetensors', bytes: modelBody.length, sha256: sha(modelBody) }]);
   await expect(sd.files('nope')).rejects.toThrow('owner/name');
   await expect(make({ fetchImpl: hubFetch({ status: 404 }).fetchImpl }).sd.files('a/b')).rejects.toThrow('not found');
   await expect(make({ fetchImpl: hubFetch({ status: 401 }).fetchImpl }).sd.files('a/b')).rejects.toThrow('login');
 });
 
-test('search returns valid repositories only', async () => {
+test('a Hugging Face file that is a built-in model is that model, and one that is installed is not fetched again', async () => {
+  const builtIn = [{ ...models[0], file: 'my.safetensors' }];
+  const { fetchImpl, seen } = hubFetch();
+  const { sd, dir } = make({ fetchImpl, models: builtIn });
+  expect((await sd.files('a/b'))[0].id).toBe('tiny');
+  expect(sd.download({ repo: 'a/b', file: 'my.safetensors', family: 'sdxl' })).toBe(true);
+  await wait(() => !sd.status().downloading);
+  expect(sd.status().models).toEqual([expect.objectContaining({ id: 'tiny', custom: false, installed: true })]);
+  const asked = seen.length;
+  expect(sd.download({ repo: 'a/b', file: 'my.safetensors', family: 'sdxl' })).toBe(true);
+  await wait(() => !sd.status().downloading);
+  expect(seen).toHaveLength(asked);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('search returns valid repositories with a usable file, without a login, only', async () => {
   const { sd } = make({ fetchImpl: hubFetch().fetchImpl });
-  expect(await sd.search('dream')).toEqual({ models: [{ id: 'a/b', downloads: 5 }] });
+  expect(await sd.search('dream')).toEqual({ models: [{ id: 'a/b', downloads: 5, license: 'openrail++' }, { id: 'a/plain', downloads: 4 }] });
+  expect(await sd.search('a/adult')).toEqual({ repo: 'a/adult', models: [] });
   expect(await sd.search('https://huggingface.co/a/b/blob/main/my.safetensors')).toEqual({ repo: 'a/b', file: 'my.safetensors', models: [] });
   await expect(sd.search('  ')).rejects.toThrow();
 });

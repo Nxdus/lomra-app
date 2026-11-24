@@ -2,11 +2,11 @@
 export const toolDefs = [
   {
     name: 'generate_image',
-    description: 'Generate an image with the image model selected in the Lomra prompt and add it to the canvas. If exactly one image is selected on the canvas it is used as the reference. Takes up to a few minutes.',
+    description: 'Generate an image with the image model selected in the Lomra prompt and add it to the canvas as a new image; the original stays. If exactly one image is selected on the canvas it is sent along and edited: a local Stable Diffusion model redraws it (image-to-image, as far as the strength in Image settings allows), other models edit it or use it as a reference. Takes up to a few minutes.',
     inputSchema: {
       type: 'object',
       properties: {
-        prompt: { type: 'string', description: 'What the image should show.' },
+        prompt: { type: 'string', description: 'What the finished image should show. For an edit, describe the whole result, not only the change.' },
         aspect_ratio: { type: 'string', description: 'Optional, for example 1:1, 16:9 or 9:16.' },
       },
       required: ['prompt'],

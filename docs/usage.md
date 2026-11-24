@@ -32,7 +32,9 @@ Run `bun test` in `apps/desktop` for its unit tests.
   inspection and optimization run on your machine.
 - Bundled Whisper, stable-diffusion.cpp, and local image-to-3D run inference on
   your machine after setup. Ollama runs on the server you configure. Initial
-  setup may download engines and model files from their distributors.
+  setup may download engines and model files from their distributors, and
+  searching Hugging Face for an image model sends it your search text as you
+  type (from three characters).
 - Hosted providers receive the prompts and attachments needed for the request.
   Agent CLIs can access the workspace and apply their own permissions and data
   handling. Enabling browser generation submits your prompt and selected
@@ -46,8 +48,11 @@ prompt; prompt-driven media tools need a tool-capable chat model.
 - **Canvas history** creates, reopens, and renames separate canvases. Resize and
   layer files freely, or use **Reorganize canvas** to arrange them in rows.
 - **Open / Edit** on an image adds arrows, shapes, or text and saves a new PNG.
-  With a compatible image model you can also erase a brushed area or recompose
-  the picture for a new aspect ratio. **Remove BG** uses Fal.AI.
+  With a compatible image model you can also erase or edit a brushed area, or
+  recompose the picture for a new aspect ratio (not with local Stable
+  Diffusion). With local Stable Diffusion an ordinary checkpoint follows your
+  words but can leave visible edges; an inpainting checkpoint blends in better
+  but keeps closer to what is around the area. **Remove BG** uses Fal.AI.
 - **Inspect model** opens a GLB viewer: orbit, adjust lighting, show the
   skeleton, play animations at different speeds, and save the current view as a
   PNG up to 2048 px.
@@ -61,9 +66,12 @@ prompt; prompt-driven media tools need a tool-capable chat model.
 
 ## Generate images, video, and 3D
 
-- **Images:** local Stable Diffusion (text to image, set up under
-  **Settings → Local models**) or a hosted image model through OpenRouter or
-  Fal.AI.
+- **Images:** local Stable Diffusion (set up under **Settings → Local models**)
+  or a hosted image model through OpenRouter or Fal.AI. Local Stable Diffusion
+  redraws the picture you select, one at a time; describe the result you want.
+  **Image settings** next to the model picker sets its negative prompt, seed,
+  steps, CFG scale and edit strength. **Canvas details** shows what was used, so
+  you can repeat a result.
 - **Video:** text to video with a supported hosted model.
 - **3D:** turn one image into a GLB with local Hunyuan3D or TripoSR, or use
   Fal.AI for text-to-3D and supported multiview models.
@@ -115,14 +123,25 @@ logs. Generation calls use the user's provider credits.
 ### Local models
 
 **Local models** downloads or removes models for chat, image generation, and
-image-to-3D. Downloads start only after you agree.
+image-to-3D. Downloads start only after you agree. Image and 3D models queue up
+and can be stopped; an unfinished download can be resumed or deleted later, also
+after a restart.
 
 - **Ollama** runs chat models on this computer or on another machine you point
   Lomra to. Only models that report the `tools` capability are offered.
-- **Stable Diffusion** models run through stable-diffusion.cpp. Compatible
-  single-file checkpoints from Hugging Face can be added.
+- **Stable Diffusion** models run through stable-diffusion.cpp. The search field
+  finds other models on Hugging Face (not ones marked for adults), or takes an
+  `owner/name` or a link. Only
+  single-file Stable Diffusion 1.x/2.x and SDXL checkpoints (`.safetensors` or
+  `.gguf`) work; Lomra reads the file's header to tell before you download it.
+  Turn on **Few-step model** for Turbo, Lightning and LCM models if it is not
+  already.
 - **Image-to-3D** (Hunyuan3D 2 Mini, Hunyuan3D 2, TripoSR) requires Windows x64
   and an NVIDIA GPU with at least 6 GB of VRAM.
+
+Local image and 3D runs take turns on the graphics card, and Ollama models loaded
+on this computer are unloaded before each run. A chat sent to Ollama during a run
+is not queued: Ollama loads its model again next to the run.
 
 ### Agents
 

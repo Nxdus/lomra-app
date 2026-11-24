@@ -1,3 +1,5 @@
+import type { SdUsed } from "../sd-settings";
+
 export const canvasRoles = ["Brief", "Reference", "Output"] as const;
 export const canvasRelations = ["Continues from", "Uses reference"] as const;
 export const canvasCardType = "application/vnd.lomra.canvas-card";
@@ -7,7 +9,7 @@ export const canvasLinkLimit = 100;
 
 export type CanvasLink = { to: string; relation: (typeof canvasRelations)[number] };
 export type CanvasSource = { id: string; name: string };
-export type CanvasProvenance = { model: string; prompt: string; selectedInputs?: CanvasSource[] };
+export type CanvasProvenance = { model: string; prompt: string; selectedInputs?: CanvasSource[]; sd?: SdUsed };
 export type CanvasHarness = {
   role?: (typeof canvasRoles)[number];
   title?: string;

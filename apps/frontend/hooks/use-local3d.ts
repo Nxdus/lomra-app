@@ -32,7 +32,7 @@ export function useLocal3d() {
     void read().then((next) => { if (!cancelled) setStatus(next); });
     return () => { cancelled = true; };
   }, [read]);
-  const installing = !!status?.installing;
+  const installing = !!status?.installing || !!status?.queued.length;
   useEffect(() => {
     if (!installing) return;
     const timer = setInterval(() => void refresh(), 1000);
@@ -44,7 +44,7 @@ export function useLocal3d() {
     await refresh();
     return !!started;
   }, [refresh]);
-  const cancel = useCallback(async () => { await desktopLocal3d()?.cancelInstall(); await refresh(); }, [refresh]);
+  const cancel = useCallback(async (id: string) => { await desktopLocal3d()?.cancelInstall(id); await refresh(); }, [refresh]);
   const remove = useCallback(async (id: string) => {
     if (!await desktopLocal3d()?.remove(id)) throw new Error("Could not remove the model");
     window.dispatchEvent(new Event("local3d-model-removed"));

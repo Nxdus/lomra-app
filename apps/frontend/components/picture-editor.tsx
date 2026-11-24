@@ -13,9 +13,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem,
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast";
+import { ModelSetupDialog } from "@/components/first-run/model-setup-dialog";
 import { useApiProviders } from "@/components/api-provider";
-import { isBrowserModel, isSdModel, generate, modelProvider, selectedModel } from "@/components/prompt/generation";
+import { isBrowserModel, isSdModel, generate, modelProvider, sdPrefix, selectedModel } from "@/components/prompt/generation";
+import { useSd } from "@/hooks/use-sd";
 import { getSetting } from "@/lib/settings";
+import type { CanvasProvenance } from "@/lib/image-canvas/canvas-harness";
 import { drawMarkup, emptyMarkup, hitMarkup, markupBounds, markupHistory, moveMarkup, type Markup, type MarkupKind, type Point } from "@/lib/image-canvas/picture-markup";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +36,12 @@ const shapes = [
   { label: "Arrow", value: "arrow", icon: ArrowRightIcon },
 ] as const;
 
+// A model without instructions to follow only fills an area well when it starts from noise and is asked for nothing in particular.
+const sdErase = {
+  prompt: "plain empty background, natural continuation, nothing there",
+  settings: { negativePrompt: "object, person, animal, text, watermark, frame, border", strength: 1 },
+};
+
 function surface(width: number, height: number) {
   const result = document.createElement("canvas");
   result.width = width; result.height = height;
@@ -42,7 +51,7 @@ function surface(width: number, height: number) {
 
 export type PictureEditorHandle = { requestClose: () => boolean };
 
-export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<PictureEditorHandle>; url: string; name: string; onSave: (file: File) => Promise<void>; onClose: () => void }) {
+export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<PictureEditorHandle>; url: string; name: string; onSave: (file: File, provenance?: CanvasProvenance) => Promise<void>; onClose: () => void }) {
   const overlay = useRef<HTMLCanvasElement>(null);
   const source = useRef<HTMLCanvasElement | null>(null);
   const gesture = useRef<{ pointer: number; start: Point; item: Markup; moving: boolean; items: Markup[] } | null>(null);
@@ -64,6 +73,11 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
   const [resizeOpen, setResizeOpen] = useState(false);
   const [shapeOpen, setShapeOpen] = useState(false);
   const [colorOpen, setColorOpen] = useState(false);
+  const [pictureModel, setPictureModel] = useState("");
+  const [findingModel, setFindingModel] = useState(false);
+  const { status: sdStatus, refresh: refreshSd } = useSd();
+  const localModel = isSdModel(pictureModel) ? sdStatus?.models.find(model => model.installed && `${sdPrefix}${model.id}` === pictureModel) : undefined;
+  const inpaintModel = sdStatus?.models.find(model => model.installed && model.inpaint);
   const dirty = history.items.length > 0 || !!textDraft?.value.trim() || !!editPrompt.trim();
   const painting = tool === "Markup" || tool === "Erase";
 
@@ -126,6 +140,15 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
 
   function enter(next: "Markup" | "Erase") {
     reset(); setTool(next); setDrawingTool("pen"); setSize(next === "Erase" ? 70 : 4);
+    if (next === "Erase") void checkModel();
+  }
+
+  /** Which model will edit the brushed area, to say so when it was not made for that. */
+  async function checkModel() {
+    try {
+      const [models] = await Promise.all([getSetting<string[]>("selected-models"), refreshSd()]);
+      setPictureModel(selectedModel(models ?? [], "picture") ?? "");
+    } catch { /* The edit itself reports what is wrong. */ }
   }
 
   function cancel() {
@@ -156,10 +179,10 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
     setTextDraft(null);
   }
 
-  async function exportResult(result: HTMLCanvasElement, signal: AbortSignal) {
+  async function exportResult(result: HTMLCanvasElement, signal: AbortSignal, provenance?: CanvasProvenance) {
     const blob = await new Promise<Blob>((resolve, reject) => result.toBlob(value => value ? resolve(value) : reject(new Error("Could not export picture.")), "image/png"));
     signal.throwIfAborted();
-    await onSave(new File([blob], `${name.replace(/\.[^.]+$/, "")}-edited.png`, { type: "image/png" }));
+    await onSave(new File([blob], `${name.replace(/\.[^.]+$/, "")}-edited.png`, { type: "image/png" }), provenance);
   }
 
   async function saveCutout(result: HTMLCanvasElement) {
@@ -198,6 +221,8 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
         const keyProvider = background ? "fal" : modelProvider(model ?? "");
         if (!isBrowserModel(model ?? "") && !isSdModel(model ?? "") && !keys[keyProvider]) throw new Error(`Enter your ${{ fal: "Fal", google: "Google", openrouter: "OpenRouter" }[keyProvider]} API key in Settings first.`);
         if (!model) throw new Error("Select an Image model in the prompt toolbar first.");
+        const local = !background && isSdModel(model);
+        if (local && action === "Resize") throw new Error("Local Stable Diffusion cannot extend a picture to a new shape. Choose another Image model in the prompt toolbar.");
         const references = [original.toDataURL("image/png")];
         const selection = action === "Erase" ? surface(original.width, original.height) : null;
         if (selection) {
@@ -206,12 +231,13 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
           const guide = surface(original.width, original.height), ctx = guide.getContext("2d")!;
           ctx.drawImage(original, 0, 0); ctx.globalAlpha = 0.55; ctx.drawImage(selection, 0, 0);
           drawMarkup(mask, history.items.map(item => ({ ...item, color: "white" })));
-          references.push(guide.toDataURL("image/png"), selection.toDataURL("image/png"));
+          if (!local) references.push(guide.toDataURL("image/png"), selection.toDataURL("image/png"));
         }
-        const prompt = background ? "Remove background" : action === "Resize"
+        const prompt = background ? "Remove background" : local ? edit || sdErase.prompt : action === "Resize"
           ? `Recompose this image into a ${aspectRatio} aspect ratio. Preserve the subject, identity, style, lighting and details. Naturally extend the scene or rearrange surrounding space to fit the new composition. Do not stretch the image, add letterboxing or crop away the main subject.`
           : `Edit image 1. Image 2 highlights the selection. Image 3 is a selection guide (white is selected). ${edit ? `Apply this instruction only within the selection: ${edit}` : "Remove the selected objects and naturally reconstruct the background from surrounding context."}\nReturn only the clean image at the original dimensions. Never render the mask, selection overlay, borders, frames, outlines or letterboxing. Preserve the composition and every unselected area.`;
-        const files = await generate({ id: crypto.randomUUID(), category: "picture", prompt, model, status: "Waiting", ...(aspectRatio ? { aspectRatio } : {}), ...(background ? { mediaTool: { name: "remove_background" as const, image_index: 0 } } : {}) }, request, controller.signal, change => { if (change.status && !controller.signal.aborted) setBusy(change.status); }, references[0], references);
+        let sd: CanvasProvenance["sd"];
+        const files = await generate({ id: crypto.randomUUID(), category: "picture", prompt, model, status: "Waiting", ...(local && selection ? { sdEdit: { mask: selection.toDataURL("image/png"), ...(edit ? {} : sdErase.settings) } } : {}), ...(aspectRatio ? { aspectRatio } : {}), ...(background ? { mediaTool: { name: "remove_background" as const, image_index: 0 } } : {}) }, request, controller.signal, change => { if (change.sd) sd = change.sd; if (change.status && !controller.signal.aborted) setBusy(change.status); }, references[0], references);
         const response = await fetch(files[0].url, { signal: controller.signal });
         if (!response.ok) throw new Error("Could not download the processed picture.");
         const bitmap = await createImageBitmap(await response.blob());
@@ -237,7 +263,7 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
             ctx.drawImage(original, 0, 0);
             ctx.globalCompositeOperation = "source-over";
           }
-          await exportResult(result, controller.signal);
+          await exportResult(result, controller.signal, sd && { model, prompt, sd });
         } finally { bitmap.close(); }
       }
       if (!controller.signal.aborted) { reset(); setTool(null); }
@@ -333,6 +359,10 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
         if (history.items.length && editPrompt.trim()) void run("Erase", undefined, editPrompt.trim());
       }}>
         <Input aria-label="Describe the edit" placeholder="e.g. Change the shirt to green" maxLength={7500} value={editPrompt} onChange={event => setEditPrompt(event.target.value)} />
+        {localModel && !localModel.inpaint && <p className="px-2 pt-0.5 text-xs text-muted-foreground">
+          {inpaintModel ? <>Edges may show. <span className="break-all">{inpaintModel.name}</span> blends better: choose it as the Image model.</>
+            : <>Edges may show with this model. <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={() => setFindingModel(true)}>Get an inpainting model</Button></>}
+        </p>}
         <div className="flex flex-wrap items-center gap-1">
           {history.items.length || history.past.length || history.future.length ? historyControls : <span className="py-1 text-sm text-muted-foreground">Brush over the area to change</span>}
           <Button className="ml-auto" type="button" variant="secondary" size="sm" disabled={!history.items.length} onClick={() => void run("Erase")}>Erase</Button>
@@ -348,6 +378,8 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
         </DropdownMenu>
       </>}
     </PictureTools>}
+    {/* Nested, so the brushed area and the words stay as they are. */}
+    <ModelSetupDialog open={findingModel} onOpenChange={open => { setFindingModel(open); if (!open) void checkModel(); }} imageSearch="stable-diffusion inpainting" />
     <Dialog open={!!discard} onOpenChange={open => { if (!open) setDiscard(null); }}>
       <DialogContent showCloseButton={false}><DialogHeader><DialogTitle>{busy ? "Stop editing?" : "Discard changes?"}</DialogTitle><DialogDescription>{busy ? "The request will be cancelled where supported. The provider may still finish work already submitted." : "Your changes won’t be saved."}</DialogDescription></DialogHeader>
         <DialogFooter><Button variant="outline" autoFocus onClick={() => setDiscard(null)}>Keep editing</Button><Button variant="destructive" onClick={() => { const closeViewer = discard === "viewer"; job.current?.abort(); reset(); setTool(null); setCleanup(null); setDiscard(null); if (closeViewer) onClose(); }}>Discard changes</Button></DialogFooter>

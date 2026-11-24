@@ -2,6 +2,7 @@ import { parseOllamaUrl } from '../ollama-url';
 import { validStoryboard } from '../../components/prompt/storyboard-data';
 import { characterImageLimit, characterImageType, characterNameLimit, characterNamePattern, characterNotesLimit } from '../characters';
 import { referenceSetNameLimit } from '../reference-sets';
+import { validSdSettings, validSdUsed } from '../sd-settings';
 import { MAX_MEDIA_ITEMS } from '../../components/prompt/media';
 import { canvasCardType, canvasLinkLimit, canvasRelations, canvasRoles, canvasTextLimit, canvasTitleLimit } from '../image-canvas/canvas-harness';
 
@@ -44,7 +45,8 @@ function validHarness(value: unknown, id: string, ids: Set<string>, card: boolea
   if (notes !== undefined && !bounded(notes, canvasTextLimit)) return false;
   if (provenance !== undefined && (!record(provenance) || !bounded(provenance.model, 512) ||
     !bounded(provenance.prompt, canvasTextLimit) ||
-    (provenance.selectedInputs !== undefined && !validCanvasSources(provenance.selectedInputs)))) return false;
+    (provenance.selectedInputs !== undefined && !validCanvasSources(provenance.selectedInputs)) ||
+    (provenance.sd !== undefined && !validSdUsed(provenance.sd)))) return false;
   if (links === undefined) return true;
   if (!Array.isArray(links) || links.length > canvasLinkLimit) return false;
   const seen = new Set<string>();
@@ -94,6 +96,7 @@ function validSetting(id: string, value: unknown) {
   }
   if (id === 'disabled-agents') return Array.isArray(value) && value.length <= 20 && value.every((agent) => typeof agent === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(agent));
   if (id === 'ollama-url') return typeof value === 'string' && value.length <= 200 && parseOllamaUrl(value) === value;
+  if (id === 'sd-settings') return validSdSettings(value);
   if (id === 'speech-model') return typeof value === 'string' && /^[a-z0-9-]{1,32}$/.test(value);
   if (id === 'agent-effort') {
     return record(value) && Object.entries(value).every(([agent, level]) => ['claude', 'codex'].includes(agent) && typeof level === 'string' && /^[a-z]{3,8}$/.test(level));
@@ -139,6 +142,7 @@ function validChat(id: string, value: unknown) {
     chat.generations.every((task) => task && ['picture', 'video', '3d'].includes(task.category) &&
       ['id', 'model', 'prompt', 'status'].every((field) => typeof task[field] === 'string') &&
       (task.canvasInputs === undefined || validCanvasSources(task.canvasInputs)) &&
+      (task.sd === undefined || validSdUsed(task.sd)) &&
       ['error', 'requestId'].every((field) => task[field] === undefined || typeof task[field] === 'string') &&
       (task.files === undefined || (Array.isArray(task.files) && task.files.every((file: Record<string, unknown>) =>
         file && typeof file.url === 'string' && typeof file.name === 'string' &&

@@ -21,11 +21,12 @@ import { VoiceRecorder } from "./voice-recorder";
 import { MarkdownMessage } from "./markdown-message";
 import { chatTimeline } from "./chat-timeline";
 import { ModelSelector } from "./model-selector";
+import { SdSettingsPopover } from "./sd-settings-popover";
 import { toast } from "@/components/ui/toast";
 import { MissingApiKeyError, useApiProviders, type KeyedProvider } from "@/components/api-provider";
 import { ModelSetupDialog } from "@/components/first-run/model-setup-dialog";
 import { multiviewRequirements, resolveMultiview } from "./multiview";
-import { canvasResults, generate, llmProvider as providerOf, modelProvider, type Category, selectedModel, isMultiview, isSdModel, requiresImage, isLocal3dModel, videoStartImage, type ConversationMessage, type GeneratedFile, type Generation, type GenerationTask } from "./generation";
+import { canvasResults, generate, llmProvider as providerOf, modelProvider, type Category, selectedModel, isMultiview, isSdModel, sdPrefix, requiresImage, isLocal3dModel, videoStartImage, type ConversationMessage, type GeneratedFile, type Generation, type GenerationTask } from "./generation";
 import type { CanvasHandle, VisibleImage } from "@/components/image-canvas";
 import type { CanvasHarness } from "@/lib/image-canvas/canvas-harness";
 import { CanvasModelViewer } from "@/components/canvas-model-viewer";
@@ -109,6 +110,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const videoPrice = modelPrices.get(`video:${videoModel}`);
   const llm = selectedModel(models, "llm");
   const localEngine = localAgentModel(llm);
+  const pictureModel = selectedModel(models, "picture") ?? "";
   const threeDModel = selectedModel(models, "3d") ?? "";
   const multiview = isMultiview(threeDModel);
   const [history, setHistory] = useState<ConversationMessage[]>([]);
@@ -400,7 +402,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       if (!mounted.current) return;
       signal?.throwIfAborted();
       const harness: CanvasHarness = { role: "Output" };
-      if (task) harness.provenance = { model: task.model.slice(0, 512), prompt: task.prompt.slice(0, 8000), selectedInputs: task.canvasInputs };
+      if (task) harness.provenance = { model: task.model.slice(0, 512), prompt: task.prompt.slice(0, 8000), selectedInputs: task.canvasInputs, ...(task.sd && { sd: task.sd }) };
       const [id] = await onAddToCanvas([imported], at, harness);
       setCanvasFiles((current) => ({ ...current, [file.url]: imported }));
       return id;
@@ -425,7 +427,8 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   async function runTask(task: Generation, signal: AbortSignal, imageUrl?: string, images?: string[], sources?: ToolSource[]) {
     try {
       let summary = "";
-      const results = await generate(task, request, signal, (change) => { if (change.summary) summary = change.summary; updateGeneration(task.id, change); }, imageUrl, images, sources);
+      let sd: Generation["sd"];
+      const results = await generate(task, request, signal, (change) => { if (change.summary) summary = change.summary; if (change.sd) sd = change.sd; updateGeneration(task.id, change); }, imageUrl, images, sources);
       const files = await Promise.all(results.map(async (file) => ({ ...file, url: await persistentUrl(file.url, file.kind === "file") })));
       results.forEach((file) => { if (file.url.startsWith("blob:")) URL.revokeObjectURL(file.url); });
       updateGeneration(task.id, { status: "Completed", files, error: undefined });
@@ -433,7 +436,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       let imported = candidates.length > 0;
       if (!imported && !summary) notifyError("No supported 3D model was returned. Download the result files to inspect them.");
       for (const file of candidates) {
-        if (!await addToCanvas(file, files, undefined, undefined, task)) imported = false;
+        if (!await addToCanvas(file, files, undefined, undefined, sd ? { ...task, sd } : task)) imported = false;
       }
       if (imported) setExpanded((current) => current.filter((id) => id !== task.id));
       return summary || `${task.category} generated with ${task.model}: ${task.prompt}`;
@@ -798,6 +801,12 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       const url = storyImages[index].url;
       if (references.length < MAX_MEDIA_ITEMS && !references.includes(url)) references.push(url);
     }
+    const unused = !useImages && (shot.references.length > 0 || (shot.characters ?? []).some((position) => {
+      const { image, approved, generatedId } = story.characters![position];
+      return image !== null || (approved && generatedId);
+    }));
+    // One notice for a whole storyboard: the same ID replaces the previous one.
+    if (unused) toast.add({ id: "storyboard-text-only", title: "Reference pictures are not used", description: "The selected image model draws shots from their descriptions and character notes only. Choose another image model to use the references.", type: "info" });
     const prompt = shotImagePrompt(shot.description, story.story, details);
     const generatedId = await renderStoryboardImage(`Storyboard shot ${index + 1}`, prompt, references, signal);
     return generatedId;
@@ -1157,8 +1166,16 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     setStatus("Checking existing job…");
     updateGeneration(task.id, { error: undefined, status: "Checking" });
     try {
-      const outcome = await runTask(task, controller.signal, undefined, undefined, selection);
+      // A local edit starts over, so it needs its picture again; hosted jobs only check what was submitted.
+      const pictures = isSdModel(task.model) && task.startImage ? selection.filter(({ file }) => ["image", "3d"].includes(canvasFileKind(file) ?? "")) : [];
+      const content = pictures.length ? await promptContent("", pictures, controller.signal, onModelPreview) : "";
+      const images = typeof content === "string" ? undefined : content.flatMap((part) => part.type === "image_url" ? [part.image_url.url] : []);
+      const outcome = await runTask(task, controller.signal, undefined, images, selection);
       setHistory((current) => [...current, { role: "assistant" as const, content: outcome.slice(0, 8000) }]);
+    } catch (cause) {
+      const message = controller.signal.aborted ? "Request stopped" : cause instanceof Error ? cause.message : "Could not try again";
+      notifyError(message);
+      updateGeneration(task.id, { status: "Interrupted", error: message });
     }
     finally { active.current = null; setStatus(""); }
   }
@@ -1611,6 +1628,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           <div className="ml-auto flex min-w-0 items-center gap-2">
           {localEngine && agentEfforts[localEngine.engine] && <EffortPicker levels={agentEfforts[localEngine.engine] ?? []} value={efforts[localEngine.engine]}
             onChange={(level) => changeEffort(localEngine.engine, level)} disabled={!!status} />}
+          {isSdModel(pictureModel) && <SdSettingsPopover model={pictureModel.slice(sdPrefix.length)} disabled={!!status} />}
           <ModelSelector
             models={models}
             onModelsChange={setModels}
