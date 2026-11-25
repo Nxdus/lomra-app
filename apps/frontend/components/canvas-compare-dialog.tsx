@@ -306,7 +306,7 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
           )}>
             {items.map((item) => (
               <div key={item.id} className="flex min-w-0 flex-col gap-2">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex min-h-6 items-center justify-between gap-2">
                   <span className="truncate text-sm font-medium" title={itemTitle(item)}>{itemTitle(item)}</span>
                   {canUsePictureSetup(item.harness?.provenance) && onUseSetup && (
                     <Button type="button" variant="outline" size="xs" disabled={busy} onClick={() => { onUseSetup(item); onClose(); }}>
