@@ -6,7 +6,8 @@ import { CanvasCardDialog, CanvasHandoffDialog, CanvasLinks } from "@/components
 import { ReferenceSetDialog } from "@/components/reference-set-dialog";
 
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref } from "react";
-import { ArrowDownToLineIcon, ArrowUpToLineIcon, CopyIcon, DownloadIcon, GripVerticalIcon, ImagesIcon, InfoIcon, PencilIcon, PlusIcon, ScanIcon, StickyNoteIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
+import { ArrowDownToLineIcon, ArrowUpToLineIcon, Columns2Icon, CopyIcon, DownloadIcon, Grid2x2Icon, GripVerticalIcon, ImagesIcon, InfoIcon, PencilIcon, PlusIcon, ScanIcon, StickyNoteIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
+import { CanvasCompareDialog } from "@/components/canvas-compare-dialog";
 import { CanvasMedia } from "@/components/canvas-media";
 import dynamic from "next/dynamic";
 import { PictureEditor, type PictureEditorHandle } from "@/components/picture-editor";
@@ -28,6 +29,7 @@ import { reorganizeCanvas, fitCanvas } from "@/lib/image-canvas/image-canvas-lay
 import { getSetting, saveSetting } from "@/lib/settings";
 import { canvasMediaVisible } from "@/lib/image-canvas/image-canvas-visibility";
 import { canvasCardType, type CanvasHarness } from "@/lib/image-canvas/canvas-harness";
+import { canMakeVariationsFromProvenance } from "@/lib/image-canvas/provenance-setup";
 import {
   areCanvasItemsEqual,
   cloneCanvasItems,
@@ -74,9 +76,18 @@ function ImageResizeHandles({ name, onPointerDown, onKeyDown }: {
   ));
 }
 
-export type CanvasHandle = { addFiles: (files: File[], at?: { x: number; y: number }, harness?: CanvasHarness) => Promise<string[]>; removeItems: (ids: string[]) => void; focusFile: (file: File) => void; frameAll: () => void; modelPreview: (id: string) => string; deselect: (ids: string[]) => void };
+export type CanvasPlacement = (size: { width: number; height: number }, existing: ImageBounds[]) => { x: number; y: number };
+export type CanvasHandle = {
+  addFiles: (files: File[], at?: { x: number; y: number }, harness?: CanvasHarness, options?: { exact?: boolean; select?: boolean; place?: CanvasPlacement }) => Promise<string[]>;
+  removeItems: (ids: string[]) => void;
+  focusFile: (file: File) => void;
+  frameAll: () => void;
+  modelPreview: (id: string) => string;
+  deselect: (ids: string[]) => void;
+  selectItems?: (ids: string[]) => void;
+};
 
-export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasChange, onStoryboardHost, onStoryboardOrigin, watchItem, onWatchedBounds }: { watchItem?: string; onWatchedBounds?: (bounds: ImageBounds | null) => void; onStoryboardHost?: (host: HTMLDivElement | null) => void; onStoryboardOrigin?: (origin: { x: number; y: number }) => void; ref?: Ref<CanvasHandle>; onSelectionChange?: (images: VisibleImage[]) => void; onReadyChange?: (ready: boolean) => void; onCanvasChange?: (id: string) => void }) {
+export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasChange, onStoryboardHost, onStoryboardOrigin, watchItem, onWatchedBounds, onUseSetup, onMakeVariations, promptBusy }: { watchItem?: string; onWatchedBounds?: (bounds: ImageBounds | null) => void; onStoryboardHost?: (host: HTMLDivElement | null) => void; onStoryboardOrigin?: (origin: { x: number; y: number }) => void; ref?: Ref<CanvasHandle>; onSelectionChange?: (images: VisibleImage[]) => void; onReadyChange?: (ready: boolean) => void; onCanvasChange?: (id: string) => void; onUseSetup?: (item: VisibleImage, items: VisibleImage[]) => void; onMakeVariations?: (item: VisibleImage, items: VisibleImage[]) => void; promptBusy?: boolean }) {
   const viewport = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const current = useRef<VisibleImage[]>([]);
@@ -135,6 +146,12 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   const contextMenuFiles = images.filter((image) => selected.includes(contextMenuId ?? "") ? selected.includes(image.id) : image.id === contextMenuId);
   const [editingCard, setEditingCard] = useState<string | null>(null);
   const [handoffIds, setHandoffIds] = useState<string[]>([]);
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const compareItems = images.filter((image) => image.url && canvasFileKind(image.file) === "image" && compareIds.includes(image.id));
+  const selectedCompare = images.filter((image) => selected.includes(image.id) && image.url && canvasFileKind(image.file) === "image");
+  const canCompareSelection = selected.length >= 2 && selected.length <= 4 && selectedCompare.length === selected.length;
+  const canCompareContext = contextMenuFiles.length >= 2 && contextMenuFiles.length <= 4 && contextMenuFiles.every(({ file, url }) => url && canvasFileKind(file) === "image");
+  const canVaryContext = contextMenuFiles.length === 1 && !!contextMenuFiles[0].url && canvasFileKind(contextMenuFiles[0].file) === "image" && canMakeVariationsFromProvenance(contextMenuFiles[0].harness?.provenance);
   const [dragOver, setDragOver] = useState(false);
   const cameraLoaded = useRef(false);
   const zoomTarget = useRef<CanvasCamera | null>(null);
@@ -578,7 +595,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   }
 
   // `middle` centers only vertically: the point is the left edge of the file, halfway down.
-  function importFiles(files: File[], origin: { x: number; y: number }, centered = false, middle = false, harness?: CanvasHarness) {
+  function importFiles(files: File[], origin: { x: number; y: number } | CanvasPlacement, centered = false, middle = false, harness?: CanvasHarness, selectAdded = true) {
     if (!ready) return;
     imports.current = imports.current.then(async () => {
       const failures: string[] = [];
@@ -591,17 +608,18 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
         try {
           const size = await canvasFileSize(file, url);
           if (!mounted.current) { URL.revokeObjectURL(url); return; }
+          const at = typeof origin === "function" ? origin(size, current.current) : origin;
           const image = {
             id: crypto.randomUUID(), file, url, ...size,
             ...(harness && { harness }),
-            x: origin.x + offset - (centered ? size.width / 2 : 0),
-            y: origin.y + offset - (centered || middle ? size.height / 2 : 0),
+            x: at.x + offset - (centered ? size.width / 2 : 0),
+            y: at.y + offset - (centered || middle ? size.height / 2 : 0),
           };
           recordCanvasHistory({ items: current.current, type: "generic" });
           // Track the URL only after the history step: it sweeps every tracked URL the canvas does not reference yet.
           urls.current.add(url);
           update([...current.current, image]);
-          setSelected([image.id]);
+          if (selectAdded) setSelected([image.id]);
           offset += 24;
         } catch {
           URL.revokeObjectURL(url);
@@ -629,6 +647,9 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
 
   useImperativeHandle(ref, () => ({ deselect(ids?: string[]) {
     setSelected((previous) => ids ? previous.filter((id) => !ids.includes(id)) : []);
+  }, selectItems(ids) {
+    const valid = new Set(current.current.map((item) => item.id));
+    setSelected(ids.filter((id) => valid.has(id)));
   }, modelPreview(id) {
     const item = Array.from(viewport.current?.querySelectorAll<HTMLElement>("[data-canvas-image]") ?? []).find((element) => element.dataset.canvasImage === id);
     const viewer = item?.querySelector("model-viewer") as (HTMLElement & { loaded: boolean; toDataURL: (type: string) => string }) | null;
@@ -650,11 +671,14 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     element.focus({ preventScroll: true });
   }, removeItems(ids) {
     remove(ids);
-  }, async addFiles(files, at, harness) {
+  }, async addFiles(files, at, harness, options) {
     const element = viewport.current;
     if (!ready || switching.current || !element) throw new Error("Canvas is still loading. Try again.");
-    if (at) importFiles(files, at, false, true, harness);
-    else importFiles(files, canvasPoint(view.current, element.clientWidth / 2, element.clientHeight / 2), true, false, harness);
+    const exact = options?.exact ?? false;
+    const selectAdded = options?.select ?? true;
+    const target = options?.place ?? at;
+    if (target) importFiles(files, target, false, !exact, harness, selectAdded);
+    else importFiles(files, canvasPoint(view.current, element.clientWidth / 2, element.clientHeight / 2), true, false, harness, selectAdded);
     await imports.current;
     const added = files.map((file) => current.current.find((image) => image.file === file));
     if (added.some((image) => !image)) throw new Error("Could not add this result to canvas. Check its format and try again.");
@@ -799,6 +823,11 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
             setPreviewId(selected[0]);
             return;
           }
+          if (event.key === "Enter" && canCompareSelection) {
+            event.preventDefault();
+            setCompareIds(selectedCompare.map((image) => image.id));
+            return;
+          }
           if (event.key === "Delete" || event.key === "Backspace") {
             event.preventDefault();
             if (!event.repeat) setDeletingFiles([...selected]);
@@ -910,6 +939,12 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                 {contextMenuFiles.length === 1 && <ContextMenuItem onClick={() => setEditingCard(contextMenuFiles[0].id)}>
                   <PencilIcon /> Canvas details
                 </ContextMenuItem>}
+                {canCompareContext && <ContextMenuItem onClick={() => setCompareIds(contextMenuFiles.map((item) => item.id))}>
+                  <Columns2Icon /> Compare ({contextMenuFiles.length})
+                </ContextMenuItem>}
+                {canVaryContext && onMakeVariations && <ContextMenuItem disabled={promptBusy} onClick={() => onMakeVariations(contextMenuFiles[0], current.current)}>
+                  <Grid2x2Icon /> Make 4 variations
+                </ContextMenuItem>}
                 <ContextMenuItem onClick={() => setHandoffIds(contextMenuFiles.map(item => item.id))}>
                   <ArrowDownToLineIcon /> Export handoff
                 </ContextMenuItem>
@@ -975,7 +1010,11 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
         </ContextMenuGroup>
       </ContextMenuContent>
       </ContextMenu>
-      {editingCard !== null && <CanvasCardDialog item={images.find(item => item.id === editingCard)} items={images} onLoaded={mediaLoaded} onClose={() => setEditingCard(null)} onSave={saveCard} />}
+      {editingCard !== null && <CanvasCardDialog item={images.find(item => item.id === editingCard)} items={images} onLoaded={mediaLoaded} onClose={() => setEditingCard(null)} onSave={saveCard} busy={promptBusy}
+        onUseSetup={onUseSetup ? (chosen) => onUseSetup(chosen, current.current) : undefined}
+        onMakeVariations={onMakeVariations ? (chosen) => onMakeVariations(chosen, current.current) : undefined} />}
+      {compareItems.length >= 2 && compareItems.length <= 4 && <CanvasCompareDialog items={compareItems} onClose={() => setCompareIds([])} busy={promptBusy}
+        onUseSetup={onUseSetup ? (chosen) => onUseSetup(chosen, current.current) : undefined} />}
       {handoffIds.length > 0 && <CanvasHandoffDialog items={images} ids={handoffIds} onClose={() => setHandoffIds([])} />}
       <Dialog open={!!inspected} onOpenChange={open => { if (!open) setInspectId(null); }}>
         <DialogContent className="max-h-[calc(var(--app-content-height)*0.9)] gap-3 sm:max-w-5xl" aria-describedby={undefined}>
@@ -1010,6 +1049,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
         }} />
         <Button variant="ghost" size="icon-sm" aria-label="Add images, videos or 3D models" disabled={!ready} onClick={() => fileInput.current?.click()}><PlusIcon /></Button>
         <Button variant="ghost" size="icon-sm" aria-label="Add canvas card" disabled={!ready} onClick={() => setEditingCard("")}><StickyNoteIcon /></Button>
+        {canCompareSelection && <Button variant="ghost" size="icon-sm" aria-label="Compare selected pictures" title="Compare selected pictures" onClick={() => setCompareIds(selectedCompare.map((item) => item.id))}><Columns2Icon /></Button>}
         {selected.length > 0 && <Button variant="ghost" size="icon-sm" aria-label="Export canvas selection" onClick={() => setHandoffIds(selected)}><ArrowDownToLineIcon /></Button>}
         <TooltipProvider>
           <Tooltip open={helpOpen} onOpenChange={setHelpOpen}>

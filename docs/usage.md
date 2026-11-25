@@ -70,8 +70,9 @@ prompt; prompt-driven media tools need a tool-capable chat model.
   or a hosted image model through OpenRouter or Fal.AI. Local Stable Diffusion
   redraws the picture you select, one at a time; describe the result you want.
   **Image settings** next to the model picker sets its negative prompt, seed,
-  steps, CFG scale and edit strength. **Canvas details** shows what was used, so
-  you can repeat a result.
+  steps, CFG scale and edit strength. **Canvas details** shows what was used, lets
+  you reuse a setup in the prompt or make 4 local variations, and selecting 2 to 4
+  pictures lets you compare them side by side (or with a slider for 2).
 - **Video:** text to video with a supported hosted model.
 - **3D:** turn one image into a GLB with local Hunyuan3D or TripoSR, or use
   Fal.AI for text-to-3D and supported multiview models.

@@ -267,6 +267,11 @@ test("local Stable Diffusion redraws one selected picture with the saved setting
     assert.equal((await run({ aspectRatio: "1:1", sdEdit: { mask, strength: 1, negativePrompt: "object" } }))[0].url, "data:image/png;base64,cmVzdWx0");
     assert.deepEqual(calls.pop(), { model: "edit-model", prompt: "a fox", seed: 5, negativePrompt: "object", strength: 1, image: "data:image/png;base64,1500x1000#fff", mask: "data:image/png;base64,1500x1000#000" });
     assert.ok(browser.loaded.includes(mask));
+    // Explicit per-run sdSettings (variations) bypasses and never mutates stored settings.
+    await run({ sdSettings: { seed: 99, steps: 8, cfg: 2, negativePrompt: "", strength: 0.65 } });
+    assert.deepEqual(calls.pop(), { model: "edit-model", prompt: "a fox", seed: 99, steps: 8, cfg: 2, negativePrompt: "", strength: 0.65, image: "data:image/png;base64,1500x1000#fff" });
+    const { sdSettingsOf } = await import("@/lib/sd-settings-store");
+    assert.deepEqual(sdSettingsOf("edit-model"), { seed: 5, strength: 0.4, negativePrompt: "blur" });
   } finally {
     browser.restore();
     changeSdSettings("edit-model", {});

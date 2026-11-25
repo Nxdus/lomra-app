@@ -3,6 +3,7 @@ import { validStoryboard } from '../../components/prompt/storyboard-data';
 import { characterImageLimit, characterImageType, characterNameLimit, characterNamePattern, characterNotesLimit } from '../characters';
 import { referenceSetNameLimit } from '../reference-sets';
 import { validSdSettings, validSdUsed } from '../sd-settings';
+import { validAspectRatio } from '../image-canvas/provenance-setup';
 import { MAX_MEDIA_ITEMS } from '../../components/prompt/media';
 import { canvasCardType, canvasLinkLimit, canvasRelations, canvasRoles, canvasTextLimit, canvasTitleLimit } from '../image-canvas/canvas-harness';
 
@@ -45,6 +46,7 @@ function validHarness(value: unknown, id: string, ids: Set<string>, card: boolea
   if (notes !== undefined && !bounded(notes, canvasTextLimit)) return false;
   if (provenance !== undefined && (!record(provenance) || !bounded(provenance.model, 512) ||
     !bounded(provenance.prompt, canvasTextLimit) ||
+    (provenance.aspectRatio !== undefined && !validAspectRatio(provenance.aspectRatio)) ||
     (provenance.selectedInputs !== undefined && !validCanvasSources(provenance.selectedInputs)) ||
     (provenance.sd !== undefined && !validSdUsed(provenance.sd)))) return false;
   if (links === undefined) return true;
