@@ -4,12 +4,13 @@ import { useState, type ReactNode } from "react";
 import { BoxIcon, CheckIcon, CopyIcon, FileTextIcon, ImageIcon, VideoIcon } from "lucide-react";
 import { CanvasMedia } from "@/components/canvas-media";
 import type { VisibleImage } from "@/components/image-canvas";
-import { isLocal3dModel, isSdModel, local3dPrefix, sdPrefix } from "@/components/prompt/generation";
+import { isLocal3dModel, isLocalPictureModel, isSdModel, local3dPrefix, pictureAiPrefix, sdPrefix } from "@/components/prompt/generation";
 import { Tip } from "@/components/tip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { useLocal3d } from "@/hooks/use-local3d";
+import { usePictureAi } from "@/hooks/use-picture-ai";
 import { useSd } from "@/hooks/use-sd";
 import type { CanvasProvenance } from "@/lib/image-canvas/canvas-harness";
 import { canvasFileKind, isCanvasFilePending } from "@/lib/image-canvas/image-canvas-storage";
@@ -53,8 +54,10 @@ export function ItemThumbnail({ item }: { item?: VisibleImage }) {
 /** The name a model goes by; the id of one that is gone, or that Lomra has no name for. */
 function ModelBadge({ model }: { model: string }) {
   const sd = useSd();
+  const pictureAi = usePictureAi();
   const local3d = useLocal3d();
   const name = isSdModel(model) ? sd.status?.models.find((item) => item.id === model.slice(sdPrefix.length))?.name
+    : isLocalPictureModel(model) ? pictureAi.status?.models.find((item) => item.id === model.slice(pictureAiPrefix.length))?.name
     : isLocal3dModel(model) ? local3d.status?.models.find((item) => item.id === model.slice(local3dPrefix.length))?.name : undefined;
   return <Badge variant="secondary" className="max-w-full" title={model}><span className="truncate">{name ?? model}</span></Badge>;
 }

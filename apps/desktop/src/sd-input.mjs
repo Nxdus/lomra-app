@@ -51,7 +51,7 @@ export function editDimensions(ratio, size) {
   return { width: best.width, height: best.height };
 }
 
-function picture(value, types, message) {
+export function picture(value, types, message) {
   const match = typeof value === 'string' && value.length <= maxImageBytes * 1.4 ? /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+=*)$/.exec(value) : null;
   if (!match || !types.includes(match[1])) throw new Error(message);
   const bytes = Buffer.from(match[2], 'base64');

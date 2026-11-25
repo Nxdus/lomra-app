@@ -52,7 +52,7 @@ prompt; prompt-driven media tools need a tool-capable chat model.
   recompose the picture for a new aspect ratio (not with local Stable
   Diffusion). With local Stable Diffusion an ordinary checkpoint follows your
   words but can leave visible edges; an inpainting checkpoint blends in better
-  but keeps closer to what is around the area. **Remove BG** uses Fal.AI.
+  but keeps closer to what is around the area. **Remove BG** and **Upscale 2× / 4×** run locally on desktop once downloaded (or via Fal.AI).
 - **Inspect model** opens a GLB viewer: orbit, adjust lighting, show the
   skeleton, play animations at different speeds, and save the current view as a
   PNG up to 2048 px.
@@ -216,9 +216,7 @@ collision-free limbs or support quadrupeds. Older preset jobs still resume.
 Select source files on the canvas and ask in chat, for example: “remove the background”,
 “upscale 2x”, “extract frames at 1 and 3 seconds”, “trim from 2 to 8 seconds”, or
 “render front, right, back and left views”. Results become new canvas files.
-Background removal uses [Fal BiRefNet V2](https://fal.ai/models/fal-ai/birefnet/v2/api);
-upscaling uses [Fal ESRGAN](https://fal.ai/models/fal-ai/esrgan/api) at 2x or 4x.
-Both require a Fal key in Settings and use provider credits.
+Background removal and 2x or 4x upscaling run locally in the desktop app (BiRefNet Lite and Real-ESRGAN x4v3 on CPU once downloaded under **Settings → Local models**) or through [Fal BiRefNet V2](https://fal.ai/models/fal-ai/birefnet/v2/api) and [Fal ESRGAN](https://fal.ai/models/fal-ai/esrgan/api) with a Fal key.
 Frame extraction (up to 16 PNGs) and GLB views (1024px PNGs, model axes) run locally.
 Trimming runs in compatible browsers such as Chrome, preserves audio, and re-encodes
 to WebM at up to 30fps in real time. Keep the tab active; clips are limited to
