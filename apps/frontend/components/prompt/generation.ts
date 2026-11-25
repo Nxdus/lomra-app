@@ -21,6 +21,8 @@ export type Generation = GenerationTask & {
   motionJobs?: { rig?: string; motion?: string };
   /** What a local Stable Diffusion model used, for repeating the result. */
   sd?: SdUsed;
+  /** Explicit per-run settings (for variations) that bypass the per-model store. */
+  sdSettings?: SdSettings;
   /** A local Stable Diffusion edit: redraw only what is white in `mask` (a picture URL), with settings that replace the saved ones. */
   sdEdit?: SdSettings & { mask: string };
 };
@@ -219,7 +221,7 @@ export async function generate(
       await loadSdSettings();
       const model = task.model.slice(sdPrefix.length);
       const { mask: maskUrl, ...override } = task.sdEdit ?? {};
-      const { strength, ...settings } = { ...sdSettingsOf(model), ...override };
+      const { strength, ...settings } = task.sdSettings ?? { ...sdSettingsOf(model), ...override };
       if (!caps.negativePrompt) delete settings.negativePrompt;
       if (!caps.cfg) delete settings.cfg;
       const effectiveStrength = caps.strength ? strength : undefined;

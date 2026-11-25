@@ -72,7 +72,9 @@ prompt; prompt-driven media tools need a tool-capable chat model.
   Diffusion redraws the picture you select, one at a time; describe the result
   you want. **Image settings** next to the model picker sets seed, steps, and
   (where the model profile supports them) negative prompt, CFG scale and edit
-  strength. **Canvas details** shows what was used, so you can repeat a result.
+  strength. **Canvas details** shows what was used and lets you reuse
+  the setup or make 4 local variations. Select 2 to 4 pictures to compare them
+  side by side, or use the slider to compare 2.
 - **Video:** text to video with a supported hosted model.
 - **3D:** turn one image into a GLB with local Hunyuan3D or TripoSR, or use
   Fal.AI for text-to-3D and supported multiview models.

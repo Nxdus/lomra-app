@@ -1,7 +1,7 @@
 "use client";
 
 import { Tip } from "@/components/tip";
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useId, useImperativeHandle, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, ImagesIcon, Loader2Icon, MessageCircleIcon, MicIcon, PauseIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, Rows3Icon, ScanEyeIcon, TrashIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -12,6 +12,7 @@ import { Popover, PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList, ComboboxTrigger } from "@/components/ui/combobox";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EffortPicker } from "./effort-picker";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 import { imagePreview, MAX_MEDIA_ITEMS, promptContent, type MediaPart } from "./media";
@@ -34,8 +35,12 @@ import { canvasResults, generate, llmProvider as providerOf, type Category, sele
 import type { CanvasHandle, VisibleImage } from "@/components/image-canvas";
 import type { CanvasHarness } from "@/lib/image-canvas/canvas-harness";
 import { CanvasModelViewer } from "@/components/canvas-model-viewer";
-import { canvasFileError, canvasFileKind } from "@/lib/image-canvas/image-canvas-storage";
+import { canvasFileError, canvasFileKind, isCanvasFilePending, loadCanvasFile } from "@/lib/image-canvas/image-canvas-storage";
 import { getSetting, saveSetting } from "@/lib/settings";
+import { useSd } from "@/hooks/use-sd";
+import type { SdSettings } from "@/lib/sd-settings";
+import { changeSdSettings, loadSdSettings, sdSettingsOf } from "@/lib/sd-settings-store";
+import { aspectRatios, canMakeVariationsFromProvenance, planVariationSlot, resolveSetupFromProvenance, validAspectRatio, variationSeeds } from "@/lib/image-canvas/provenance-setup";
 import { characterNameKey, type Character } from "@/lib/characters";
 import { isRemoteOllama } from "@/lib/ollama-url";
 import { desktopAgents, desktopOllama, desktopPictureAi, desktopSd, desktopVideo, type AgentToolResult, type DesktopVideoApi, type PictureAiModel } from "@/lib/desktop";
@@ -88,7 +93,12 @@ function canvasInputNames(items: VisibleImage[]) {
   return items.slice(0, MAX_MEDIA_ITEMS).map(item => ({ id: item.id, name: (item.harness?.title ?? item.file.name).slice(0, 512) }));
 }
 
-export function FloatingPrompt({ canvasId = "default", loading = false, onAddToCanvas, onFocusFile, selection = [], onModelPreview, onDeselect, storyboardHost, storyboardOrigin = { x: 0, y: 0 }, videoBounds, onVideoItem, onRemoveFromCanvas }: { videoBounds?: { x: number; y: number; width: number; height: number } | null; onVideoItem?: (id: string | undefined) => void; onRemoveFromCanvas?: (ids: string[]) => void; storyboardHost?: HTMLElement | null; storyboardOrigin?: { x: number; y: number }; canvasId?: string; loading?: boolean; onAddToCanvas?: CanvasHandle["addFiles"]; onFocusFile?: (file: File) => void; selection?: VisibleImage[]; onModelPreview?: (id: string) => string; onDeselect?: (ids: string[]) => void }) {
+export type PromptHandle = {
+  useSetup: (item: VisibleImage, canvasItems: VisibleImage[]) => Promise<void>;
+  makeVariations: (item: VisibleImage, canvasItems: VisibleImage[]) => Promise<void>;
+};
+
+export function FloatingPrompt({ ref, canvasId = "default", loading = false, onAddToCanvas, onFocusFile, selection = [], onModelPreview, onDeselect, onSelectItems, onBusyChange, storyboardHost, storyboardOrigin = { x: 0, y: 0 }, videoBounds, onVideoItem, onRemoveFromCanvas }: { ref?: Ref<PromptHandle>; videoBounds?: { x: number; y: number; width: number; height: number } | null; onVideoItem?: (id: string | undefined) => void; onRemoveFromCanvas?: (ids: string[]) => void; storyboardHost?: HTMLElement | null; storyboardOrigin?: { x: number; y: number }; canvasId?: string; loading?: boolean; onAddToCanvas?: CanvasHandle["addFiles"]; onFocusFile?: (file: File) => void; selection?: VisibleImage[]; onModelPreview?: (id: string) => string; onDeselect?: (ids: string[]) => void; onSelectItems?: (ids: string[]) => void; onBusyChange?: (busy: boolean) => void }) {
   const panel = useRef<HTMLElement>(null);
   const promptInput = useRef<HTMLTextAreaElement>(null);
   const storyboardInput = useRef<HTMLDivElement>(null);
@@ -110,6 +120,9 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const [characterIndex, setCharacterIndex] = useState(0);
   const [models, setModels] = useState<string[]>([]);
   const [{ prices: modelPrices, vision }, setCatalogInfo] = useState<{ prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean> }>(() => ({ prices: new Map(), vision: new Map() }));
+  const [selectableModels, setSelectableModels] = useState<ReadonlySet<string>>();
+  const [aspectRatio, setAspectRatio] = useState("");
+  const sd = useSd();
   const videoModel = selectedModel(models, "video") ?? "";
   const videoPrice = modelPrices.get(`video:${videoModel}`);
   const llm = selectedModel(models, "llm");
@@ -180,7 +193,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const [storageError, setStorageError] = useState("");
   const [saving, setSaving] = useState(false);
   const saves = useRef(Promise.resolve());
-  const importing = useRef(false);
+  const addQueue = useRef<Promise<void>>(Promise.resolve());
   const { keys, keysReady, storageError: keyStorageError, request } = useApiProviders();
   const reviewProvider = llm ? providerOf(llm) : undefined;
   const reviewUnavailable = !llm || localEngine || vision.get(llm) === false
@@ -194,6 +207,9 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const toolHandler = useRef<(name: string, args: Record<string, unknown>) => Promise<AgentToolResult>>(async () => ({ text: "" }));
   const mounted = useRef(true);
   const positionLoaded = useRef(false);
+  const latestSelection = useRef(selection);
+  latestSelection.current = selection;
+  useEffect(() => { onBusyChange?.(!!status); }, [status, onBusyChange]);
 
   // The canvas reads and restores shot node positions for Organize canvas and Undo.
   const latestStoryboard = useRef(storyboard);
@@ -389,33 +405,51 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     } catch { setStorageError("Could not delete this chat. Please try again."); }
   }
 
-  async function addToCanvas(file: GeneratedFile, files: GeneratedFile[] = [], signal?: AbortSignal, at?: { x: number; y: number }, task?: Generation) {
-    if (!mounted.current || !onAddToCanvas || importing.current) return;
-    importing.current = true;
-    setAdding(file.url);
+  async function addToCanvas(file: GeneratedFile, files: GeneratedFile[] = [], signal?: AbortSignal, at?: Parameters<CanvasHandle["addFiles"]>[1], task?: Generation, options?: Parameters<CanvasHandle["addFiles"]>[3]) {
+    if (!mounted.current || !onAddToCanvas) {
+      if (signal) throw new Error("Canvas is unavailable.");
+      return;
+    }
+    const run = addQueue.current.then(async () => {
+      if (!mounted.current || !onAddToCanvas) throw new Error("Canvas is unavailable.");
+      setAdding(file.url);
+      try {
+        const timeout = AbortSignal.timeout(60_000);
+        const response = await fetch(file.url, { credentials: file.url.startsWith("/api/storage/files/") ? "same-origin" : "omit", signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
+        if (!response.ok) throw new Error("Could not download this result. The link may have expired.");
+        const blob = await response.blob();
+        const type = file.kind === "video" ? (blob.type.startsWith("video/webm") ? "video/webm" : "video/mp4") : file.kind === "file" ? "model/gltf-binary" : blob.type;
+        const extension = file.kind === "video" ? (type === "video/webm" ? "webm" : "mp4") : file.kind === "file" ? "glb" : type.split("/")[1];
+        const imported = file.kind === "file" && file.name === "OBJ"
+          ? await (await import("./model-conversion")).objToGlb(blob, files)
+          : new File([blob], `${file.name}.${extension}`, { type });
+        const invalid = canvasFileError(imported);
+        if (invalid) throw new Error(invalid);
+        if (!mounted.current) throw new Error("Canvas closed before the result could be added.");
+        signal?.throwIfAborted();
+        const harness: CanvasHarness = { role: "Output" };
+        if (task) harness.provenance = {
+          model: task.model.slice(0, 512),
+          prompt: task.prompt.slice(0, 8000),
+          ...(validAspectRatio(task.aspectRatio) && { aspectRatio: task.aspectRatio }),
+          selectedInputs: task.canvasInputs,
+          ...(task.sd && { sd: task.sd }),
+        };
+        const [id] = await onAddToCanvas([imported], at, harness, options);
+        if (!id) throw new Error("Could not add this result to canvas.");
+        setCanvasFiles((current) => ({ ...current, [file.url]: imported }));
+        return id;
+      } finally {
+        if (mounted.current) setAdding("");
+      }
+    });
+    addQueue.current = run.then(() => undefined, () => undefined);
     try {
-      const timeout = AbortSignal.timeout(60_000);
-      const response = await fetch(file.url, { credentials: file.url.startsWith("/api/storage/files/") ? "same-origin" : "omit", signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
-      if (!response.ok) throw new Error("Could not download this result. The link may have expired.");
-      const blob = await response.blob();
-      const type = file.kind === "video" ? (blob.type.startsWith("video/webm") ? "video/webm" : "video/mp4") : file.kind === "file" ? "model/gltf-binary" : blob.type;
-      const extension = file.kind === "video" ? (type === "video/webm" ? "webm" : "mp4") : file.kind === "file" ? "glb" : type.split("/")[1];
-      const imported = file.kind === "file" && file.name === "OBJ"
-        ? await (await import("./model-conversion")).objToGlb(blob, files)
-        : new File([blob], `${file.name}.${extension}`, { type });
-      const invalid = canvasFileError(imported);
-      if (invalid) throw new Error(invalid);
-      if (!mounted.current) return;
-      signal?.throwIfAborted();
-      const harness: CanvasHarness = { role: "Output" };
-      if (task) harness.provenance = { model: task.model.slice(0, 512), prompt: task.prompt.slice(0, 8000), selectedInputs: task.canvasInputs, ...(task.sd && { sd: task.sd }) };
-      const [id] = await onAddToCanvas([imported], at, harness);
-      setCanvasFiles((current) => ({ ...current, [file.url]: imported }));
-      return id;
+      return await run;
     } catch (cause) {
       if (signal) throw cause;
       notifyError(cause instanceof Error ? cause.message : "Could not add this result to canvas");
-    } finally { importing.current = false; setAdding(""); }
+    }
   }
 
   useEffect(() => {
@@ -454,6 +488,208 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     }
   }
 
+  async function useSetup(item: VisibleImage, canvasItems: VisibleImage[]) {
+    if (active.current) {
+      notifyError("Wait for the current generation to finish, or stop it first.");
+      return;
+    }
+    const provenance = item.harness?.provenance;
+    if (!provenance) return;
+    const [freshSd] = await Promise.all([sd.refresh(), loadSdSettings().catch(() => {})]);
+    const sdModels = freshSd?.models ?? sd.status?.models ?? [];
+    const resolved = resolveSetupFromProvenance(
+      provenance,
+      canvasItems,
+      (model) => {
+        const key = `picture:${model}`;
+        if (isSdModel(model)) {
+          const id = model.slice(sdPrefix.length);
+          if (!freshSd || !sdModels.some((entry) => entry.installed && entry.id === id)) return "not-installed";
+          return !selectableModels || selectableModels.has(key) ? "selectable" : "unavailable";
+        }
+        return models.includes(key) || selectableModels?.has(key) ? "selectable" : "unavailable";
+      },
+      (model) => (isSdModel(model) ? sdModels.find((entry) => entry.id === model.slice(sdPrefix.length))?.name : undefined),
+    );
+
+    const previousDraft = draft;
+    const previousModels = models;
+    const previousAspectRatio = aspectRatio;
+    const previousSelection = latestSelection.current.map((entry) => entry.id);
+    const previousSd = resolved.sdModelId ? { modelId: resolved.sdModelId, settings: sdSettingsOf(resolved.sdModelId) } : undefined;
+    const saveFailed = () => {
+      toast.add({ title: "Could not save the image settings", description: "They apply until you close the app.", type: "error" });
+    };
+
+    setDraft(resolved.prompt);
+    setPromptCaret(null);
+    setSuggestionsDismissed(true);
+    if (resolved.model) {
+      const value = `picture:${resolved.model}`;
+      setModels((current) => [...current.filter((entry) => !entry.startsWith("picture:")), value]);
+    }
+    setAspectRatio(resolved.aspectRatio);
+    if (resolved.sdModelId && resolved.sdSettings) {
+      changeSdSettings(resolved.sdModelId, resolved.sdSettings, saveFailed);
+    }
+    onSelectItems?.(resolved.selectedInputIds);
+    focusPromptAt(resolved.prompt.length);
+
+    const id = toast.add({
+      title: resolved.warnings.length ? "Setup partially restored" : "Setup restored",
+      description: resolved.warnings.join(" ") || "Prompt and settings are ready. Press Send when you want to generate.",
+      type: resolved.warnings.length ? "warning" : "info",
+      timeout: 10_000,
+      actionProps: {
+        children: "Undo",
+        "aria-label": "Undo restored setup",
+        onClick: () => {
+          toast.close(id);
+          setDraft(previousDraft);
+          setModels(previousModels);
+          setAspectRatio(previousAspectRatio);
+          if (previousSd) changeSdSettings(previousSd.modelId, previousSd.settings, saveFailed);
+          onSelectItems?.(previousSelection);
+        },
+      },
+    });
+  }
+
+  async function makeVariations(original: VisibleImage, canvasItems: VisibleImage[]) {
+    if (active.current || !chatId) {
+      notifyError("Wait for the current generation to finish, or stop it first.");
+      return;
+    }
+    const provenance = original.harness?.provenance;
+    if (!canMakeVariationsFromProvenance(provenance) || !provenance?.sd) return;
+    if (!desktopSd()) {
+      notifyError("Local image models require the Lomra desktop app.");
+      return;
+    }
+    const freshSd = await sd.refresh();
+    const sdModelId = provenance.model.slice(sdPrefix.length);
+    const modelEntry = freshSd?.models.find((entry) => entry.id === sdModelId);
+    if (!modelEntry?.installed) {
+      notifyError(`Download ${modelEntry?.name ?? sdModelId} in Settings → Local models first.`);
+      return;
+    }
+
+    const isImg2Img = !!provenance.sd.image;
+    let sourceItem: VisibleImage | undefined;
+    if (isImg2Img) {
+      const sourceId = provenance.selectedInputs?.[0]?.id;
+      sourceItem = sourceId ? canvasItems.find((entry) => entry.id === sourceId && canvasFileKind(entry.file) === "image") : undefined;
+      if (!sourceItem) {
+        notifyError("The source picture for this variation is no longer on the canvas.");
+        return;
+      }
+    }
+
+    const controller = new AbortController();
+    active.current = controller;
+    setStatus("Preparing 4 variations…");
+    try {
+      let sourceImages: string[] | undefined;
+      if (sourceItem) {
+        const sourceFile = isCanvasFilePending(sourceItem.file) ? await loadCanvasFile(sourceItem) : sourceItem.file;
+        const content = await promptContent("", [{ id: sourceItem.id, file: sourceFile }], controller.signal);
+        sourceImages = typeof content === "string" ? [] : content.flatMap((part) => (part.type === "image_url" ? [part.image_url.url] : []));
+        if (!sourceImages.length) throw new Error("Could not read the source picture.");
+      }
+
+      const seeds = variationSeeds(provenance.sd.seed, 4);
+      const baseSettings: SdSettings = {
+        negativePrompt: provenance.sd.negativePrompt ?? "",
+        steps: provenance.sd.steps,
+        cfg: provenance.sd.cfg,
+        ...(isImg2Img && provenance.sd.strength !== undefined ? { strength: provenance.sd.strength } : {}),
+      };
+      const ratio = validAspectRatio(provenance.aspectRatio) ? provenance.aspectRatio : undefined;
+      const tasks: Generation[] = seeds.map((seed) => ({
+        id: crypto.randomUUID(),
+        category: "picture",
+        model: provenance.model,
+        prompt: provenance.prompt,
+        ...(ratio ? { aspectRatio: ratio } : {}),
+        ...(isImg2Img ? { startImage: true, canvasInputs: provenance.selectedInputs } : {}),
+        status: "Waiting",
+        sdSettings: { ...baseSettings, seed },
+      }));
+      setGenerations((current) => [...current, ...tasks]);
+      setExpanded((current) => [...current, ...tasks.map((task) => task.id)]);
+
+      let groupOrigin: { x: number; y: number } | undefined;
+      let cellSize: { width: number; height: number } | undefined;
+      const placedIds: string[] = [];
+
+      for (let index = 0; index < tasks.length; index++) {
+        const task = tasks[index];
+        if (controller.signal.aborted) {
+          updateGeneration(task.id, { status: "Not submitted", error: "Stopped before submission" });
+          continue;
+        }
+        setStatus(`Variation ${index + 1} of 4…`);
+        try {
+          let usedSd: Generation["sd"];
+          const results = await generate(
+            task,
+            request,
+            controller.signal,
+            (change) => {
+              if (change.sd) usedSd = change.sd;
+              if (change.status) setStatus(`Variation ${index + 1} of 4 · ${change.status}`);
+              updateGeneration(task.id, change);
+            },
+            sourceImages?.[0],
+            sourceImages,
+          );
+          const files = await Promise.all(results.map(async (file) => ({ ...file, url: await persistentUrl(file.url, file.kind === "file") })));
+          results.forEach((file) => { if (file.url.startsWith("blob:")) URL.revokeObjectURL(file.url); });
+          updateGeneration(task.id, { status: "Completed", files, error: undefined });
+          const picture = canvasResults(files, "picture")[0];
+          if (picture) {
+            const addedId = await addToCanvas(
+              picture,
+              files,
+              undefined,
+              undefined,
+              usedSd ? { ...task, sd: usedSd } : task,
+              {
+                exact: true,
+                select: false,
+                place: (size, existing) => {
+                  cellSize ??= size;
+                  const placed = planVariationSlot(original, index, cellSize, existing, groupOrigin);
+                  groupOrigin ??= placed.groupOrigin;
+                  return placed.position;
+                },
+              },
+            );
+            if (!addedId) throw new Error("Could not place variation on the canvas.");
+            placedIds.push(addedId);
+            onSelectItems?.([...placedIds]);
+          }
+        } catch (cause) {
+          const message = controller.signal.aborted ? "Variation stopped" : cause instanceof Error ? cause.message : "Variation failed";
+          updateGeneration(task.id, { status: "Interrupted", error: message });
+          for (const rest of tasks.slice(index + 1)) {
+            updateGeneration(rest.id, { status: "Not submitted", error: controller.signal.aborted ? "Stopped before submission" : "Stopped after previous error" });
+          }
+          if (!controller.signal.aborted) notifyError(message);
+          else notifyError("Stopped remaining variations");
+          break;
+        }
+      }
+    } catch (cause) {
+      notifyError(controller.signal.aborted ? "Request stopped" : cause instanceof Error ? cause.message : "Could not start variations");
+    } finally {
+      active.current = null;
+      setStatus("");
+    }
+  }
+
+  useImperativeHandle(ref, () => ({ useSetup, makeVariations }));
+
   /** Tools a local agent can call (through the desktop MCP bridge): generate media and read the canvas selection. */
   async function runAgentTool(name: string, args: Record<string, unknown>): Promise<AgentToolResult> {
     const controller = active.current;
@@ -486,7 +722,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     const views = needsViews ? resolveMultiview(model, args.viewIndices, images.map(({ image_url }, index) => ({ url: image_url.url, name: selectedImages[index].file.name }))) : undefined;
     if (category === "3d" && !needsViews && requiresImage(model) && images.length !== 1) throw new Error("This 3D model needs exactly one image selected on the canvas");
     const { task, images: generationImages } = characterGeneration(
-      { category, prompt: text, aspectRatio: typeof args.aspect_ratio === "string" ? args.aspect_ratio.slice(0, 16) : undefined, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: agentMessageIndex.current, views, canvasInputs: canvasInputNames(needsViews ? selectedImages : selected) },
+      { category, prompt: text, aspectRatio: typeof args.aspect_ratio === "string" ? args.aspect_ratio.slice(0, 16) : (category === "picture" && aspectRatio ? aspectRatio : undefined), id: crypto.randomUUID(), model, status: "Waiting", messageIndex: agentMessageIndex.current, views, canvasInputs: canvasInputNames(needsViews ? selectedImages : selected) },
       images.map((image) => image.image_url.url), agentCharacters.current,
     );
     setGenerations((current) => [...current, task]);
@@ -1176,7 +1412,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           ? resolveMultiview(model, task.viewIndices, images.map(({ image_url }, index) => ({ url: image_url.url, name: `Selected image ${index + 1}` })))
           : undefined;
         return characterGeneration(
-          { ...task, views, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: fullHistory.length, canvasInputs: canvasInputNames(selection) },
+          { ...task, ...(task.category === "picture" && aspectRatio && !task.aspectRatio ? { aspectRatio } : {}), views, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: fullHistory.length, canvasInputs: canvasInputNames(selection) },
           images.map((image) => image.image_url.url), characters, sd.status,
         );
       });
@@ -1690,11 +1926,34 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           <div className="ml-auto flex min-w-0 items-center gap-2">
           {localEngine && agentEfforts[localEngine.engine] && <EffortPicker levels={agentEfforts[localEngine.engine] ?? []} value={efforts[localEngine.engine]}
             onChange={(level) => changeEffort(localEngine.engine, level)} disabled={!!status} />}
+          {(pictureModel || aspectRatio) && (() => {
+            const ratioOptions = aspectRatio && !aspectRatios.includes(aspectRatio as (typeof aspectRatios)[number])
+              ? [aspectRatio, ...aspectRatios]
+              : aspectRatios;
+            const ratioItems = [{ value: "", label: "Auto" }, ...ratioOptions.map((value) => ({ value, label: value }))];
+            return (
+              <Select items={ratioItems} value={aspectRatio} onValueChange={(value) => setAspectRatio(value ?? "")} disabled={!!status}>
+                <Tip label="Image aspect ratio">
+                  <SelectTrigger size="sm" variant="ghost" aria-label="Image aspect ratio" className="w-auto min-w-0 px-2 text-xs">
+                    <SelectValue>{aspectRatio || "Auto"}</SelectValue>
+                  </SelectTrigger>
+                </Tip>
+                <SelectContent side="top" align="end" alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {ratioItems.map((item) => (
+                      <SelectItem key={item.value || "auto"} value={item.value}>{item.label}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            );
+          })()}
           {isSdModel(pictureModel) && <SdSettingsPopover model={pictureModel.slice(sdPrefix.length)} sdStatus={sd.status} disabled={!!status} />}
           <ModelSelector
             models={models}
             onModelsChange={setModels}
             onCatalogInfoChange={setCatalogInfo}
+            onSelectableChange={setSelectableModels}
             onOpenModelSetup={(target) => {
               setModelSetupTarget(target ?? null);
               setModelSetupOpen(true);

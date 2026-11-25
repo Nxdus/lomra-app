@@ -31,7 +31,7 @@ test('canvas cards and generation provenance survive project import, and handoff
   const output = { ...item('output'), harness: {
     role: 'Output',
     links: [{ to: brief.id, relation: 'Continues from' }],
-    provenance: { model: 'model', prompt: 'Warm lamp', selectedInputs: [{ id: 'ref', name: 'Reference' }], sd: { seed: 42, steps: 20, cfg: 7, strength: 0.6, negativePrompt: 'blur', image: true, mask: true } },
+    provenance: { model: 'model', prompt: 'Warm lamp', aspectRatio: '4:3', selectedInputs: [{ id: 'ref', name: 'Reference' }], sd: { seed: 42, steps: 20, cfg: 7, strength: 0.6, negativePrompt: 'blur', image: true, mask: true } },
   } satisfies CanvasHarness };
   const reference = item('ref');
   const saved = [brief, reference, output];
@@ -44,12 +44,13 @@ test('canvas cards and generation provenance survive project import, and handoff
   const [newBrief, newReference, newOutput] = mapped;
   expect(newOutput).toMatchObject({ harness: {
     links: [{ to: newBrief.id, relation: 'Continues from' }],
-    provenance: { prompt: 'Warm lamp', selectedInputs: [{ id: newReference.id, name: 'Reference' }], sd: output.harness.provenance.sd },
+    provenance: { prompt: 'Warm lamp', aspectRatio: '4:3', selectedInputs: [{ id: newReference.id, name: 'Reference' }], sd: output.harness.provenance.sd },
   } });
   const items = saved.map(item => ({ ...item, file: new File([Uint8Array.of(42)], item.name, { type: item.type }) }));
   const handoff = canvasHandoff(items, new Set(['brief', 'output']));
   expect(handoff.markdown).toContain('Continues from: Lamp brief (brief)');
   expect(handoff.markdown).toContain('Warm lamp');
+  expect(handoff.markdown).toContain('- Aspect ratio: 4:3\n');
   expect(handoff.markdown).toContain('- Seed: 42\n- Steps: 20\n- CFG scale: 7\n- Started from: Picture, brushed area only\n- Strength: 0\\.6\n- Negative prompt: blur\n');
   const zip = await canvasHandoffZip(handoff.markdown, handoff.assets);
   expect(Object.keys(unzipSync(new Uint8Array(await zip.arrayBuffer())))).toEqual(['canvas.md', 'files/output-output.png']);

@@ -277,9 +277,9 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
         if (action === "Erase" && !history.items.length) throw new Error("Brush over the area you want to change first.");
         const model = localPictureModel ?? (background ? "fal-ai/birefnet/v2" : upscale ? "fal-ai/esrgan" : selectedModel(await getSetting<string[]>("selected-models") ?? [], "picture"));
         controller.signal.throwIfAborted();
+        if (!model) throw new Error("Select an Image model in the prompt toolbar first.");
         const keyProvider = background || upscale ? "fal" : modelProvider(model ?? "");
         if (!isBrowserModel(model ?? "") && !isSdModel(model ?? "") && !isLocalPictureModel(model ?? "") && !keys[keyProvider]) throw new Error(`Enter your ${{ fal: "Fal", google: "Google", openrouter: "OpenRouter" }[keyProvider]} API key in Settings first.`);
-        if (!model) throw new Error("Select an Image model in the prompt toolbar first.");
         const local = !background && !upscale && isSdModel(model);
         const runCaps = !background && !upscale ? pictureCapabilities(model, sdStatus) : undefined;
         if (runCaps && action === "Resize" && !runCaps.outpaint) {
@@ -338,7 +338,7 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
               ctx.drawImage(original, 0, 0);
               ctx.globalCompositeOperation = "source-over";
             }
-            await exportResult(result, controller.signal, sd && { model, prompt, sd });
+            await exportResult(result, controller.signal, { model, prompt, ...(aspectRatio ? { aspectRatio } : {}), ...(sd ? { sd } : {}) });
           } finally { bitmap.close(); }
         }
       }

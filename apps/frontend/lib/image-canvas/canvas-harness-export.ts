@@ -23,6 +23,7 @@ export function canvasHandoff(items: CanvasImage[], selected: ReadonlySet<string
     }
     if (provenance) {
       lines.push("", `- Model: ${inline(provenance.model)}`);
+      if (provenance.aspectRatio) lines.push(`- Aspect ratio: ${inline(provenance.aspectRatio)}`);
       for (const input of provenance.selectedInputs ?? []) lines.push(`- Selected input: ${inline(input.name)} (${input.id})`);
       if (provenance.sd) for (const { label, value } of sdDetails(provenance.sd)) lines.push(`- ${label}: ${inline(value)}`);
       if (provenance.prompt) lines.push("", "Prompt", "", quote(provenance.prompt));
