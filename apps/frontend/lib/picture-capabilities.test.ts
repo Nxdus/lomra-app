@@ -1,7 +1,8 @@
 // @ts-expect-error Bun provides this module at test runtime.
 import { expect, test } from "bun:test";
+import { resolveSetupFromProvenance } from "./image-canvas/provenance-setup";
 import type { SdProfile, SdStatus } from "./desktop";
-import { pictureCapabilities } from "./picture-capabilities";
+import { pictureCapabilities, sdModelUnavailable } from "./picture-capabilities";
 
 const turboProfile: SdProfile = {
   id: "turbo",
@@ -110,4 +111,24 @@ test("pictureCapabilities reports hosted and Google picture model capabilities",
     expect(caps.referencePictures).toBe(true);
     expect(caps.maxInputImages).toBe(10);
   }
+});
+
+test("local checkpoint availability distinguishes a missing and a changed source", () => {
+  const checkpoint = { ...status.models[1], name: "Imported checkpoint", local: true };
+  expect(sdModelUnavailable({ ...checkpoint, localState: "ready" })).toBeUndefined();
+  for (const localState of ["missing", "changed"] as const) {
+    expect(sdModelUnavailable({ ...checkpoint, localState })).toMatch(new RegExp(`Imported checkpoint.*${localState}.*Locate`));
+  }
+  expect(sdModelUnavailable({ ...checkpoint, installed: false })).toContain("not installed");
+});
+
+test("restoring provenance respects the current profile and leaves incompatible settings alone", () => {
+  const provenance = { model: "sd/fake", prompt: "Redraw", sd: { seed: 9, steps: 8, cfg: 3, negativePrompt: "blur" } };
+  const restore = (steps: number) => resolveSetupFromProvenance(
+    { ...provenance, sd: { ...provenance.sd, steps } }, [], () => "selectable", undefined, status,
+  );
+  expect(restore(8).sdSettings).toEqual({ seed: 9, steps: 8, cfg: 3 });
+  const incompatible = restore(20);
+  expect(incompatible.sdSettings).toBeUndefined();
+  expect(incompatible.warnings.join(" ")).toMatch(/Recorded Steps.*current image settings were kept/);
 });

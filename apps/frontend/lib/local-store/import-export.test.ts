@@ -277,3 +277,21 @@ test('importing invalid or corrupted archives fails with descriptive StoreErrors
   };
   await expect(importProject(s, Uint8Array.from(zipSync(unsafePath)))).rejects.toMatchObject({ status: 400 });
 });
+
+test('project archives round-trip local picture tools, imported SD and resize provenance', async () => {
+  const { store } = await makeStore();
+  const outputs = [
+    { model: 'local-picture/birefnet-lite', prompt: 'Remove background' },
+    { model: 'local-picture/realesrgan-x4v3', prompt: 'Upscale 2?' },
+    { model: 'fal-ai/esrgan', prompt: 'Upscale 2?' },
+    { model: 'fal-ai/birefnet/v2', prompt: 'Remove background' },
+    { model: 'sd/local-checkpoint', prompt: 'Redraw', aspectRatio: '1:1', sd: { seed: 42, steps: 8, cfg: 1, image: true, strength: 0.6 } },
+    { model: 'openrouter/image-model', prompt: 'Extend', aspectRatio: '16:9' },
+  ].map((provenance, index) => ({ ...item(`output-${index}`), harness: { provenance } }));
+  await Promise.all(outputs.map(output => store.writeFile(output.id, Uint8Array.of(42))));
+  await store.save('canvas', 'default', outputs);
+  const { archive } = await exportProject(store, 'default');
+  const { canvasId } = await importProject(store, archive);
+  const imported = (await store.list('canvas')).find(row => row.id === canvasId)?.value as typeof outputs;
+  expect(imported.map(output => output.harness.provenance)).toEqual(outputs.map(output => output.harness.provenance));
+});

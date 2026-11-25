@@ -11,7 +11,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useLocal3d } from "@/hooks/use-local3d";
 import { useSd } from "@/hooks/use-sd";
-import { comparePictures } from "@/lib/image-canvas/provenance-setup";
+import { hostedPictureToolNames, isLocalPictureModel, pictureAiPrefix } from "@/components/prompt/media-tools";
+import { usePictureAi } from "@/hooks/use-picture-ai";
+import { canUsePictureSetup, comparePictures } from "@/lib/image-canvas/provenance-setup";
 import { cn } from "@/lib/utils";
 
 const MIN_ZOOM = 1;
@@ -39,12 +41,14 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
   const headingId = useId();
   const sd = useSd();
   const local3d = useLocal3d();
+  const pictureAi = usePictureAi();
 
   const resolveModelName = useCallback((model: string) => {
     if (isSdModel(model)) return sd.status?.models.find((m) => m.id === model.slice(sdPrefix.length))?.name;
     if (isLocal3dModel(model)) return local3d.status?.models.find((m) => m.id === model.slice(local3dPrefix.length))?.name;
-    return undefined;
-  }, [sd.status, local3d.status]);
+    if (isLocalPictureModel(model)) return pictureAi.status?.models.find(m => m.id === model.slice(pictureAiPrefix.length))?.name;
+    return Object.hasOwn(hostedPictureToolNames, model) ? hostedPictureToolNames[model] : undefined;
+  }, [sd.status, local3d.status, pictureAi.status]);
 
   const rows = useMemo(() => comparePictures(
     items.map((item) => ({
@@ -304,7 +308,7 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
               <div key={item.id} className="flex min-w-0 flex-col gap-2">
                 <div className="flex items-center justify-between gap-2">
                   <span className="truncate text-sm font-medium" title={itemTitle(item)}>{itemTitle(item)}</span>
-                  {item.harness?.provenance && onUseSetup && (
+                  {canUsePictureSetup(item.harness?.provenance) && onUseSetup && (
                     <Button type="button" variant="outline" size="xs" disabled={busy} onClick={() => { onUseSetup(item); onClose(); }}>
                       <SparklesIcon data-icon="inline-start" />Use this setup
                     </Button>
@@ -341,12 +345,12 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
         )}
 
         {/* Slider mode setup actions */}
-        {activeMode === "slider" && canSlide && items.some((item) => !!item.harness?.provenance) && onUseSetup && (
+        {activeMode === "slider" && canSlide && items.some((item) => canUsePictureSetup(item.harness?.provenance)) && onUseSetup && (
           <div className="grid grid-cols-2 gap-3">
             {items.map((item) => (
               <div key={item.id} className="flex items-center justify-between gap-2 rounded-2xl border bg-muted/30 px-3 py-2">
                 <span className="truncate text-xs font-medium" title={itemTitle(item)}>{itemTitle(item)}</span>
-                {item.harness?.provenance ? (
+                {canUsePictureSetup(item.harness?.provenance) ? (
                   <Button type="button" variant="outline" size="xs" disabled={busy} onClick={() => { onUseSetup(item); onClose(); }}>
                     <SparklesIcon data-icon="inline-start" />Use this setup
                   </Button>

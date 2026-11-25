@@ -1,5 +1,5 @@
-import type { SdCapabilities, SdProfile, SdRange, SdStatus } from "./desktop";
-import { sdNegativePromptLimit, sdRanges, type SdNumber } from "./sd-settings";
+import type { SdCapabilities, SdModel, SdProfile, SdRange, SdStatus } from "./desktop";
+import { sdNegativePromptLimit, sdRanges, validSdRangeNumber, type SdNumber, type SdSettings } from "./sd-settings";
 
 export type PictureCapabilities = SdCapabilities & {
   maxInputImages: number;
@@ -82,4 +82,30 @@ export function pictureCapabilities(model: string, sdStatus?: SdStatus | null): 
   }
   if (model.startsWith("google-ai/")) return googleCapabilities;
   return hostedCapabilities;
+}
+
+export function filterSdSettings(settings: SdSettings, caps: PictureCapabilities) {
+  const filtered = { ...settings };
+  if (!caps.negativePrompt) delete filtered.negativePrompt;
+  if (!caps.cfg) delete filtered.cfg;
+  if (!caps.strength) delete filtered.strength;
+  return filtered;
+}
+
+export function incompatibleSdSettings(settings: SdSettings, caps: PictureCapabilities) {
+  return (["steps", "cfg", "strength"] as const).flatMap(key => {
+    const range = caps.ranges[key];
+    const value = settings[key];
+    const label = { steps: "Steps", cfg: "CFG scale", strength: "Strength" }[key];
+    return value !== undefined && !validSdRangeNumber(range, value)
+      ? [`Recorded ${label} (${value}) is outside the current profile range (${range.min}–${range.max}).`]
+      : [];
+  });
+}
+
+export function sdModelUnavailable(entry: SdModel | undefined) {
+  if (entry?.localState === "missing" || entry?.localState === "changed") {
+    return `${entry.name}: checkpoint file is ${entry.localState}. Use Locate in Settings → Local models.`;
+  }
+  if (!entry?.installed) return `${entry?.name ?? "This image model"} is not installed. Check Settings → Local models.`;
 }

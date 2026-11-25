@@ -14,7 +14,7 @@ import { usePictureAi } from "@/hooks/use-picture-ai";
 import { useSd } from "@/hooks/use-sd";
 import type { CanvasProvenance } from "@/lib/image-canvas/canvas-harness";
 import { canvasFileKind, isCanvasFilePending } from "@/lib/image-canvas/image-canvas-storage";
-import { canMakeVariationsFromProvenance } from "@/lib/image-canvas/provenance-setup";
+import { canMakeVariationsFromProvenance, canUsePictureSetup } from "@/lib/image-canvas/provenance-setup";
 import { cn } from "@/lib/utils";
 
 const fileSize = (bytes: number) => bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1e3))} KB`;
@@ -106,9 +106,8 @@ export function CanvasItemSummary({ item, items, onLoaded, onUseSetup, onMakeVar
   const [size, setSize] = useState<{ width: number; height: number }>();
   const kind = canvasFileKind(item.file);
   const provenance = item.harness?.provenance;
-  const sd = useSd();
+  const canReuse = canUsePictureSetup(provenance) && onUseSetup;
   const canVary = kind === "image" && canMakeVariationsFromProvenance(provenance);
-  const sdModelInstalled = !canVary || !sd.status || sd.status.models.some((m) => m.installed && `${sdPrefix}${m.id}` === provenance!.model);
   let preview: ReactNode = <CanvasMedia image={item} onLoaded={onLoaded} />;
   if (kind === "image" && item.url) {
     // Local blob URLs need no Next.js image optimization.
@@ -118,13 +117,13 @@ export function CanvasItemSummary({ item, items, onLoaded, onUseSetup, onMakeVar
   return <div className="flex min-w-0 flex-col gap-4">
     <div className="max-h-96 w-full overflow-hidden rounded-3xl bg-muted/60" style={{ aspectRatio: `${item.width} / ${item.height}` }}>{preview}</div>
     {provenance ? <>
-      {kind === "image" && (onUseSetup || (canVary && onMakeVariations)) && (
+      {kind === "image" && (canReuse || (canVary && onMakeVariations)) && (
         <div className="flex flex-wrap gap-2">
-          {onUseSetup && <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => onUseSetup(item)}>
+          {canReuse && <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => canReuse(item)}>
             <SparklesIcon data-icon="inline-start" />Use this setup
           </Button>}
-          {canVary && onMakeVariations && <Tip label={!sdModelInstalled ? "Install this model in Settings → Local models first" : "Generate 4 variations with different seeds"}>
-            <Button type="button" variant="secondary" size="sm" disabled={busy || !sdModelInstalled} onClick={() => onMakeVariations(item)}>
+          {canVary && onMakeVariations && <Tip label="Generate 4 variations with different seeds">
+            <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => onMakeVariations(item)}>
               <Grid2x2Icon data-icon="inline-start" />Make 4 variations
             </Button>
           </Tip>}

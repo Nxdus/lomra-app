@@ -25,7 +25,7 @@ export function validSdNumber(name: SdNumber, value: unknown): value is number {
 
 const validNegativePrompt = (value: unknown) => typeof value === "string" && value.length <= sdNegativePromptLimit;
 
-function validSettings(value: unknown) {
+export function validSdModelSettings(value: unknown) {
   return record(value) && Object.entries(value).every(([name, saved]) => name === "negativePrompt" ? validNegativePrompt(saved)
     : Object.hasOwn(sdRanges, name) && validSdNumber(name as SdNumber, saved));
 }
@@ -33,7 +33,7 @@ function validSettings(value: unknown) {
 /** The saved `sd-settings` setting: one entry per model id. */
 export function validSdSettings(value: unknown) {
   return record(value) && Object.keys(value).length <= 200 &&
-    Object.entries(value).every(([model, saved]) => /^[a-z0-9-]{1,64}$/.test(model) && validSettings(saved));
+    Object.entries(value).every(([model, saved]) => /^[a-z0-9-]{1,64}$/.test(model) && validSdModelSettings(saved));
 }
 
 export function validSdUsed(value: unknown) {

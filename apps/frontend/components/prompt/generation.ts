@@ -3,7 +3,7 @@ import { animationInput, animationFiles, rigFiles } from "./animation";
 import { localMediaTool, isLocalPictureModel, validMediaToolModel, validateMediaTool, type MediaTool, type ToolSource } from "./media-tools";
 export { isLocalPictureModel, pictureAiPrefix } from "./media-tools";
 import { desktopAgents, desktopLocal3d, desktopPictureAi, desktopSd } from "@/lib/desktop";
-import { pictureCapabilities } from "@/lib/picture-capabilities";
+import { filterSdSettings, incompatibleSdSettings, pictureCapabilities, sdModelUnavailable } from "@/lib/picture-capabilities";
 import type { SdSettings, SdUsed } from "@/lib/sd-settings";
 import { loadSdSettings, rememberSdSeed, sdSettingsOf } from "@/lib/sd-settings-store";
 import { restoreRatio, sdPicture } from "./sd-image";
@@ -202,6 +202,9 @@ export async function generate(
     if (!bridge) throw new Error("Local image models require the Lomra desktop app.");
     const sdStatus = await bridge.status?.().catch(() => undefined);
     const caps = pictureCapabilities(task.model, sdStatus);
+    const model = task.model.slice(sdPrefix.length);
+    const unavailable = sdStatus && sdModelUnavailable(sdStatus.models.find(entry => entry.id === model));
+    if (unavailable) throw new Error(unavailable);
     // Kept with the job, so trying again asks for the picture instead of quietly drawing from the text alone.
     if (images.length) update({ startImage: true });
     else if (task.startImage) throw new Error("Select the picture to edit on the canvas, then try again.");
@@ -219,18 +222,18 @@ export async function generate(
     try {
       update({ status: "Generating locally…" });
       await loadSdSettings();
-      const model = task.model.slice(sdPrefix.length);
       const { mask: maskUrl, ...override } = task.sdEdit ?? {};
-      const { strength, ...settings } = task.sdSettings ?? { ...sdSettingsOf(model), ...override };
-      if (!caps.negativePrompt) delete settings.negativePrompt;
-      if (!caps.cfg) delete settings.cfg;
-      const effectiveStrength = caps.strength ? strength : undefined;
+      const { strength, ...settings } = filterSdSettings(task.sdSettings ?? { ...sdSettingsOf(model), ...override }, caps);
+      if (task.sdSettings) {
+        const issues = incompatibleSdSettings({ ...settings, ...(images.length ? { strength } : {}) }, caps);
+        if (issues.length) throw new Error(issues.join(" "));
+      }
       const source = images.length ? await sdPicture(images[0], signal, maskUrl ? {} : { aspectRatio: task.aspectRatio }) : undefined;
       const mask = maskUrl ? (await sdPicture(maskUrl, signal, { background: "#000" })).url : undefined;
       signal.throwIfAborted();
       const result = await bridge.generate(task.id, {
         model, prompt: task.prompt, ...settings,
-        ...(source ? { image: source.url, ...(mask ? { mask } : {}), ...(effectiveStrength === undefined ? {} : { strength: effectiveStrength }) } : task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}),
+        ...(source ? { image: source.url, ...(mask ? { mask } : {}), ...(strength === undefined ? {} : { strength }) } : task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}),
       });
       if ("error" in result) throw new Error(result.error);
       signal.throwIfAborted();

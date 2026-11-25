@@ -1,3 +1,6 @@
+import { hostedPictureToolNames, isLocalPictureModel } from "@/components/prompt/media-tools";
+import { filterSdSettings, incompatibleSdSettings, pictureCapabilities, sdModelUnavailable } from "@/lib/picture-capabilities";
+import type { SdStatus } from "@/lib/desktop";
 import { isSdModel, sdPrefix } from "@/components/prompt/generation";
 import { sdNegativePromptLimit, sdRanges, validSdNumber, type SdSettings } from "@/lib/sd-settings";
 import type { CanvasProvenance } from "./canvas-harness";
@@ -15,7 +18,14 @@ export function validAspectRatio(value: unknown): value is string {
   return Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0;
 }
 
-export type ModelAvailability = "selectable" | "not-installed" | "unavailable";
+export function canUsePictureSetup(provenance?: CanvasProvenance) {
+  if (!provenance) return false;
+  const { model } = provenance;
+  return model !== "Local image tools" && model !== "Local media tools" &&
+    !isLocalPictureModel(model) && !Object.hasOwn(hostedPictureToolNames, model);
+}
+
+export type ModelAvailability = "selectable" | "not-installed" | "not-in-picker" | "unavailable";
 
 export type ResolvedSetup = {
   prompt: string;
@@ -36,18 +46,22 @@ export function resolveSetupFromProvenance(
   canvasItems: ReadonlyArray<{ id: string }>,
   checkModel: (model: string) => ModelAvailability,
   modelDisplayName?: (model: string) => string | undefined,
+  sdStatus?: SdStatus | null,
 ): ResolvedSetup {
   const warnings: string[] = [];
   const label = modelDisplayName?.(provenance.model) ?? provenance.model;
   const availability = checkModel(provenance.model);
   let model: string | undefined;
   if (availability === "selectable") model = provenance.model;
-  else if (availability === "not-installed") warnings.push(`Model "${label}" is not installed.`);
+  else if (availability === "not-installed") warnings.push(sdStatus && isSdModel(provenance.model)
+    ? sdModelUnavailable(sdStatus.models.find(entry => `sd/${entry.id}` === provenance.model)) ?? `Model "${label}" is not installed.`
+    : `Model "${label}" is not installed.`);
+  else if (availability === "not-in-picker") warnings.push(`Add "${label}" using Add Image model in the prompt toolbar, then try this setup again.`);
   else warnings.push(`Model "${label}" is no longer selectable.`);
 
   let sdModelId: string | undefined;
   let sdSettings: SdSettings | undefined;
-  if (isSdModel(provenance.model) && provenance.sd) {
+  if (isSdModel(provenance.model) && provenance.sd && (sdStatus === undefined || model)) {
     sdModelId = provenance.model.slice(sdPrefix.length);
     const { seed, steps, cfg, strength, negativePrompt } = provenance.sd;
     sdSettings = {
@@ -57,6 +71,13 @@ export function resolveSetupFromProvenance(
       ...(validSdNumber("cfg", cfg) ? { cfg } : {}),
       ...(strength !== undefined && validSdNumber("strength", strength) ? { strength } : {}),
     };
+    const caps = pictureCapabilities(provenance.model, sdStatus);
+    sdSettings = filterSdSettings(sdSettings, caps);
+    const issues = incompatibleSdSettings(sdSettings, caps);
+    if (issues.length) {
+      warnings.push(...issues, "The current image settings were kept.");
+      sdSettings = undefined;
+    }
   }
 
   const canvasIds = new Set(canvasItems.map((item) => item.id));

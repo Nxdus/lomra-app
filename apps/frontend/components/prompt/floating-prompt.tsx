@@ -25,7 +25,7 @@ import { MarkdownMessage } from "./markdown-message";
 import { chatTimeline } from "./chat-timeline";
 import { ModelSelector } from "./model-selector";
 import { useSd } from "@/hooks/use-sd";
-import { pictureCapabilities } from "@/lib/picture-capabilities";
+import { filterSdSettings, incompatibleSdSettings, pictureCapabilities, sdModelUnavailable } from "@/lib/picture-capabilities";
 import { SdSettingsPopover } from "./sd-settings-popover";
 import { toast } from "@/components/ui/toast";
 import { MissingApiKeyError, useApiProviders, type KeyedProvider } from "@/components/api-provider";
@@ -37,10 +37,9 @@ import type { CanvasHarness } from "@/lib/image-canvas/canvas-harness";
 import { CanvasModelViewer } from "@/components/canvas-model-viewer";
 import { canvasFileError, canvasFileKind, isCanvasFilePending, loadCanvasFile } from "@/lib/image-canvas/image-canvas-storage";
 import { getSetting, saveSetting } from "@/lib/settings";
-import { useSd } from "@/hooks/use-sd";
 import type { SdSettings } from "@/lib/sd-settings";
 import { changeSdSettings, loadSdSettings, sdSettingsOf } from "@/lib/sd-settings-store";
-import { aspectRatios, canMakeVariationsFromProvenance, planVariationSlot, resolveSetupFromProvenance, validAspectRatio, variationSeeds } from "@/lib/image-canvas/provenance-setup";
+import { aspectRatios, canMakeVariationsFromProvenance, canUsePictureSetup, planVariationSlot, resolveSetupFromProvenance, validAspectRatio, variationSeeds } from "@/lib/image-canvas/provenance-setup";
 import { characterNameKey, type Character } from "@/lib/characters";
 import { isRemoteOllama } from "@/lib/ollama-url";
 import { desktopAgents, desktopOllama, desktopPictureAi, desktopSd, desktopVideo, type AgentToolResult, type DesktopVideoApi, type PictureAiModel } from "@/lib/desktop";
@@ -129,7 +128,6 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   const localEngine = localAgentModel(llm);
   const pictureModel = selectedModel(models, "picture") ?? "";
   const threeDModel = selectedModel(models, "3d") ?? "";
-  const sd = useSd();
   const multiview = isMultiview(threeDModel);
   const [history, setHistory] = useState<ConversationMessage[]>([]);
   const [storyboard, setStoryboard] = useState<Storyboard>();
@@ -494,8 +492,9 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       return;
     }
     const provenance = item.harness?.provenance;
-    if (!provenance) return;
+    if (!provenance || !canUsePictureSetup(provenance)) return;
     const [freshSd] = await Promise.all([sd.refresh(), loadSdSettings().catch(() => {})]);
+    if (active.current) return;
     const sdModels = freshSd?.models ?? sd.status?.models ?? [];
     const resolved = resolveSetupFromProvenance(
       provenance,
@@ -504,12 +503,13 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         const key = `picture:${model}`;
         if (isSdModel(model)) {
           const id = model.slice(sdPrefix.length);
-          if (!freshSd || !sdModels.some((entry) => entry.installed && entry.id === id)) return "not-installed";
-          return !selectableModels || selectableModels.has(key) ? "selectable" : "unavailable";
+          if (!freshSd || sdModelUnavailable(sdModels.find((entry) => entry.id === id))) return "not-installed";
+          return models.includes(key) || selectableModels?.has(key) ? "selectable" : "not-in-picker";
         }
         return models.includes(key) || selectableModels?.has(key) ? "selectable" : "unavailable";
       },
       (model) => (isSdModel(model) ? sdModels.find((entry) => entry.id === model.slice(sdPrefix.length))?.name : undefined),
+      freshSd,
     );
 
     const previousDraft = draft;
@@ -567,6 +567,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       return;
     }
     const freshSd = await sd.refresh();
+    if (active.current) return;
     const sdModelId = provenance.model.slice(sdPrefix.length);
     const modelEntry = freshSd?.models.find((entry) => entry.id === sdModelId);
     if (!modelEntry?.installed) {
@@ -598,12 +599,19 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       }
 
       const seeds = variationSeeds(provenance.sd.seed, 4);
-      const baseSettings: SdSettings = {
+      const recordedSettings: SdSettings = {
         negativePrompt: provenance.sd.negativePrompt ?? "",
         steps: provenance.sd.steps,
         cfg: provenance.sd.cfg,
         ...(isImg2Img && provenance.sd.strength !== undefined ? { strength: provenance.sd.strength } : {}),
       };
+      const caps = pictureCapabilities(provenance.model, freshSd);
+      const baseSettings = filterSdSettings(recordedSettings, caps);
+      const issues = incompatibleSdSettings(baseSettings, caps);
+      if (issues.length) throw new Error([...issues, "Choose a compatible profile in Settings → Local models."].join(" "));
+      if (isImg2Img ? !caps.imageToImage : !caps.textToImage) {
+        throw new Error("The current model profile does not support the original generation mode.");
+      }
       const ratio = validAspectRatio(provenance.aspectRatio) ? provenance.aspectRatio : undefined;
       const tasks: Generation[] = seeds.map((seed) => ({
         id: crypto.randomUUID(),

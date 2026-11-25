@@ -338,7 +338,7 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
               ctx.drawImage(original, 0, 0);
               ctx.globalCompositeOperation = "source-over";
             }
-            await exportResult(result, controller.signal, { model, prompt, ...(aspectRatio ? { aspectRatio } : {}), ...(sd ? { sd } : {}) });
+            await exportResult(result, controller.signal, (aspectRatio || sd) ? { model, prompt, ...(aspectRatio ? { aspectRatio } : {}), ...(sd ? { sd } : {}) } : undefined);
           } finally { bitmap.close(); }
         }
       }

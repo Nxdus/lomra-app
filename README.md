@@ -40,7 +40,7 @@
     <td width="50%" align="center" valign="top">
       <a href="docs/demos/generate-media.webp"><picture><source srcset="docs/demos/generate-media.webp" type="image/webp"><img src="docs/demos/generate-media.poster.jpg" width="420" alt="A generated toy robot image, a video of a robot waving, and a 3D robot model on a Lomra canvas"></picture></a>
       <p><strong>Generate images, clips, and 3D assets</strong><br>
-      Generate images locally from text with Stable Diffusion or use a hosted image model. Generate video from text with a supported hosted model. Turn one image into a GLB with local Hunyuan3D or TripoSR, or use Fal.AI for text-to-3D, image-to-3D, and supported multiview models.</p>
+      Generate images with Stable Diffusion or a hosted image model. Import compatible local checkpoints in Settings, then reuse image setups, generate four local variations, or compare results on the canvas. Generate video from text with a supported hosted model. Turn one image into a GLB with local Hunyuan3D or TripoSR, or use Fal.AI for text-to-3D, image-to-3D, and supported multiview models.</p>
     </td>
     <td width="50%" align="center" valign="top">
       <a href="docs/demos/model-inspector.webp"><picture><source srcset="docs/demos/model-inspector.webp" type="image/webp"><img src="docs/demos/model-inspector.poster.jpg" width="420" alt="A robot in the Lomra model inspector as its lighting is adjusted, its skeleton is shown, and its wave animation is played before saving a PNG"></picture></a>
@@ -57,7 +57,7 @@
     <td width="50%" align="center" valign="top">
       <a href="docs/demos/edit-media.webp"><picture><source srcset="docs/demos/edit-media.webp" type="image/webp"><img src="docs/demos/edit-media.poster.jpg" width="420" alt="A contact sheet split into two images and a turntable clip trimmed with two still frames on a Lomra canvas."></picture></a>
       <p><strong>Edit images and video</strong><br>
-      Crop, split, resize, rotate, or flip images. Extract PNG frames at specific timestamps or trim a clip to WebM. Remove image backgrounds or upscale images 2× or 4× locally in the desktop app (or with a Fal.AI key). Edits create new files and keep the originals.</p>
+      Crop, split, resize, rotate, or flip images. Extract PNG frames at specific timestamps or trim a clip to WebM. Edits create new files and keep the originals.</p>
     </td>
   </tr>
   <tr>

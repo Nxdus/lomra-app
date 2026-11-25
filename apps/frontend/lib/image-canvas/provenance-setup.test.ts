@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import { validateValue } from "../local-store/validation";
 import {
   canMakeVariationsFromProvenance,
+  canUsePictureSetup,
   comparePictures,
   planVariationGroupOrigin,
   planVariationSlot,
@@ -149,4 +150,13 @@ test("comparePictures highlights only fields that differ and supports pictures w
     { id: "2", name: "b.png", naturalWidth: 1024, naturalHeight: 512 },
   ]);
   expect(bothPlain.filter((r) => r.differs).map((r) => r.id)).toEqual(["size"]);
+});
+
+test("picture tools have comparison provenance but cannot reuse a generation setup", () => {
+  for (const model of ["local-picture/birefnet-lite", "local-picture/realesrgan-x4v3", "fal-ai/birefnet/v2", "fal-ai/esrgan", "Local image tools", "Local media tools"]) {
+    const provenance = { model, prompt: "Edit picture" };
+    expect(canUsePictureSetup(provenance)).toBe(false);
+    expect(canMakeVariationsFromProvenance(provenance)).toBe(false);
+  }
+  expect(canUsePictureSetup({ model: "sd/sd15", prompt: "Draw a fox" })).toBe(true);
 });

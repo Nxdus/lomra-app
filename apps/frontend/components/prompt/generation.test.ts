@@ -386,6 +386,11 @@ test("local and hosted picture generation enforces profile capabilities and forw
     assert.deepEqual(calls.pop(), { model: "sd-turbo", prompt: "fox", negativePrompt: "blur", cfg: 1.5, steps: 16 });
     await generate({ id: "11111111-1111-1111-1111-111111111114", category: "picture", prompt: "fox", model: "sd/no-inpaint", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]);
     assert.deepEqual(calls.pop(), { model: "sd/no-inpaint".slice(3), prompt: "fox", steps: 4, image: "data:image/png;base64,1500x1000#fff" });
+    const variant: Generation = { id: "variant", category: "picture", prompt: "fox", model: "sd/no-inpaint", status: "Waiting", sdSettings: { steps: 8, cfg: 8, negativePrompt: "blur", strength: 0.6 } };
+    await generate(variant, async () => ({}), new AbortController().signal, () => {}, picture, [picture]);
+    assert.deepEqual(calls.pop(), { model: "no-inpaint", prompt: "fox", steps: 8, strength: 0.6, image: "data:image/png;base64,1500x1000#fff" });
+    await assert.rejects(generate({ ...variant, sdSettings: { steps: 13 } }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]), /Recorded Steps.*outside the current profile range/);
+    assert.equal(calls.length, 0);
     await assert.rejects(generate({ id: "11111111-1111-1111-1111-111111111112", category: "picture", prompt: "fox", model: "sd/no-inpaint", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}), /Select a picture/);
     await assert.rejects(generate({ id: "11111111-1111-1111-1111-111111111113", category: "picture", prompt: "fox", model: "sd/no-inpaint", sdEdit: { mask: picture }, status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]), /cannot edit a brushed area/);
     await assert.rejects(generate({ id: "g1", category: "picture", prompt: "fox", model: "google-ai/imagen-3", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]), /does not support reference images/);

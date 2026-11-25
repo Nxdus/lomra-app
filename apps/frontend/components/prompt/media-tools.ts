@@ -31,6 +31,10 @@ export function validateMediaTool(value: unknown): asserts value is MediaTool {
 }
 export const pictureAiPrefix = "local-picture/";
 export const isLocalPictureModel = (model: string) => model.startsWith(pictureAiPrefix);
+export const hostedPictureToolNames: Readonly<Partial<Record<string, string>>> = {
+  "fal-ai/birefnet/v2": "BiRefNet (Fal)",
+  "fal-ai/esrgan": "ESRGAN (Fal)",
+};
 export function pictureAiOperation(tool: MediaTool): "remove-background" | "upscale" | undefined {
   if (tool.name === "remove_background") return "remove-background";
   if (tool.name === "upscale_image") return "upscale";

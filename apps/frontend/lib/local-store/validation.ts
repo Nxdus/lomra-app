@@ -2,7 +2,7 @@ import { parseOllamaUrl } from '../ollama-url';
 import { validStoryboard } from '../../components/prompt/storyboard-data';
 import { characterImageLimit, characterImageType, characterNameLimit, characterNamePattern, characterNotesLimit } from '../characters';
 import { referenceSetNameLimit } from '../reference-sets';
-import { validSdSettings, validSdUsed } from '../sd-settings';
+import { validSdModelSettings, validSdSettings, validSdUsed } from '../sd-settings';
 import { validAspectRatio } from '../image-canvas/provenance-setup';
 import { MAX_MEDIA_ITEMS } from '../../components/prompt/media';
 import { canvasCardType, canvasLinkLimit, canvasRelations, canvasRoles, canvasTextLimit, canvasTitleLimit } from '../image-canvas/canvas-harness';
@@ -145,6 +145,7 @@ function validChat(id: string, value: unknown) {
       ['id', 'model', 'prompt', 'status'].every((field) => typeof task[field] === 'string') &&
       (task.canvasInputs === undefined || validCanvasSources(task.canvasInputs)) &&
       (task.sd === undefined || validSdUsed(task.sd)) &&
+      (task.sdSettings === undefined || validSdModelSettings(task.sdSettings)) &&
       ['error', 'requestId'].every((field) => task[field] === undefined || typeof task[field] === 'string') &&
       (task.files === undefined || (Array.isArray(task.files) && task.files.every((file: Record<string, unknown>) =>
         file && typeof file.url === 'string' && typeof file.name === 'string' &&
