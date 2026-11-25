@@ -66,12 +66,13 @@ prompt; prompt-driven media tools need a tool-capable chat model.
 
 ## Generate images, video, and 3D
 
-- **Images:** local Stable Diffusion (set up under **Settings → Local models**)
-  or a hosted image model through OpenRouter or Fal.AI. Local Stable Diffusion
-  redraws the picture you select, one at a time; describe the result you want.
-  **Image settings** next to the model picker sets its negative prompt, seed,
-  steps, CFG scale and edit strength. **Canvas details** shows what was used, so
-  you can repeat a result.
+- **Images:** local Stable Diffusion (set up under **Settings → Local models**,
+  where installed Hugging Face checkpoints can also switch between compatible
+  profiles) or a hosted image model through OpenRouter or Fal.AI. Local Stable
+  Diffusion redraws the picture you select, one at a time; describe the result
+  you want. **Image settings** next to the model picker sets seed, steps, and
+  (where the model profile supports them) negative prompt, CFG scale and edit
+  strength. **Canvas details** shows what was used, so you can repeat a result.
 - **Video:** text to video with a supported hosted model.
 - **3D:** turn one image into a GLB with local Hunyuan3D or TripoSR, or use
   Fal.AI for text-to-3D and supported multiview models.

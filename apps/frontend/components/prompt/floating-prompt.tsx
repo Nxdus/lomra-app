@@ -21,12 +21,14 @@ import { VoiceRecorder } from "./voice-recorder";
 import { MarkdownMessage } from "./markdown-message";
 import { chatTimeline } from "./chat-timeline";
 import { ModelSelector } from "./model-selector";
+import { useSd } from "@/hooks/use-sd";
+import { pictureCapabilities } from "@/lib/picture-capabilities";
 import { SdSettingsPopover } from "./sd-settings-popover";
 import { toast } from "@/components/ui/toast";
 import { MissingApiKeyError, useApiProviders, type KeyedProvider } from "@/components/api-provider";
 import { ModelSetupDialog } from "@/components/first-run/model-setup-dialog";
 import { multiviewRequirements, resolveMultiview } from "./multiview";
-import { canvasResults, generate, llmProvider as providerOf, modelProvider, type Category, selectedModel, isMultiview, isSdModel, sdPrefix, requiresImage, isLocal3dModel, videoStartImage, type ConversationMessage, type GeneratedFile, type Generation, type GenerationTask } from "./generation";
+import { canvasResults, generate, llmProvider as providerOf, type Category, selectedModel, isMultiview, isSdModel, sdPrefix, requiresImage, isLocal3dModel, videoStartImage, type ConversationMessage, type GeneratedFile, type Generation, type GenerationTask } from "./generation";
 import type { CanvasHandle, VisibleImage } from "@/components/image-canvas";
 import type { CanvasHarness } from "@/lib/image-canvas/canvas-harness";
 import { CanvasModelViewer } from "@/components/canvas-model-viewer";
@@ -112,6 +114,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const localEngine = localAgentModel(llm);
   const pictureModel = selectedModel(models, "picture") ?? "";
   const threeDModel = selectedModel(models, "3d") ?? "";
+  const sd = useSd();
   const multiview = isMultiview(threeDModel);
   const [history, setHistory] = useState<ConversationMessage[]>([]);
   const [storyboard, setStoryboard] = useState<Storyboard>();
@@ -783,7 +786,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     const shot = story.shots![index];
     const model = selectedModel(models, "picture");
     if (!model) throw new Error("Select an image model in the prompt toolbar first.");
-    const useImages = !isSdModel(model) && modelProvider(model) !== "google";
+    const useImages = pictureCapabilities(model, sd.status).referencePictures;
     const references: string[] = [];
     const details: string[] = [];
     for (const position of shot.characters ?? []) {
@@ -1133,7 +1136,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           : undefined;
         return characterGeneration(
           { ...task, views, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: fullHistory.length, canvasInputs: canvasInputNames(selection) },
-          images.map((image) => image.image_url.url), characters,
+          images.map((image) => image.image_url.url), characters, sd.status,
         );
       });
       const tasks = prepared.map(({ task }) => task);
@@ -1628,7 +1631,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
           <div className="ml-auto flex min-w-0 items-center gap-2">
           {localEngine && agentEfforts[localEngine.engine] && <EffortPicker levels={agentEfforts[localEngine.engine] ?? []} value={efforts[localEngine.engine]}
             onChange={(level) => changeEffort(localEngine.engine, level)} disabled={!!status} />}
-          {isSdModel(pictureModel) && <SdSettingsPopover model={pictureModel.slice(sdPrefix.length)} disabled={!!status} />}
+          {isSdModel(pictureModel) && <SdSettingsPopover model={pictureModel.slice(sdPrefix.length)} sdStatus={sd.status} disabled={!!status} />}
           <ModelSelector
             models={models}
             onModelsChange={setModels}

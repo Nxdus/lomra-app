@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('lomra', {
     inspect: (repo, file) => ipcRenderer.invoke('sd:inspect', repo, file),
     cancelDownload: (id) => ipcRenderer.invoke('sd:cancelDownload', id),
     remove: (id) => ipcRenderer.invoke('sd:remove', id),
+    setProfile: (id, profileId) => ipcRenderer.invoke('sd:setProfile', id, profileId),
     generate: (runId, input) => ipcRenderer.invoke('sd:generate', runId, input),
     cancel: (runId) => ipcRenderer.send('sd:cancel', runId),
     onProgress: (callback) => subscribe('sd:progress', callback),

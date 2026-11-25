@@ -30,7 +30,7 @@ export function SdDownloadDialog({ repo, status, onClose, onDownload }: {
   const [inspected, setInspected] = useState<Record<string, Inspected>>({});
   const [fewSteps, setFewSteps] = useState<Record<string, boolean>>({});
   // Only used when the header could not be read.
-  const [family, setFamily] = useState(status.families[0]?.id ?? "");
+  const [family, setFamily] = useState(status.profiles[0]?.id ?? "");
   const file = files?.find((item) => item.file === chosen) ?? files?.find((item) => item.file === repo.file) ?? (files && defaultSdFile(files, status.gpuBytes));
   const name = file?.file;
   const kind = name ? inspected[name] : undefined;
@@ -104,8 +104,8 @@ export function SdDownloadDialog({ repo, status, onClose, onDownload }: {
       {!problem && unknown && !builtIn && <Field>
         <FieldLabel htmlFor="sd-family">Model type</FieldLabel>
         <Select value={family} onValueChange={(value) => { if (value) setFamily(value); }}>
-          <SelectTrigger id="sd-family" className="h-11 w-full"><SelectValue>{status.families.find((item) => item.id === family)?.name}</SelectValue></SelectTrigger>
-          <SelectContent>{status.families.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent>
+          <SelectTrigger id="sd-family" className="h-11 w-full"><SelectValue>{status.profiles.find((item) => item.id === family)?.name}</SelectValue></SelectTrigger>
+          <SelectContent>{status.profiles.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent>
         </Select>
       </Field>}
       {!problem && supported && !builtIn && <div className="flex items-center justify-between gap-4">

@@ -2,6 +2,7 @@ import { processImage, type ImageOperation } from "./image-tools";
 import { animationInput, animationFiles, rigFiles } from "./animation";
 import { localMediaTool, mediaToolModel, validateMediaTool, type MediaTool, type ToolSource } from "./media-tools";
 import { desktopAgents, desktopLocal3d, desktopSd } from "@/lib/desktop";
+import { pictureCapabilities } from "@/lib/picture-capabilities";
 import type { SdSettings, SdUsed } from "@/lib/sd-settings";
 import { loadSdSettings, rememberSdSeed, sdSettingsOf } from "@/lib/sd-settings-store";
 import { restoreRatio, sdPicture } from "./sd-image";
@@ -196,10 +197,19 @@ export async function generate(
   if (task.category === "picture" && isSdModel(task.model) && !task.mediaTool) {
     const bridge = desktopSd();
     if (!bridge) throw new Error("Local image models require the Lomra desktop app.");
+    const sdStatus = await bridge.status?.().catch(() => undefined);
+    const caps = pictureCapabilities(task.model, sdStatus);
     // Kept with the job, so trying again asks for the picture instead of quietly drawing from the text alone.
     if (images.length) update({ startImage: true });
     else if (task.startImage) throw new Error("Select the picture to edit on the canvas, then try again.");
-    if (images.length > 1) throw new Error("Local Stable Diffusion works from one picture at a time. Select a single picture or choose another image model.");
+    if (task.sdEdit?.mask && !caps.inpaint) throw new Error("This image model cannot edit a brushed area.");
+    if (!task.sdEdit?.mask && !images.length && !caps.textToImage) throw new Error("Select a picture on the canvas first.");
+    if (!task.sdEdit?.mask && images.length > 0 && !caps.imageToImage && !caps.referencePictures) throw new Error("This image model does not support starting from a picture.");
+    if (images.length > caps.maxInputImages) {
+      throw new Error(caps.maxInputImages === 1
+        ? "Local Stable Diffusion works from one picture at a time. Select a single picture or choose another image model."
+        : `Select at most ${caps.maxInputImages} pictures for this image model.`);
+    }
     const abort = () => bridge.cancel(task.id);
     signal.addEventListener("abort", abort, { once: true });
     const stopProgress = bridge.onProgress((event) => { if (event.runId === task.id) update({ status: waitingStatus(event.waiting) ?? `Generating locally… ${event.step}/${event.total}` }); });
@@ -209,12 +219,15 @@ export async function generate(
       const model = task.model.slice(sdPrefix.length);
       const { mask: maskUrl, ...override } = task.sdEdit ?? {};
       const { strength, ...settings } = { ...sdSettingsOf(model), ...override };
+      if (!caps.negativePrompt) delete settings.negativePrompt;
+      if (!caps.cfg) delete settings.cfg;
+      const effectiveStrength = caps.strength ? strength : undefined;
       const source = images.length ? await sdPicture(images[0], signal, maskUrl ? {} : { aspectRatio: task.aspectRatio }) : undefined;
       const mask = maskUrl ? (await sdPicture(maskUrl, signal, { background: "#000" })).url : undefined;
       signal.throwIfAborted();
       const result = await bridge.generate(task.id, {
         model, prompt: task.prompt, ...settings,
-        ...(source ? { image: source.url, ...(mask ? { mask } : {}), ...(strength === undefined ? {} : { strength }) } : task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}),
+        ...(source ? { image: source.url, ...(mask ? { mask } : {}), ...(effectiveStrength === undefined ? {} : { strength: effectiveStrength }) } : task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}),
       });
       if ("error" in result) throw new Error(result.error);
       signal.throwIfAborted();
@@ -263,6 +276,13 @@ export async function generate(
   const provider = task.category === "3d" || task.mediaTool ? "fal" : modelProvider(task.model);
   const call = (options: ProviderRequest) => request(provider, { ...options, model: task.model, signal });
   if (task.category === "picture" && !task.mediaTool) {
+    const caps = pictureCapabilities(task.model);
+    if (images.length > 0 && !caps.imageToImage && !caps.referencePictures) {
+      throw new Error("This image model does not support reference images. Deselect the picture or choose another image model.");
+    }
+    if (images.length > caps.maxInputImages) {
+      throw new Error(`Select at most ${caps.maxInputImages} pictures for this image model.`);
+    }
     const files = imageFiles(await call({ action: "image", input: task.prompt, images, ...(task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}) }));
     if (!files.length) throw new Error("The image model returned no supported images");
     return files;

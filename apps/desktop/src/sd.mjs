@@ -7,7 +7,8 @@ import { createGpuQueue, whenGone } from './gpu-queue.mjs';
 import { createDownloadQueue, downloadFile, extractZip, listParts, partBytes, removeParts } from './download.mjs';
 import { namedFewStep, readCheckpoint } from './sd-header.mjs';
 import { editDimensions, sdInput } from './sd-input.mjs';
-import { aspectRatioOf, customModelId, defaultSdModel, hfFilePattern, hfRepoPattern, parseHuggingFace, sdDimensions, sdEngineUrl, sdEngines, sdFamilies, sdModelUrl, sdModels, sdRelease } from './sd-models.mjs';
+import { aspectRatioOf, customModelId, defaultSdModel, hfFilePattern, hfRepoPattern, parseHuggingFace, sdDimensions, sdEngineUrl, sdEngines, sdModelUrl, sdModels, sdRelease } from './sd-models.mjs';
+import { compatibleSdProfiles, findSdProfile, publicSdProfile, resolveSdProfile, sdProfiles } from './sd-profiles.mjs';
 
 const binaryName = (platform) => platform === 'win32' ? 'sd-cli.exe' : 'sd-cli';
 
@@ -30,7 +31,7 @@ export function engineError(output) {
  * name a model id and send prompts, an aspect ratio, a few bounded numbers and picture bytes (`sd-input.mjs` checks
  * them); it never supplies a path or a command line.
  */
-export function createSd({ dir, platform = process.platform, arch = process.arch, env = process.env, fetchImpl = fetch, spawnProcess = spawn, extract = extractZip, models = sdModels, engines = sdEngines, gpuQueue = createGpuQueue(), gpuMemory = async () => 0 } = {}) {
+export function createSd({ dir, platform = process.platform, arch = process.arch, env = process.env, fetchImpl = fetch, spawnProcess = spawn, extract = extractZip, models = sdModels, profiles = sdProfiles, engines = sdEngines, gpuQueue = createGpuQueue(), gpuMemory = async () => 0 } = {}) {
   const engine = engines[`${platform}-${arch}`];
   const engineRoot = join(dir, 'engine');
   const engineDir = join(engineRoot, sdRelease);
@@ -38,13 +39,14 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
   const customDir = join(dir, 'custom');
   const modelFile = (model) => model.custom ? join(customDir, `${model.id}${model.ext}`) : join(dir, 'models', `${model.id}.safetensors`);
   const metaFile = (id) => join(customDir, `${id}.json`);
-  const family = (id) => sdFamilies.find((item) => item.id === id);
+  const profile = (id) => findSdProfile(id, profiles);
+  const modelProfile = (model) => resolveSdProfile(model, profiles);
   /** A model the user added from Hugging Face, rebuilt from the record saved next to its weights. */
   const fromRecord = (record) => {
-    const kind = family(record?.family);
+    const kind = profile(record?.family);
     if (!kind || ![record.id, record.repo, record.file, record.sha256].every((value) => typeof value === 'string') || !hfRepoPattern.test(record.repo) || !hfFilePattern.test(record.file) || record.id !== customModelId(record.repo, record.file) || !/^[a-f0-9]{64}$/.test(record.sha256) || !Number.isFinite(record.bytes)) return undefined;
     const ext = extname(record.file).toLowerCase();
-    return { id: record.id, name: record.file.slice(0, -ext.length), quality: kind.name, note: record.repo, bytes: record.bytes, custom: true, repo: record.repo, file: record.file, family: kind.id, sha256: record.sha256, ext, size: kind.size, steps: kind.steps, cfg: kind.cfg };
+    return { id: record.id, name: record.file.slice(0, -ext.length), quality: kind.name, note: record.repo, bytes: record.bytes, custom: true, repo: record.repo, file: record.file, family: kind.id, profile: kind.id, sha256: record.sha256, ext };
   };
   const customModels = () => {
     try {
@@ -78,8 +80,8 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
   /** Graphics memory in bytes, once known; 0 when it cannot be found out. */
   let gpuBytes = 0;
   let probing;
-  /** Whether each installed model the user added was made for inpainting, read once from its header. */
-  const inpaint = new Map();
+  /** Header classification (`{ supported, inpaint, headerType }`) cached once per installed custom model. */
+  const headers = new Map();
 
   /** What a Hugging Face checkpoint is, read from its first bytes without downloading it; `known` is false when they cannot be read. */
   async function inspect(repo, file) {
@@ -115,7 +117,7 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
         const { bytesRead, buffer } = await handle.read(Buffer.alloc(length), 0, length, start);
         return buffer.subarray(0, bytesRead);
       });
-      return found.supported && found.inpaint;
+      return found.supported ? { supported: true, inpaint: found.inpaint, headerType: found.family } : { supported: false, inpaint: false, headerType: null };
     } finally { await handle.close(); }
   }
 
@@ -159,13 +161,14 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
       state.total = model.bytes;
       try {
         await downloadFile(fetchImpl, sdModelUrl(model), modelFile(model), { sha256: model.sha256, signal, onBytes: (n) => { state.received += n; } });
+        if (model.custom) headers.delete(model.id);
       } finally {
         if (model.custom && !existsSync(modelFile(model)) && !listParts(modelFile(model)).length) rmSync(metaFile(model.id), { force: true });
       }
     }
   }
 
-  async function execute(runId, model, { prompt, aspectRatio, image, mask, settings }, controller, onProgress) {
+  async function execute(runId, model, resolvedProfile, { prompt, aspectRatio, image, mask, settings }, controller, onProgress) {
     controller.signal.throwIfAborted();
     const outDir = join(dir, 'out');
     // Best effort: what the engine still holds goes with the next run, since only one runs at a time.
@@ -173,7 +176,7 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
     clear(outDir);
     const runDir = join(outDir, runId);
     const out = join(runDir, 'out.png');
-    const { width, height } = image ? editDimensions(aspectRatio ? aspectRatioOf(aspectRatio) : image.width / image.height, model.size) : sdDimensions(aspectRatio, model.size);
+    const { width, height } = image ? editDimensions(aspectRatio ? aspectRatioOf(aspectRatio) : image.width / image.height, resolvedProfile.size) : sdDimensions(aspectRatio, resolvedProfile.size);
     const args = ['-m', modelFile(model), '-p', prompt, '-o', out, '-W', String(width), '-H', String(height), '--steps', String(settings.steps), '--cfg-scale', String(settings.cfg), '-s', String(settings.seed)];
     // Tiling saves memory but shifts colors from tile to tile, which shows as a seam around an edited area.
     if (!image || width * height > 512 * 512) args.push('--vae-tiling');
@@ -188,7 +191,7 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
     // back. Another aspect ratio is a centre crop.
     if (image) add('-i', 'init', image, `${aspectRatio ? 'crop-resize' : 'stretch'},filter=bicubic,antialias=true`);
     if (mask) add('--mask', 'mask', mask, 'stretch');
-    if (image) args.push('--strength', String(settings.strength));
+    if (image && settings.strength !== undefined) args.push('--strength', String(settings.strength));
     try {
       mkdirSync(runDir, { recursive: true });
       for (const [file, bytes] of files) writeFileSync(file, bytes);
@@ -236,29 +239,52 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
         queued: downloads.waiting,
         error: downloads.error,
         gpuBytes,
-        families: sdFamilies.map(({ id, name, note }) => ({ id, name, note })),
-        models: allModels().map((model) => ({
-          id: model.id, name: model.name, quality: model.quality, note: model.note, bytes: model.bytes,
-          recommended: !!model.default, installed: existsSync(modelFile(model)), partial: partial(model), custom: !!model.custom, inpaint: inpaint.get(model.id) ?? false,
-        })).filter((model) => !model.custom || model.installed || model.partial),
+        profiles: profiles.map((item) => publicSdProfile(resolveSdProfile(item, profiles))),
+        models: allModels().map((model) => {
+          const installed = existsSync(modelFile(model));
+          const resolved = modelProfile(model);
+          const header = headers.get(model.id);
+          return {
+            id: model.id, name: model.name, quality: model.quality, note: model.note, bytes: model.bytes,
+            recommended: !!model.default, installed, partial: partial(model), custom: !!model.custom,
+            inpaint: header?.inpaint ?? false,
+            profile: publicSdProfile(resolved),
+            ...(model.custom && installed ? {
+              compatibleProfiles: compatibleSdProfiles(header, profiles).map((item) => item.id),
+            } : {}),
+          };
+        }).filter((model) => !model.custom || model.installed || model.partial),
       };
     },
     /** Finds out what `status()` cannot read at once: the graphics memory and which added models are made for inpainting. Never rejects. */
     async probe() {
       probing ??= gpuMemory().then((bytes) => { gpuBytes = Number.isFinite(bytes) ? bytes : 0; }, () => {});
-      await Promise.all([probing, ...customModels().filter((model) => !inpaint.has(model.id) && existsSync(modelFile(model))).map(async (model) => {
-        inpaint.set(model.id, await probeFile(model).catch(() => false));
+      await Promise.all([probing, ...customModels().filter((model) => !headers.has(model.id) && existsSync(modelFile(model))).map(async (model) => {
+        headers.set(model.id, await probeFile(model).catch(() => ({ supported: true, inpaint: false, headerType: null })));
       })]);
     },
     inspect,
+    /** Updates the profile of an installed Hugging Face model when it is compatible with the file's header. */
+    async setProfile(id, profileId) {
+      if (typeof id !== 'string' || typeof profileId !== 'string') return false;
+      const model = customModels().find((item) => item.id === id);
+      if (!model || !existsSync(modelFile(model)) || downloads.has(id)) return false;
+      const next = profile(profileId);
+      if (!next) return false;
+      if (!headers.has(id)) headers.set(id, await probeFile(model).catch(() => ({ supported: true, inpaint: false, headerType: null })));
+      const header = headers.get(id);
+      if (!compatibleSdProfiles(header, profiles).some((item) => item.id === next.id)) return false;
+      writeFileSync(metaFile(model.id), JSON.stringify({ id: model.id, repo: model.repo, file: model.file, family: next.id, bytes: model.bytes, sha256: model.sha256 }));
+      return true;
+    },
     /** Downloads the engine (if missing) and a model in the background, after the ones already waiting; progress is in `status()`. Continues an unfinished download. */
     download(request) {
       let model;
       if (request && typeof request === 'object') {
-        const kind = family(request.family);
+        const kind = profile(request.family);
         if (!kind || typeof request.repo !== 'string' || typeof request.file !== 'string' || !hfRepoPattern.test(request.repo) || !hfFilePattern.test(request.file)) return false;
         const ext = extname(request.file).toLowerCase();
-        model = preset(request.repo, request.file) ?? { id: customModelId(request.repo, request.file), name: request.file.slice(0, -ext.length), custom: true, repo: request.repo, file: request.file, family: kind.id, ext, bytes: 0, size: kind.size, steps: kind.steps, cfg: kind.cfg };
+        model = preset(request.repo, request.file) ?? { id: customModelId(request.repo, request.file), name: request.file.slice(0, -ext.length), custom: true, repo: request.repo, file: request.file, family: kind.id, profile: kind.id, ext, bytes: 0 };
       } else model = find(request);
       if (!engine || !model) return false;
       return downloads.add({ id: model.id, name: model.name, model, stage: 'engine', received: 0, total: 0 });
@@ -301,7 +327,7 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
       rmSync(modelFile(model), { force: true });
       removeParts(modelFile(model));
       downloads.forget(id);
-      inpaint.delete(id);
+      headers.delete(id);
       if (model.custom) rmSync(metaFile(model.id), { force: true });
       const holds = (folder) => existsSync(folder) && readdirSync(folder).some((file) => /\.(?:safetensors|gguf)(?:\.[a-f0-9]{16}\.part)?$/.test(file));
       const left = holds(join(dir, 'models')) || holds(customDir);
@@ -313,11 +339,12 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
       const model = input && typeof input === 'object' ? allModels().find((item) => item.id === input.model) : undefined;
       if (typeof runId !== 'string' || !/^[a-f0-9-]{36}$/.test(runId) || runs.has(runId)) return Promise.reject(new Error('Invalid image run.'));
       if (!model || !engine || !existsSync(exe) || !existsSync(modelFile(model))) return Promise.reject(new Error('Download this model in Settings → Local models first.'));
+      const resolved = modelProfile(model);
       let request;
-      try { request = sdInput(input, model); } catch (cause) { return Promise.reject(cause); }
+      try { request = sdInput(input, resolved); } catch (cause) { return Promise.reject(cause); }
       const controller = new AbortController();
       runs.set(runId, controller);
-      const run = gpuQueue.run(() => execute(runId, model, request, controller, onProgress), {
+      const run = gpuQueue.run(() => execute(runId, model, resolved, request, controller, onProgress), {
         signal: controller.signal, onWait: (waiting) => onProgress?.({ step: 0, total: request.settings.steps, waiting }),
       });
       return run.finally(() => { runs.delete(runId); });

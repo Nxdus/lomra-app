@@ -86,6 +86,23 @@ export function desktopOllama(): DesktopOllamaApi | undefined {
 /** A model waiting for the downloads before it. */
 export type QueuedModel = { id: string; name: string };
 
+export type SdRange = { min: number; max: number; whole: boolean };
+export type SdCapabilities = {
+  textToImage: boolean;
+  imageToImage: boolean;
+  inpaint: boolean;
+  negativePrompt: boolean;
+  cfg: boolean;
+  strength: boolean;
+  outpaint: boolean;
+  referencePictures: boolean;
+};
+/** Capabilities, defaults and ranges of one local image model profile. */
+export type SdProfile = {
+  id: string; name: string; note: string; size: number; steps: number; cfg: number; strength: number;
+  ranges: { steps: SdRange; cfg: SdRange; strength: SdRange };
+  capabilities: SdCapabilities;
+};
 export type SdModel = {
   id: string; name: string; quality: string; note: string; bytes: number; recommended: boolean; installed: boolean;
   /** Bytes of an unfinished download kept on disk; `download` continues it and `remove` deletes it. 0 when there is none. */
@@ -94,9 +111,11 @@ export type SdModel = {
   custom: boolean;
   /** Made for filling in a brushed area; only known for models the user added. */
   inpaint: boolean;
+  /** Resolved profile for this model. */
+  profile: SdProfile;
+  /** Profile ids compatible with this installed custom checkpoint's header. */
+  compatibleProfiles?: string[];
 };
-/** What a checkpoint is, which decides the image size and steps used, such as `sd15` or `sdxl`. */
-export type SdFamily = { id: string; name: string; note: string };
 /** What a Hugging Face file is, from its header. `fewStep` is a guess from its name; the two families are what to download it as. */
 export type SdInspection = { known: false } | { known: true; supported: false }
   | { known: true; supported: true; label: string; inpaint: boolean; family: string; fewStepFamily: string; fewStep: boolean };
@@ -114,7 +133,7 @@ export type SdStatus = {
   queued: QueuedModel[];
   /** Why downloads failed, one line per model, ready to show. */
   error: string | null;
-  families: SdFamily[];
+  profiles: SdProfile[];
   models: SdModel[];
 };
 
@@ -133,6 +152,8 @@ export type DesktopSdApi = {
   cancelDownload(id?: string): Promise<void>;
   /** Delete a downloaded model or its unfinished download; the engine goes with the last one. */
   remove(id: string): Promise<boolean>;
+  /** Switch an installed Hugging Face model to another profile compatible with its header. */
+  setProfile(id: string, profileId: string): Promise<boolean>;
   /** Make one image from a downloaded model, from text or by redrawing `image` (white in `mask` marks the only part redrawn). `runId` is a UUID. */
   generate(runId: string, input: { model: string; prompt: string; aspectRatio?: string; image?: string; mask?: string } & SdSettings): Promise<{ image: string; settings: SdUsed } | { error: string }>;
   cancel(runId: string): void;

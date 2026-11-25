@@ -284,6 +284,10 @@ ipcMain.handle('sd:files', (event, repo) => { if (!trusted(event)) throw new Err
 ipcMain.handle('sd:inspect', (event, repo, file) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sdLookup(() => sd().inspect(repo, file)); });
 ipcMain.handle('sd:cancelDownload', async (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); if (id === undefined || typeof id === 'string') await sd().cancelDownload(id); });
 ipcMain.handle('sd:remove', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return typeof id === 'string' && sd().remove(id); });
+ipcMain.handle('sd:setProfile', async (event, id, profileId) => {
+  if (!trusted(event)) throw new Error('Untrusted sender');
+  return typeof id === 'string' && typeof profileId === 'string' && await sd().setProfile(id, profileId);
+});
 ipcMain.handle('sd:generate', async (event, runId, input) => {
   if (!trusted(event)) throw new Error('Untrusted sender');
   try {

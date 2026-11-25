@@ -341,3 +341,48 @@ test("a local 3D model sends one picture through the desktop bridge, returns a G
     delete (globalThis as { window?: unknown }).window;
   }
 });
+
+test("local and hosted picture generation enforces profile capabilities and omits unsupported settings", async () => {
+  const picture = "data:image/png;base64,YQ==";
+  const calls: Record<string, unknown>[] = [];
+  const fakeStatus = {
+    supported: true, engine: true, engineBytes: 0, gpuBytes: 0, downloading: null, queued: [], error: null, profiles: [],
+    models: [
+      {
+        id: "sd-turbo", name: "SD Turbo", quality: "Fast", note: "", bytes: 1, recommended: true, installed: true, partial: 0, custom: false, inpaint: false,
+        profile: {
+          id: "turbo", name: "Turbo", note: "", size: 512, steps: 4, cfg: 1, strength: 0.75,
+          ranges: { steps: { min: 1, max: 12, whole: true }, cfg: { min: 1, max: 1, whole: false }, strength: { min: 0, max: 1, whole: false } },
+          capabilities: { textToImage: true, imageToImage: true, inpaint: true, negativePrompt: false, cfg: false, strength: true, outpaint: false, referencePictures: false },
+        },
+      },
+      {
+        id: "no-inpaint", name: "No Inpaint", quality: "", note: "", bytes: 1, recommended: false, installed: true, partial: 0, custom: true, inpaint: false,
+        profile: {
+          id: "no-inpaint", name: "No Inpaint", note: "", size: 512, steps: 4, cfg: 1, strength: 0.75,
+          ranges: { steps: { min: 1, max: 12, whole: true }, cfg: { min: 1, max: 1, whole: false }, strength: { min: 0, max: 1, whole: false } },
+          capabilities: { textToImage: false, imageToImage: true, inpaint: false, negativePrompt: false, cfg: false, strength: true, outpaint: false, referencePictures: false },
+        },
+      },
+    ],
+  };
+  const sd = {
+    status: async () => fakeStatus,
+    onProgress: () => () => {},
+    cancel: () => {},
+    generate: async (_runId: string, input: Record<string, unknown>) => { calls.push(input); return { image: picture, settings: used }; },
+  };
+  const { changeSdSettings } = await import("@/lib/sd-settings-store");
+  changeSdSettings("sd-turbo", { negativePrompt: "blur", cfg: 7, steps: 4 });
+  const browser = fakeBrowser(sd);
+  try {
+    await generate({ id: "11111111-1111-1111-1111-111111111111", category: "picture", prompt: "fox", model: "sd/sd-turbo", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {});
+    assert.deepEqual(calls.pop(), { model: "sd-turbo", prompt: "fox", steps: 4 });
+    await assert.rejects(generate({ id: "11111111-1111-1111-1111-111111111112", category: "picture", prompt: "fox", model: "sd/no-inpaint", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}), /Select a picture/);
+    await assert.rejects(generate({ id: "11111111-1111-1111-1111-111111111113", category: "picture", prompt: "fox", model: "sd/no-inpaint", sdEdit: { mask: picture }, status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]), /cannot edit a brushed area/);
+    await assert.rejects(generate({ id: "g1", category: "picture", prompt: "fox", model: "google-ai/imagen-3", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]), /does not support reference images/);
+  } finally {
+    browser.restore();
+    changeSdSettings("sd-turbo", {});
+  }
+});

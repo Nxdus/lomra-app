@@ -9,6 +9,7 @@ import { StabilityIcon } from "@/components/stability-icon";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import { useSd } from "@/hooks/use-sd";
 import { localModelSize } from "@/components/ollama-settings";
@@ -16,9 +17,10 @@ import type { SdDownloadRequest, SdModel } from "@/lib/desktop";
 
 /** Settings → Local models: Stable Diffusion models that make pictures on this computer. `search` is looked for on Hugging Face right away. */
 export function SdSettings({ search }: { search?: string }) {
-  const { status, download, cancel, remove } = useSd();
+  const { status, download, cancel, remove, setProfile } = useSd();
   const [confirming, setConfirming] = useState<SdModel | null>(null);
   const [removing, setRemoving] = useState<SdModel | null>(null);
+  const [savingProfileId, setSavingProfileId] = useState<string | null>(null);
   const job = status?.downloading ?? null;
   const queued = status?.queued ?? [];
   const models = status?.models.filter((model) => model.id !== job?.id && !queued.some(({ id }) => id === model.id)) ?? [];
@@ -29,6 +31,17 @@ export function SdSettings({ search }: { search?: string }) {
 
   async function start(request: SdDownloadRequest) {
     if (!await download(request)) toast.add({ title: "Could not start the download.", type: "error" });
+  }
+
+  async function changeProfile(id: string, profileId: string) {
+    setSavingProfileId(id);
+    try {
+      await setProfile(id, profileId);
+    } catch (error) {
+      toast.add({ title: error instanceof Error ? error.message : "Could not update the model profile", type: "error" });
+    } finally {
+      setSavingProfileId((current) => current === id ? null : current);
+    }
   }
 
   return <section aria-labelledby="sd-heading" className="flex flex-col gap-3">
@@ -89,18 +102,35 @@ export function SdSettings({ search }: { search?: string }) {
             action={{ label: "Cancel download", icon: <XIcon aria-hidden="true" />, onClick: () => void cancel(item.id) }} />
         </li>;
       })}
-      {models.map((model) => <li key={model.id}>
-        <LocalModelRow name={model.name}
-          description={[model.quality, model.inpaint && "Inpainting", model.custom && model.note].filter(Boolean).join(" · ")}
-          size={localModelSize(model.bytes)}
-          status={model.installed ? "Installed" : model.partial ? `Paused, ${localModelSize(model.partial)} downloaded` : undefined}
-          secondary={model.partial
-            ? { label: "Delete unfinished download", icon: <Trash2Icon aria-hidden="true" />, onClick: () => setRemoving(model) } : undefined}
-          action={model.installed ? { label: "Remove", icon: <Trash2Icon aria-hidden="true" />, onClick: () => setRemoving(model) }
-            // The user agreed to this download before; ask again only if it now includes the engine.
-            : model.partial ? { label: "Resume download", icon: <PlayIcon aria-hidden="true" />, onClick: () => status.engine ? void start(model.id) : setConfirming(model) }
-            : { label: "Download", icon: <DownloadIcon aria-hidden="true" />, onClick: () => setConfirming(model) }} />
-      </li>)}
+      {models.map((model) => {
+        const compatible = model.custom && model.installed ? (model.compatibleProfiles ?? [])
+          .map((id) => status.profiles.find((profile) => profile.id === id))
+          .filter((profile): profile is NonNullable<typeof profile> => !!profile) : [];
+        return <li key={model.id}>
+          <LocalModelRow name={model.name}
+            description={[compatible.length ? undefined : model.quality, model.inpaint && "Inpainting", model.custom && model.note].filter(Boolean).join(" · ")}
+            size={localModelSize(model.bytes)}
+            status={model.installed ? "Installed" : model.partial ? `Paused, ${localModelSize(model.partial)} downloaded` : undefined}
+            control={compatible.length ? <Select value={model.profile.id} disabled={savingProfileId === model.id}
+              onValueChange={(value) => { if (value && value !== model.profile.id) void changeProfile(model.id, value); }}>
+              <SelectTrigger size="sm" aria-label={`Profile for ${model.name}`} className="max-w-44 text-xs">
+                <SelectValue className="truncate">{model.profile.name}</SelectValue>
+              </SelectTrigger>
+              <SelectContent align="end" alignItemWithTrigger={false} className="w-auto min-w-64 max-w-[calc(100vw-2rem)]">
+                {compatible.map((profile) => <SelectItem key={profile.id} value={profile.id}>
+                  <span className="truncate">{profile.name}</span>
+                  <span className="ml-auto text-xs text-muted-foreground">{profile.note}</span>
+                </SelectItem>)}
+              </SelectContent>
+            </Select> : undefined}
+            secondary={model.partial
+              ? { label: "Delete unfinished download", icon: <Trash2Icon aria-hidden="true" />, onClick: () => setRemoving(model) } : undefined}
+            action={model.installed ? { label: "Remove", icon: <Trash2Icon aria-hidden="true" />, onClick: () => setRemoving(model) }
+              // The user agreed to this download before; ask again only if it now includes the engine.
+              : model.partial ? { label: "Resume download", icon: <PlayIcon aria-hidden="true" />, onClick: () => status.engine ? void start(model.id) : setConfirming(model) }
+              : { label: "Download", icon: <DownloadIcon aria-hidden="true" />, onClick: () => setConfirming(model) }} />
+        </li>;
+      })}
     </ul>
     <SdHuggingFace status={status} onDownload={start} initialQuery={search} />
     </>}

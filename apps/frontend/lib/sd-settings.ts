@@ -15,9 +15,12 @@ export type SdNumber = keyof typeof sdRanges;
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
+export function validSdRangeNumber(range: { min: number; max: number; whole: boolean }, value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= range.min && value <= range.max && (!range.whole || Number.isInteger(value));
+}
+
 export function validSdNumber(name: SdNumber, value: unknown): value is number {
-  const { min, max, whole } = sdRanges[name];
-  return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max && (!whole || Number.isInteger(value));
+  return validSdRangeNumber(sdRanges[name], value);
 }
 
 const validNegativePrompt = (value: unknown) => typeof value === "string" && value.length <= sdNegativePromptLimit;
