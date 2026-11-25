@@ -36,7 +36,7 @@ import { getSetting, saveSetting } from "@/lib/settings";
 import { useSd } from "@/hooks/use-sd";
 import type { SdSettings } from "@/lib/sd-settings";
 import { changeSdSettings, loadSdSettings, sdSettingsOf } from "@/lib/sd-settings-store";
-import { aspectRatios, canMakeVariationsFromProvenance, planVariationGroupOrigin, resolveSetupFromProvenance, validAspectRatio, variationSeeds, variationSlotPosition } from "@/lib/image-canvas/provenance-setup";
+import { aspectRatios, canMakeVariationsFromProvenance, planVariationSlot, resolveSetupFromProvenance, validAspectRatio, variationSeeds } from "@/lib/image-canvas/provenance-setup";
 import { characterNameKey, type Character } from "@/lib/characters";
 import { isRemoteOllama } from "@/lib/ollama-url";
 import { desktopAgents, desktopOllama, desktopSd, desktopVideo, type AgentToolResult, type DesktopVideoApi } from "@/lib/desktop";
@@ -187,7 +187,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   const [storageError, setStorageError] = useState("");
   const [saving, setSaving] = useState(false);
   const saves = useRef(Promise.resolve());
-  const importing = useRef(false);
+  const addQueue = useRef<Promise<void>>(Promise.resolve());
   const { keys, keysReady, storageError: keyStorageError, request } = useApiProviders();
   const reviewProvider = llm ? providerOf(llm) : undefined;
   const reviewUnavailable = !llm || localEngine || vision.get(llm) === false
@@ -400,38 +400,50 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   }
 
   async function addToCanvas(file: GeneratedFile, files: GeneratedFile[] = [], signal?: AbortSignal, at?: Parameters<CanvasHandle["addFiles"]>[1], task?: Generation, options?: Parameters<CanvasHandle["addFiles"]>[3]) {
-    if (!mounted.current || !onAddToCanvas || importing.current) return;
-    importing.current = true;
-    setAdding(file.url);
+    if (!mounted.current || !onAddToCanvas) {
+      if (signal) throw new Error("Canvas is unavailable.");
+      return;
+    }
+    const run = addQueue.current.then(async () => {
+      if (!mounted.current || !onAddToCanvas) throw new Error("Canvas is unavailable.");
+      setAdding(file.url);
+      try {
+        const timeout = AbortSignal.timeout(60_000);
+        const response = await fetch(file.url, { credentials: file.url.startsWith("/api/storage/files/") ? "same-origin" : "omit", signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
+        if (!response.ok) throw new Error("Could not download this result. The link may have expired.");
+        const blob = await response.blob();
+        const type = file.kind === "video" ? (blob.type.startsWith("video/webm") ? "video/webm" : "video/mp4") : file.kind === "file" ? "model/gltf-binary" : blob.type;
+        const extension = file.kind === "video" ? (type === "video/webm" ? "webm" : "mp4") : file.kind === "file" ? "glb" : type.split("/")[1];
+        const imported = file.kind === "file" && file.name === "OBJ"
+          ? await (await import("./model-conversion")).objToGlb(blob, files)
+          : new File([blob], `${file.name}.${extension}`, { type });
+        const invalid = canvasFileError(imported);
+        if (invalid) throw new Error(invalid);
+        if (!mounted.current) throw new Error("Canvas closed before the result could be added.");
+        signal?.throwIfAborted();
+        const harness: CanvasHarness = { role: "Output" };
+        if (task) harness.provenance = {
+          model: task.model.slice(0, 512),
+          prompt: task.prompt.slice(0, 8000),
+          ...(validAspectRatio(task.aspectRatio) && { aspectRatio: task.aspectRatio }),
+          selectedInputs: task.canvasInputs,
+          ...(task.sd && { sd: task.sd }),
+        };
+        const [id] = await onAddToCanvas([imported], at, harness, options);
+        if (!id) throw new Error("Could not add this result to canvas.");
+        setCanvasFiles((current) => ({ ...current, [file.url]: imported }));
+        return id;
+      } finally {
+        if (mounted.current) setAdding("");
+      }
+    });
+    addQueue.current = run.then(() => undefined, () => undefined);
     try {
-      const timeout = AbortSignal.timeout(60_000);
-      const response = await fetch(file.url, { credentials: file.url.startsWith("/api/storage/files/") ? "same-origin" : "omit", signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
-      if (!response.ok) throw new Error("Could not download this result. The link may have expired.");
-      const blob = await response.blob();
-      const type = file.kind === "video" ? (blob.type.startsWith("video/webm") ? "video/webm" : "video/mp4") : file.kind === "file" ? "model/gltf-binary" : blob.type;
-      const extension = file.kind === "video" ? (type === "video/webm" ? "webm" : "mp4") : file.kind === "file" ? "glb" : type.split("/")[1];
-      const imported = file.kind === "file" && file.name === "OBJ"
-        ? await (await import("./model-conversion")).objToGlb(blob, files)
-        : new File([blob], `${file.name}.${extension}`, { type });
-      const invalid = canvasFileError(imported);
-      if (invalid) throw new Error(invalid);
-      if (!mounted.current) return;
-      signal?.throwIfAborted();
-      const harness: CanvasHarness = { role: "Output" };
-      if (task) harness.provenance = {
-        model: task.model.slice(0, 512),
-        prompt: task.prompt.slice(0, 8000),
-        ...(validAspectRatio(task.aspectRatio) && { aspectRatio: task.aspectRatio }),
-        selectedInputs: task.canvasInputs,
-        ...(task.sd && { sd: task.sd }),
-      };
-      const [id] = await onAddToCanvas([imported], at, harness, options);
-      setCanvasFiles((current) => ({ ...current, [file.url]: imported }));
-      return id;
+      return await run;
     } catch (cause) {
       if (signal) throw cause;
       notifyError(cause instanceof Error ? cause.message : "Could not add this result to canvas");
-    } finally { importing.current = false; setAdding(""); }
+    }
   }
 
   useEffect(() => {
@@ -600,8 +612,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       setGenerations((current) => [...current, ...tasks]);
       setExpanded((current) => [...current, ...tasks.map((task) => task.id)]);
 
-      let groupOrigin: { x: number; y: number } | null = null;
-      let cellSize: { width: number; height: number } | null = null;
+      let groupOrigin: { x: number; y: number } | undefined;
+      let cellSize: { width: number; height: number } | undefined;
       const placedIds: string[] = [];
 
       for (let index = 0; index < tasks.length; index++) {
@@ -640,18 +652,16 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
                 exact: true,
                 select: false,
                 place: (size, existing) => {
-                  if (!groupOrigin || !cellSize) {
-                    cellSize = size;
-                    groupOrigin = planVariationGroupOrigin(original, cellSize, existing);
-                  }
-                  return variationSlotPosition(groupOrigin, index, cellSize);
+                  cellSize ??= size;
+                  const placed = planVariationSlot(original, index, cellSize, existing, groupOrigin);
+                  groupOrigin ??= placed.groupOrigin;
+                  return placed.position;
                 },
               },
             );
-            if (addedId) {
-              placedIds.push(addedId);
-              onSelectItems?.([...placedIds]);
-            }
+            if (!addedId) throw new Error("Could not place variation on the canvas.");
+            placedIds.push(addedId);
+            onSelectItems?.([...placedIds]);
           }
         } catch (cause) {
           const message = controller.signal.aborted ? "Variation stopped" : cause instanceof Error ? cause.message : "Variation failed";

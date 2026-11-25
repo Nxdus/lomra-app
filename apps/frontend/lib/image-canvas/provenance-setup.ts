@@ -195,6 +195,24 @@ export function variationSlotPosition(
   };
 }
 
+/** Places variation `index` in its 2x2 slot, nudging to a clear spot only if an item moved into that slot. */
+export function planVariationSlot(
+  original: ImageBounds,
+  index: number,
+  cellSize: { width: number; height: number },
+  existing: ReadonlyArray<ImageBounds>,
+  groupOrigin?: { x: number; y: number },
+  { gap = 16, margin = 24 }: { gap?: number; margin?: number } = {},
+): { groupOrigin: { x: number; y: number }; position: { x: number; y: number } } {
+  const origin = groupOrigin ?? planVariationGroupOrigin(original, cellSize, existing, { gap, margin });
+  const planned = variationSlotPosition(origin, index, cellSize, gap);
+  if (!overlapsAny({ ...planned, ...cellSize }, existing, 8)) {
+    return { groupOrigin: origin, position: planned };
+  }
+  const fallback = planVariationGroupOrigin({ ...planned, ...cellSize }, cellSize, existing, { gap, margin });
+  return { groupOrigin: origin, position: fallback };
+}
+
 export type CompareFieldId = "model" | "prompt" | "seed" | "steps" | "cfg" | "strength" | "negativePrompt" | "size";
 
 export type CompareInput = {

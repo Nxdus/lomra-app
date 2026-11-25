@@ -5,6 +5,7 @@ import {
   canMakeVariationsFromProvenance,
   comparePictures,
   planVariationGroupOrigin,
+  planVariationSlot,
   resolveSetupFromProvenance,
   validAspectRatio,
   variationSeeds,
@@ -116,6 +117,16 @@ test("planVariationGroupOrigin places a tidy 2x2 group without overlapping origi
   expect(slots[2].y - (slots[0].y + cell.height)).toBe(16);
   expect(slots[3].x).toBe(slots[1].x);
   expect(slots[3].y).toBe(slots[2].y);
+
+  // If a user drops an image onto slot 1 mid-batch, planVariationSlot avoids overlapping it.
+  const droppedOnSlot1 = { ...slots[1], width: 180, height: 180 };
+  const placed1 = planVariationSlot(original, 1, cell, [original, blockerRight, slots[0], droppedOnSlot1], origin);
+  expect(
+    placed1.position.x < droppedOnSlot1.x + droppedOnSlot1.width &&
+    placed1.position.x + cell.width > droppedOnSlot1.x &&
+    placed1.position.y < droppedOnSlot1.y + droppedOnSlot1.height &&
+    placed1.position.y + cell.height > droppedOnSlot1.y,
+  ).toBe(false);
 });
 
 test("comparePictures highlights only fields that differ and supports pictures without provenance", () => {
