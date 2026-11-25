@@ -8,16 +8,17 @@ type Reply = { result: SdFile[] } | { error: string };
 const requests = new Map<string, Promise<Reply>>();
 
 /** The usable files of a Hugging Face repository; asked once, and again after a failure. */
-export function loadSdFiles(repo: string) {
-  let request = requests.get(repo);
+export function loadSdFiles(repo: string, file?: string) {
+  const key = file ? `${repo}/${file}` : repo;
+  let request = requests.get(key);
   if (!request) {
     request = (async (): Promise<Reply> => {
-      try { return await desktopSd()!.files(repo); } catch { return { error: "Restart Lomra to use this, then try again." }; }
+      try { return await desktopSd()!.files(repo, file); } catch { return { error: "Restart Lomra to use this, then try again." }; }
     })().then((reply) => {
-      if ("error" in reply) requests.delete(repo);
+      if ("error" in reply) requests.delete(key);
       return reply;
     });
-    requests.set(repo, request);
+    requests.set(key, request);
   }
   return request;
 }

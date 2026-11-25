@@ -66,12 +66,13 @@ prompt; prompt-driven media tools need a tool-capable chat model.
 
 ## Generate images, video, and 3D
 
-- **Images:** local Stable Diffusion (set up under **Settings → Local models**)
-  or a hosted image model through OpenRouter or Fal.AI. Local Stable Diffusion
-  redraws the picture you select, one at a time; describe the result you want.
-  **Image settings** next to the model picker sets its negative prompt, seed,
-  steps, CFG scale and edit strength. **Canvas details** shows what was used, so
-  you can repeat a result.
+- **Images:** local Stable Diffusion (set up under **Settings → Local models**,
+  where added checkpoints can also switch between compatible
+  profiles) or a hosted image model through OpenRouter or Fal.AI. Local Stable
+  Diffusion redraws the picture you select, one at a time; describe the result
+  you want. **Image settings** next to the model picker sets seed, steps, and
+  (where the model profile supports them) negative prompt, CFG scale and edit
+  strength. **Canvas details** shows what was used, so you can repeat a result.
 - **Video:** text to video with a supported hosted model.
 - **3D:** turn one image into a GLB with local Hunyuan3D or TripoSR, or use
   Fal.AI for text-to-3D and supported multiview models.
@@ -131,11 +132,15 @@ after a restart.
   Lomra to. Only models that report the `tools` capability are offered.
 - **Stable Diffusion** models run through stable-diffusion.cpp. The search field
   finds other models on Hugging Face (not ones marked for adults), or takes an
-  `owner/name` or a link. Only
+  `owner/name` or a checkpoint link, including files in subfolders. Only
   single-file Stable Diffusion 1.x/2.x and SDXL checkpoints (`.safetensors` or
   `.gguf`) work; Lomra reads the file's header to tell before you download it.
   Turn on **Few-step model** for Turbo, Lightning and LCM models if it is not
-  already.
+  already. Use **Add a file from this computer** to use a checkpoint in place,
+  or **Scan a model folder** to add several checkpoints from ComfyUI (including
+  portable installs), A1111, Forge, or another model folder. If the scan reaches
+  its limit, pick a narrower folder to find more. Use **Locate…** if the file moved or reconnect the drive
+  if it was unplugged. **Remove from Lomra** keeps the original file.
 - **Image-to-3D** (Hunyuan3D 2 Mini, Hunyuan3D 2, TripoSR) requires Windows x64
   and an NVIDIA GPU with at least 6 GB of VRAM.
 

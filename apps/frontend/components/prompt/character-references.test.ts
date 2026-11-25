@@ -21,6 +21,19 @@ test("image references retain selected image order and label a duplicate only on
   expect(first.task.prompt).toContain(rain.notes);
   expect(characterGeneration(picture, ["portrait"], [reference]).images).toEqual(["portrait"]);
   expect(() => characterGeneration({ ...picture, model: "sd/example" }, [], [reference])).toThrow("cannot use Character references");
+  expect(() => characterGeneration({ ...picture, model: "google-ai/imagen-3" }, [], [reference])).toThrow("cannot use Character references");
+  const sdWithRefs = {
+    supported: true, engine: true, engineBytes: 0, gpuBytes: 0, downloading: null, queued: [], error: null, profiles: [],
+    models: [{
+      id: "with-refs", name: "With Refs", quality: "", note: "", bytes: 1, recommended: false, installed: true, partial: 0, custom: true, inpaint: false,
+      profile: {
+        id: "with-refs", name: "With Refs", note: "", size: 512, steps: 4, cfg: 1, strength: 0.75,
+        ranges: { steps: { min: 1, max: 12, whole: true }, cfg: { min: 1, max: 1, whole: false }, strength: { min: 0, max: 1, whole: false } },
+        capabilities: { textToImage: true, imageToImage: true, inpaint: true, negativePrompt: false, cfg: false, strength: true, outpaint: false, referencePictures: true },
+      },
+    }],
+  };
+  expect(characterGeneration({ ...picture, model: "sd/with-refs" }, [], [reference], sdWithRefs).images).toEqual(["portrait"]);
 });
 
 test("Gemini Browser video uses the chosen scene frame or one saved portrait", () => {

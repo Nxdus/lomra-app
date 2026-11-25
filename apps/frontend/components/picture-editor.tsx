@@ -2,7 +2,7 @@
 
 import { Tip } from "@/components/tip";
 import { BackgroundCleanup } from "@/components/background-cleanup";
-import { useEffect, useImperativeHandle, useReducer, useRef, useState, type PointerEvent, type Ref } from "react";
+import { useCallback, useEffect, useImperativeHandle, useReducer, useRef, useState, type PointerEvent, type Ref } from "react";
 import { ArrowRightIcon, CheckIcon, CircleIcon, EraserIcon, LoaderCircleIcon, MinusIcon, MousePointer2Icon, PenLineIcon, PictureInPicture2Icon, Redo2Icon, ScanIcon, ShapesIcon, SquareIcon, TypeIcon, Undo2Icon, XIcon } from "lucide-react";
 import { PictureTools, type PictureTool } from "@/components/picture-tools";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { ModelSetupDialog } from "@/components/first-run/model-setup-dialog";
 import { useApiProviders } from "@/components/api-provider";
 import { isBrowserModel, isSdModel, generate, modelProvider, sdPrefix, selectedModel } from "@/components/prompt/generation";
 import { useSd } from "@/hooks/use-sd";
+import { pictureCapabilities } from "@/lib/picture-capabilities";
 import { getSetting } from "@/lib/settings";
 import type { CanvasProvenance } from "@/lib/image-canvas/canvas-harness";
 import { drawMarkup, emptyMarkup, hitMarkup, markupBounds, markupHistory, moveMarkup, type Markup, type MarkupKind, type Point } from "@/lib/image-canvas/picture-markup";
@@ -76,6 +77,13 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
   const [pictureModel, setPictureModel] = useState("");
   const [findingModel, setFindingModel] = useState(false);
   const { status: sdStatus, refresh: refreshSd } = useSd();
+  const caps = pictureModel ? pictureCapabilities(pictureModel, sdStatus) : undefined;
+  const eraseBlocked = !!caps && !caps.inpaint;
+  const resizeBlocked = !!caps && !caps.outpaint;
+  const eraseUnavailableMessage = "This image model cannot edit a brushed area. Choose another Image model in the prompt toolbar.";
+  const resizeUnavailableMessage = pictureModel && isSdModel(pictureModel)
+    ? "Local Stable Diffusion cannot extend a picture to a new shape. Choose another Image model in the prompt toolbar."
+    : "This image model cannot extend a picture to a new shape. Choose another Image model in the prompt toolbar.";
   const localModel = isSdModel(pictureModel) ? sdStatus?.models.find(model => model.installed && `${sdPrefix}${model.id}` === pictureModel) : undefined;
   const inpaintModel = sdStatus?.models.find(model => model.installed && model.inpaint);
   const dirty = history.items.length > 0 || !!textDraft?.value.trim() || !!editPrompt.trim();
@@ -138,6 +146,21 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
     setEditPrompt("");
   }
 
+  const loadPictureModel = useCallback(async () => {
+    try {
+      const models = await getSetting<string[]>("selected-models");
+      setPictureModel(selectedModel(models ?? [], "picture") ?? "");
+    } catch { /* The edit itself reports what is wrong. */ }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void getSetting<string[]>("selected-models").then((models) => {
+      if (active) setPictureModel(selectedModel(models ?? [], "picture") ?? "");
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
+
   function enter(next: "Markup" | "Erase") {
     reset(); setTool(next); setDrawingTool("pen"); setSize(next === "Erase" ? 70 : 4);
     if (next === "Erase") void checkModel();
@@ -145,10 +168,7 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
 
   /** Which model will edit the brushed area, to say so when it was not made for that. */
   async function checkModel() {
-    try {
-      const [models] = await Promise.all([getSetting<string[]>("selected-models"), refreshSd()]);
-      setPictureModel(selectedModel(models ?? [], "picture") ?? "");
-    } catch { /* The edit itself reports what is wrong. */ }
+    await Promise.all([loadPictureModel(), refreshSd().catch(() => undefined)]);
   }
 
   function cancel() {
@@ -222,7 +242,13 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
         if (!isBrowserModel(model ?? "") && !isSdModel(model ?? "") && !keys[keyProvider]) throw new Error(`Enter your ${{ fal: "Fal", google: "Google", openrouter: "OpenRouter" }[keyProvider]} API key in Settings first.`);
         if (!model) throw new Error("Select an Image model in the prompt toolbar first.");
         const local = !background && isSdModel(model);
-        if (local && action === "Resize") throw new Error("Local Stable Diffusion cannot extend a picture to a new shape. Choose another Image model in the prompt toolbar.");
+        const runCaps = !background ? pictureCapabilities(model, sdStatus) : undefined;
+        if (runCaps && action === "Resize" && !runCaps.outpaint) {
+          throw new Error(local
+            ? "Local Stable Diffusion cannot extend a picture to a new shape. Choose another Image model in the prompt toolbar."
+            : "This image model cannot extend a picture to a new shape. Choose another Image model in the prompt toolbar.");
+        }
+        if (runCaps && action === "Erase" && !runCaps.inpaint) throw new Error(eraseUnavailableMessage);
         const references = [original.toDataURL("image/png")];
         const selection = action === "Erase" ? surface(original.width, original.height) : null;
         if (selection) {
@@ -236,8 +262,12 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
         const prompt = background ? "Remove background" : local ? edit || sdErase.prompt : action === "Resize"
           ? `Recompose this image into a ${aspectRatio} aspect ratio. Preserve the subject, identity, style, lighting and details. Naturally extend the scene or rearrange surrounding space to fit the new composition. Do not stretch the image, add letterboxing or crop away the main subject.`
           : `Edit image 1. Image 2 highlights the selection. Image 3 is a selection guide (white is selected). ${edit ? `Apply this instruction only within the selection: ${edit}` : "Remove the selected objects and naturally reconstruct the background from surrounding context."}\nReturn only the clean image at the original dimensions. Never render the mask, selection overlay, borders, frames, outlines or letterboxing. Preserve the composition and every unselected area.`;
+        const eraseSettings = {
+          ...(runCaps?.negativePrompt ? { negativePrompt: sdErase.settings.negativePrompt } : {}),
+          ...(runCaps?.strength ? { strength: sdErase.settings.strength } : {}),
+        };
         let sd: CanvasProvenance["sd"];
-        const files = await generate({ id: crypto.randomUUID(), category: "picture", prompt, model, status: "Waiting", ...(local && selection ? { sdEdit: { mask: selection.toDataURL("image/png"), ...(edit ? {} : sdErase.settings) } } : {}), ...(aspectRatio ? { aspectRatio } : {}), ...(background ? { mediaTool: { name: "remove_background" as const, image_index: 0 } } : {}) }, request, controller.signal, change => { if (change.sd) sd = change.sd; if (change.status && !controller.signal.aborted) setBusy(change.status); }, references[0], references);
+        const files = await generate({ id: crypto.randomUUID(), category: "picture", prompt, model, status: "Waiting", ...(local && selection ? { sdEdit: { mask: selection.toDataURL("image/png"), ...(edit ? {} : eraseSettings) } } : {}), ...(aspectRatio ? { aspectRatio } : {}), ...(background ? { mediaTool: { name: "remove_background" as const, image_index: 0 } } : {}) }, request, controller.signal, change => { if (change.sd) sd = change.sd; if (change.status && !controller.signal.aborted) setBusy(change.status); }, references[0], references);
         const response = await fetch(files[0].url, { signal: controller.signal });
         if (!response.ok) throw new Error("Could not download the processed picture.");
         const bitmap = await createImageBitmap(await response.blob());
@@ -372,10 +402,18 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
       </form> : <>
         <Button variant="ghost" size="sm" disabled={!ready} onClick={() => enter("Markup")}><PenLineIcon data-icon="inline-start" />Markup</Button>
         <Button variant="ghost" size="sm" disabled={!ready} onClick={() => void run("Remove BG")}><ScanIcon data-icon="inline-start" />Remove BG</Button>
-        <Button variant="ghost" size="sm" disabled={!ready} onClick={() => enter("Erase")}><EraserIcon data-icon="inline-start" />Erase</Button>
-        <DropdownMenu open={resizeOpen} onOpenChange={setResizeOpen}><DropdownMenuTrigger render={<Button variant="ghost" size="sm" disabled={!ready} aria-label="Resize" />}><PictureInPicture2Icon data-icon="inline-start" />Resize</DropdownMenuTrigger>
-          <DropdownMenuContent side="top" align="end"><DropdownMenuGroup>{ratios.map(({ label, value, icon: Icon }) => <DropdownMenuItem key={value} onClick={() => void run("Resize", value)}><Icon /><span>{label}</span><span className="ml-auto text-xs text-muted-foreground">{value}</span></DropdownMenuItem>)}</DropdownMenuGroup></DropdownMenuContent>
-        </DropdownMenu>
+        {eraseBlocked ? (
+          <Tip label={eraseUnavailableMessage}><span className="inline-flex"><Button variant="ghost" size="sm" disabled><EraserIcon data-icon="inline-start" />Erase</Button></span></Tip>
+        ) : (
+          <Button variant="ghost" size="sm" disabled={!ready} onClick={() => enter("Erase")}><EraserIcon data-icon="inline-start" />Erase</Button>
+        )}
+        {resizeBlocked ? (
+          <Tip label={resizeUnavailableMessage}><span className="inline-flex"><Button variant="ghost" size="sm" disabled aria-label="Resize"><PictureInPicture2Icon data-icon="inline-start" />Resize</Button></span></Tip>
+        ) : (
+          <DropdownMenu open={resizeOpen} onOpenChange={setResizeOpen}><DropdownMenuTrigger render={<Button variant="ghost" size="sm" disabled={!ready} aria-label="Resize" />}><PictureInPicture2Icon data-icon="inline-start" />Resize</DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="end"><DropdownMenuGroup>{ratios.map(({ label, value, icon: Icon }) => <DropdownMenuItem key={value} onClick={() => void run("Resize", value)}><Icon /><span>{label}</span><span className="ml-auto text-xs text-muted-foreground">{value}</span></DropdownMenuItem>)}</DropdownMenuGroup></DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </>}
     </PictureTools>}
     {/* Nested, so the brushed area and the words stay as they are. */}

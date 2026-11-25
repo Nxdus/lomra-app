@@ -4,11 +4,12 @@ import { Tip } from "@/components/tip";
 
 type Action = { label: string; icon: ReactNode; onClick: () => void; disabled?: boolean };
 
-export function LocalModelRow({ name, description, size, status, action, secondary }: {
+export function LocalModelRow({ name, description, size, status, control, action, secondary }: {
   name: string;
   description: string;
   size: string;
   status?: string;
+  control?: ReactNode;
   action?: Action;
   /** Shown before `action`. */
   secondary?: Action;
@@ -22,6 +23,7 @@ export function LocalModelRow({ name, description, size, status, action, seconda
         {description}{status && <> · <span role="status">{status}</span></>}
       </div>
     </div>
+    {control}
     <div className="flex h-8 min-w-8 shrink-0">
       {[secondary, action].map((item) => item && <Tip key={item.label} label={item.label}>
         <Button type="button" variant="ghost" size="icon-sm" aria-label={`${item.label} ${name}`} disabled={item.disabled} onClick={item.onClick}>
