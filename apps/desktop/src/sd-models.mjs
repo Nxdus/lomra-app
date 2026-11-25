@@ -16,24 +16,24 @@ export const sdEngines = {
 
 export const sdEngineUrl = (engine) => `https://github.com/leejet/stable-diffusion.cpp/releases/download/${sdRelease}/${engine.asset}`;
 
-/** Single-file checkpoints. `sample` hashes the first, middle and last 64 KiB for local import deduplication. */
+/** Single-file checkpoints. `sample` hashes 64 evenly spaced 64 KiB ranges for local import deduplication. */
 export const sdModels = [
   {
     id: 'sd-turbo', name: 'SD Turbo', quality: 'Fast', note: 'Recommended. Four steps, quick even without a strong GPU. Stability AI community license.',
     repo: 'stabilityai/sd-turbo', file: 'sd_turbo.safetensors', sha256: '3f067a1b943cf162f2b8f8588f6cf5824bd5b4c7d1d88d87164b9ca123616549', bytes: 5214561328,
-    sample: 'e2df3a05730f1132f3ecac92f862b2f989335841c3d2fc03a9ca6573902d0237',
+    sample: '18d22e7fe78e64ba3896eb37daf717887ff804afa35a2e4399eca0134f694ca6',
     profile: 'turbo', default: true,
   },
   {
     id: 'sdxl-turbo', name: 'SDXL Turbo', quality: 'Better detail', note: 'Needs about 8 GB of memory. Stability AI community license.',
     repo: 'stabilityai/sdxl-turbo', file: 'sd_xl_turbo_1.0_fp16.safetensors', sha256: 'e869ac7d6942cb327d68d5ed83a40447aadf20e0c3358d98b2cc9e270db0da26', bytes: 6938081905,
-    sample: '023c32b6496f147361598ee3d21933d7ed863c4e66cd0da04ade5cca0613a8ac',
+    sample: '8358663aaa6baddcc27a101caa466d0044897295ac50dcebb75c79945e3224a6',
     profile: 'turbo',
   },
   {
     id: 'sd15', name: 'Stable Diffusion 1.5', quality: 'Classic', note: 'Slower (20 steps) but the most flexible. CreativeML OpenRAIL-M license.',
     repo: 'stable-diffusion-v1-5/stable-diffusion-v1-5', file: 'v1-5-pruned-emaonly.safetensors', sha256: '6ce0161689b3853acaa03779ec93eafe75a02f4ced659bee03f50797806fa2fa', bytes: 4265146304,
-    sample: '3f8df4148b88a013e2f2a866980a515cf3b6108f2f78f179777ff7f91eebc17f',
+    sample: 'f57cd964d430c96a1d09b2b1895838afe198a75347ec52212675036ae2b9614d',
     profile: 'sd15',
   },
 ];
@@ -92,5 +92,5 @@ export function parseHuggingFace(input) {
 /** A safe, stable id (`hf-…`, usable as a file name and in `sd/<id>`) for a Hugging Face file. */
 export function customModelId(repo, file) {
   const slug = `${repo}-${file.replace(/\.[^.]+$/, '')}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40).replace(/-$/, '');
-  return `hf-${slug}-${createHash('sha1').update(`${repo}/${file}`).digest('hex').slice(0, file.includes('/') ? 24 : 6)}`;
+  return `hf-${slug}-${createHash('sha1').update(`${repo}/${file}`).digest('hex').slice(0, file.includes('/') ? 16 : 6)}`;
 }

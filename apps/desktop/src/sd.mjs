@@ -92,7 +92,12 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
     const files = [];
     for (let page = 0; url && page < 4; page++) {
       let response;
-      try { response = await fetchImpl(url, { signal, redirect: 'error' }); } catch { throw new Error('Could not reach Hugging Face.'); }
+      try { response = await fetchImpl(url, { signal }); } catch { throw new Error('Could not reach Hugging Face.'); }
+      const final = new URL(response.url || url);
+      if (final.origin !== 'https://huggingface.co' || final.username || final.password) {
+        await response.body?.cancel();
+        throw new Error('Could not reach Hugging Face.');
+      }
       if (response.status === 404) throw new Error('That model or folder was not found on Hugging Face.');
       if (response.status === 401 || response.status === 403) throw new Error('That model was not found, or it needs a Hugging Face login, which Lomra does not support.');
       if (!response.ok) throw new Error('Could not reach Hugging Face.');
@@ -104,8 +109,8 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
         if (file || files.length === 50) return files;
       }
       const next = response.headers?.get('link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
-      const parsed = URL.canParse(next, tree) && new URL(next, tree);
-      url = parsed && `${parsed.origin}${parsed.pathname}` === tree && !parsed.username && !parsed.password ? parsed.href : null;
+      const parsed = next && URL.canParse(next, final) && new URL(next, final);
+      url = parsed && parsed.origin === final.origin && parsed.pathname === final.pathname && !parsed.username && !parsed.password ? parsed.href : null;
     }
     return files;
   }
@@ -371,12 +376,12 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
       const current = ++selection;
       candidates.clear();
       const target = replace && localModels().find((model) => model.id === replace);
-      if (!engine || (replace && !target)) return [];
+      if (!engine || (replace && !target)) return { files: [], limited: false };
       const scan = folder ? await scanCheckpoints(path) : { files: [path] };
       const publicFiles = [];
       for (const file of scan.files) {
         const candidate = await readLocalCheckpoint(file, scan.root).catch((cause) => { if (!folder) throw cause; return null; });
-        if (current !== selection) return [];
+        if (current !== selection) return { files: [], limited: false };
         if (!candidate) continue;
         const id = newLocalModelId();
         candidates.set(id, { ...candidate, root: scan.root, replace });
@@ -385,7 +390,7 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
           suggestedProfile: fewStep ? fewStepFamily : family,
           compatibleProfiles: compatibleSdProfiles(candidate.header, profiles).map((item) => item.id) });
       }
-      return publicFiles;
+      return { files: publicFiles, limited: !!scan.limited };
     },
     async addLocal(id, family, downloadEngine) {
       if (typeof id !== 'string' || !localModelId.test(id) || typeof family !== 'string' || !profile(family) || typeof downloadEngine !== 'boolean') throw new Error('Choose a checkpoint and a compatible profile.');
@@ -487,20 +492,17 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
     /** Deletes a model or its unfinished download; the engine goes with the last one. */
     remove(id) {
       const model = allModels().find((item) => item.id === id);
-      if (model?.local) {
-        if (downloads.has(id) || runs.size) return false;
+      if (!model || downloads.has(id) || (runs.size && (model.local || existsSync(modelFile(model))))) return false;
+      if (model.local) {
         rmSync(localFile(id), { force: true });
-        downloads.forget(id);
         localHeaders.delete(id);
-        return true;
+      } else {
+        rmSync(modelFile(model), { force: true });
+        removeParts(modelFile(model));
+        headers.delete(id);
+        if (model.custom) rmSync(metaFile(model.id), { force: true });
       }
-      // Which model an image is being made with is not known here, so installed ones stay until it is done.
-      if (!model || downloads.has(id) || (runs.size && existsSync(modelFile(model)))) return false;
-      rmSync(modelFile(model), { force: true });
-      removeParts(modelFile(model));
       downloads.forget(id);
-      headers.delete(id);
-      if (model.custom) rmSync(metaFile(model.id), { force: true });
       const holds = (folder) => existsSync(folder) && readdirSync(folder).some((file) => /\.(?:safetensors|gguf)(?:\.[a-f0-9]{16}\.part)?$/.test(file));
       const left = holds(join(dir, 'models')) || holds(customDir) || localModels().length;
       if (!left && downloads.idle && !runs.size) rmSync(engineRoot, { recursive: true, force: true });

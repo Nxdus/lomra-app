@@ -151,7 +151,7 @@ export type DesktopSdApi = {
   files(repo: string, file?: string): Promise<{ result: { id: string; file: string; bytes: number; sha256: string }[] } | { error: string }>;
   /** What one of those files is, read from its first bytes. */
   inspect(repo: string, file: string): Promise<{ result: SdInspection } | { error: string }>;
-  pickLocal(mode: "file" | "folder" | "locate", id?: string): Promise<{ result: SdLocalCandidate[] | null } | { error: string }>;
+  pickLocal(mode: "file" | "folder" | "locate", id?: string): Promise<{ result: { files: SdLocalCandidate[]; limited: boolean } | null } | { error: string }>;
   addLocal(id: string, family: string, downloadEngine: boolean): Promise<{ result: true } | { error: string }>;
   /** Stop the download of one model (the running one when omitted); what was downloaded is kept. */
   cancelDownload(id?: string): Promise<void>;

@@ -24,14 +24,15 @@ function inside(root, file) {
 /** Scan the conventional checkpoint directories first, or the chosen directory itself. */
 export async function scanCheckpoints(folder, { maxDepth = 4, maxEntries = 2000, maxFiles = 50 } = {}) {
   const root = await realpath(folder);
-  const conventional = await Promise.all(['checkpoints', 'Stable-diffusion'].map(async (name) => {
-    const dir = join(root, 'models', name);
+  const conventional = await Promise.all([['models', 'checkpoints'], ['models', 'Stable-diffusion'], ['ComfyUI', 'models', 'checkpoints']].map(async (parts) => {
+    const dir = join(root, ...parts);
     const resolved = await realpath(dir).catch(() => null);
     return resolved && inside(root, resolved) && (await lstat(resolved).catch(() => null))?.isDirectory() ? resolved : null;
   }));
   const pending = [...new Set(conventional.filter(Boolean))].map((dir) => [dir, 0]);
   if (!pending.length) pending.push([root, 0]);
   let entries = 0;
+  let limited = false;
   const files = [];
   for (const [dir, depth] of pending) {
     const resolved = await realpath(dir).catch(() => null);
@@ -39,14 +40,19 @@ export async function scanCheckpoints(folder, { maxDepth = 4, maxEntries = 2000,
     const handle = await opendir(resolved).catch(() => null);
     if (!handle) continue;
     for await (const entry of handle) {
-      if (++entries > maxEntries) return { root, files };
+      if (++entries > maxEntries) return { root, files, limited: true };
       const path = join(resolved, entry.name);
-      if (entry.isDirectory() && depth < maxDepth) pending.push([path, depth + 1]);
-      if (entry.isFile() && checkpoint.test(entry.name)) files.push(path);
-      if (files.length >= maxFiles) return { root, files };
+      if (entry.isDirectory()) {
+        if (depth < maxDepth) pending.push([path, depth + 1]);
+        else limited = true;
+      }
+      if (entry.isFile() && checkpoint.test(entry.name)) {
+        if (files.length === maxFiles) return { root, files, limited: true };
+        files.push(path);
+      }
     }
   }
-  return { root, files };
+  return { root, files, limited };
 }
 
 export async function readLocalCheckpoint(path, root) {
@@ -74,14 +80,17 @@ export async function readLocalCheckpoint(path, root) {
   } finally { await handle.close(); }
 }
 
-/** Compare a few fixed data ranges without reading gigabytes from each checkpoint. */
+/** Hash up to 64 evenly spaced 64 KiB ranges, including the first and last bytes. */
 export async function checkpointSample(path, bytes) {
   const file = await open(path, 'r');
   try {
     const hash = createHash('sha256');
     const length = Math.min(64 * 1024, bytes);
-    for (const start of new Set([0, Math.floor((bytes - length) / 2), bytes - length])) {
-      const { buffer, bytesRead } = await file.read(Buffer.alloc(length), 0, length, start);
+    const count = Math.min(64, Math.ceil(bytes / length));
+    const buffer = Buffer.alloc(length);
+    for (let i = 0; i < count; i++) {
+      const start = Math.floor(i * (bytes - length) / Math.max(1, count - 1));
+      const { bytesRead } = await file.read(buffer, 0, length, start);
       if (bytesRead !== length) return null;
       hash.update(buffer);
     }

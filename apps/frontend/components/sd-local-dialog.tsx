@@ -6,13 +6,16 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { desktopSd, type SdLocalCandidate, type SdStatus } from "@/lib/desktop";
 
-export function SdLocalDialog({ files, status, replacing, onClose }: {
+export function SdLocalDialog({ files, limited, scanned, status, replacing, onClose }: {
   files: SdLocalCandidate[];
+  limited: boolean;
+  scanned: boolean;
   status: SdStatus;
   replacing?: string;
   onClose: () => void;
 }) {
   const [id, setId] = useState(files[0]?.id);
+  const [added, setAdded] = useState<string[]>([]);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -21,18 +24,23 @@ export function SdLocalDialog({ files, status, replacing, onClose }: {
   const currentProfile = status.models.find((model) => model.id === replacing)?.profile.id;
   const family = file && (overrides[file.id] ?? (currentProfile && file.compatibleProfiles.includes(currentProfile) ? currentProfile : file.suggestedProfile));
   const title = replacing ? "Locate checkpoint" : "Add a checkpoint";
-  const label = (item: SdLocalCandidate) => `${item.name} · ${item.label}${item.inpaint ? " · Inpainting" : ""} · ${localModelSize(item.bytes)}`;
+  const label = (item: SdLocalCandidate) => `${item.name} · ${item.label}${item.inpaint ? " · Inpainting" : ""} · ${localModelSize(item.bytes)}${added.includes(item.id) ? " · Added" : ""}`;
 
   async function confirm() {
     if (!file || !family || pending.current) return;
     pending.current = true;
     setBusy(true);
+    setError("");
     try {
       const reply = await desktopSd()!.addLocal(file.id, family, !status.engine);
       if ("error" in reply) setError(reply.error);
       else {
         window.dispatchEvent(new Event("sd-status-changed"));
-        onClose();
+        if (scanned) {
+          const next = [...added, file.id];
+          setAdded(next);
+          setId(files.find((entry) => !next.includes(entry.id))?.id ?? file.id);
+        } else onClose();
       }
     } catch { setError("Could not add the checkpoint."); }
     finally { pending.current = false; setBusy(false); }
@@ -44,14 +52,15 @@ export function SdLocalDialog({ files, status, replacing, onClose }: {
         <DialogTitle>{title}</DialogTitle>
         <DialogDescription>{file ? "Lomra uses the checkpoint in its current location." : "No supported Stable Diffusion checkpoints were found."}</DialogDescription>
       </DialogHeader>
+      {limited && <p className="text-sm text-muted-foreground">The scan reached a limit. Choose a narrower folder to find more checkpoints.</p>}
       {file && (files.length === 1 ? <p className="break-all text-sm">{label(file)}</p> : <Field>
         <FieldLabel htmlFor="local-checkpoint">Checkpoint</FieldLabel>
         <Select value={file.id} disabled={busy} onValueChange={(value) => { if (value) { setId(value); setError(""); } }}>
           <SelectTrigger id="local-checkpoint" className="w-full"><SelectValue className="truncate">{label(file)}</SelectValue></SelectTrigger>
-          <SelectContent>{files.map((entry) => <SelectItem key={entry.id} value={entry.id}><span className="break-all">{label(entry)}</span></SelectItem>)}</SelectContent>
+          <SelectContent>{files.map((entry) => <SelectItem key={entry.id} value={entry.id} disabled={added.includes(entry.id)}><span className="break-all">{label(entry)}</span></SelectItem>)}</SelectContent>
         </Select>
       </Field>)}
-      {file && <Field>
+      {file && !added.includes(file.id) && <Field>
         <FieldLabel htmlFor="local-profile">Profile</FieldLabel>
         <Select key={file.id} value={family} disabled={busy} onValueChange={(value) => { if (value) setOverrides((current) => ({ ...current, [file.id]: value })); }}>
           <SelectTrigger id="local-profile" className="w-full"><SelectValue>{status.profiles.find((profile) => profile.id === family)?.name}</SelectValue></SelectTrigger>
@@ -59,10 +68,11 @@ export function SdLocalDialog({ files, status, replacing, onClose }: {
             <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>)}</SelectContent>
         </Select>
       </Field>}
+      {added.length > 0 && <p role="status" className="text-sm text-muted-foreground">{added.length} of {files.length} checkpoints added.</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <DialogFooter>
-        <Button variant="outline" autoFocus disabled={busy} onClick={onClose}>{file ? "Cancel" : "Close"}</Button>
-        {file && <Button disabled={busy} onClick={() => void confirm()}>{busy ? "Checking…" : !status.engine ? `Save and download engine (${localModelSize(status.engineBytes)})` : replacing ? "Use this file" : "Add to Lomra"}</Button>}
+        <Button variant="outline" autoFocus disabled={busy} onClick={onClose}>{scanned ? "Done" : file ? "Cancel" : "Close"}</Button>
+        {file && !added.includes(file.id) && <Button disabled={busy} onClick={() => void confirm()}>{busy ? "Checking…" : !status.engine && added.length === 0 ? `Save and download engine (${localModelSize(status.engineBytes)})` : replacing ? "Use this file" : "Add to Lomra"}</Button>}
       </DialogFooter>
     </DialogContent>
   </Dialog>;

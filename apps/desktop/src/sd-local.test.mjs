@@ -35,8 +35,11 @@ test('folder scan finds conventional layouts, bounds traversal, and skips escapi
     const files = (await scanCheckpoints(picked)).files;
     expect(new Set(files)).toEqual(new Set([direct, directForge, nested]));
     expect(new Set((await scanCheckpoints(picked, { maxDepth: 0 })).files)).toEqual(new Set([direct, directForge]));
-    expect((await scanCheckpoints(picked, { maxEntries: 0 })).files).toEqual([]);
-    expect((await scanCheckpoints(picked, { maxFiles: 1 })).files).toHaveLength(1);
+    expect((await scanCheckpoints(picked, { maxDepth: 0 })).limited).toBe(true);
+    expect(await scanCheckpoints(picked, { maxEntries: 0 })).toMatchObject({ files: [], limited: true });
+    const capped = await scanCheckpoints(picked, { maxFiles: 1 });
+    expect(capped.files).toHaveLength(1);
+    expect(capped.limited).toBe(true);
     await expect(readLocalCheckpoint(join(conventional, 'escape', 'escape.gguf'), picked)).rejects.toThrow('find the checkpoint');
     await expect(readLocalCheckpoint(direct)).rejects.toThrow('whole Stable Diffusion');
   } finally { rmSync(scratch, { recursive: true, force: true }); }

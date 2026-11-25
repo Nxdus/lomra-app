@@ -23,7 +23,7 @@ export function SdSettings({ search }: { search?: string }) {
   const [removing, setRemoving] = useState<SdModel | null>(null);
   const [savingProfileId, setSavingProfileId] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
-  const [local, setLocal] = useState<{ files: SdLocalCandidate[]; replacing?: string }>();
+  const [local, setLocal] = useState<{ files: SdLocalCandidate[]; limited: boolean; scanned: boolean; replacing?: string }>();
   const job = status?.downloading ?? null;
   const queued = status?.queued ?? [];
   const models = status?.models.filter((model) => model.id !== job?.id && !queued.some(({ id }) => id === model.id)) ?? [];
@@ -43,7 +43,7 @@ export function SdSettings({ search }: { search?: string }) {
     try {
       const reply = await desktopSd()!.pickLocal(mode, id);
       if ("error" in reply) toast.add({ title: reply.error, type: "error" });
-      else if (reply.result) setLocal({ files: reply.result, replacing: id });
+      else if (reply.result) setLocal({ ...reply.result, scanned: mode === "folder", replacing: id });
     } catch { toast.add({ title: "Could not open the checkpoint picker.", type: "error" }); }
     finally { setPicking(false); }
   }

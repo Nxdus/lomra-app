@@ -137,8 +137,9 @@ after a restart.
   `.gguf`) work; Lomra reads the file's header to tell before you download it.
   Turn on **Few-step model** for Turbo, Lightning and LCM models if it is not
   already. Use **Add a file from this computer** to use a checkpoint in place,
-  or **Scan a model folder** to find checkpoints in a ComfyUI, A1111, Forge,
-  or other model folder. Use **Locate…** if the file moved or reconnect the drive
+  or **Scan a model folder** to add several checkpoints from ComfyUI (including
+  portable installs), A1111, Forge, or another model folder. If the scan reaches
+  its limit, pick a narrower folder to find more. Use **Locate…** if the file moved or reconnect the drive
   if it was unplugged. **Remove from Lomra** keeps the original file.
 - **Image-to-3D** (Hunyuan3D 2 Mini, Hunyuan3D 2, TripoSR) requires Windows x64
   and an NVIDIA GPU with at least 6 GB of VRAM.

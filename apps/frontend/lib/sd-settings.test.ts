@@ -7,6 +7,13 @@ import { changeSdSettings, loadSdSettings, sdSettingsOf, subscribeSdSettings } f
 const setting = (value: unknown) => validateValue("settings", "sd-settings", value);
 const canvas = (provenance: unknown) => validateValue("canvas", "default", [{ id: "a", name: "a.png", type: "image/png", lastModified: 1, x: 0, y: 0, width: 1, height: 1, harness: { role: "Output", provenance } }]);
 
+test("the maximum Hugging Face subfolder id fits settings, selection and provenance", () => {
+  const id = `hf-${"a".repeat(40)}-${"b".repeat(16)}`;
+  expect(() => setting({ [id]: { steps: 20 }, "sd-turbo": { seed: 1 } })).not.toThrow();
+  expect(() => validateValue("settings", "selected-models", [`picture:sd/${id}`])).not.toThrow();
+  expect(() => canvas({ model: `sd/${id}`, prompt: "p", sd: { steps: 20, seed: 1, cfg: 7 } })).not.toThrow();
+});
+
 test("saved settings and provenance accept what the engine takes and nothing else; older data stays valid", () => {
   expect(() => setting({})).not.toThrow();
   expect(() => setting({ "sd-turbo": {}, "hf-a-b-123abc": { negativePrompt: "blur", seed: 0, steps: 50, cfg: 7.5, strength: 1 } })).not.toThrow();
