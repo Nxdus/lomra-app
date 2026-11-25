@@ -1,7 +1,8 @@
 import { processImage, type ImageOperation } from "./image-tools";
 import { animationInput, animationFiles, rigFiles } from "./animation";
-import { localMediaTool, mediaToolModel, validateMediaTool, type MediaTool, type ToolSource } from "./media-tools";
-import { desktopAgents, desktopLocal3d, desktopSd } from "@/lib/desktop";
+import { localMediaTool, isLocalPictureModel, validMediaToolModel, validateMediaTool, type MediaTool, type ToolSource } from "./media-tools";
+export { isLocalPictureModel, pictureAiPrefix } from "./media-tools";
+import { desktopAgents, desktopLocal3d, desktopPictureAi, desktopSd } from "@/lib/desktop";
 import { pictureCapabilities } from "@/lib/picture-capabilities";
 import type { SdSettings, SdUsed } from "@/lib/sd-settings";
 import { loadSdSettings, rememberSdSeed, sdSettingsOf } from "@/lib/sd-settings-store";
@@ -263,8 +264,34 @@ export async function generate(
   }
   if (task.mediaTool) {
     validateMediaTool(task.mediaTool);
-    if (task.model !== mediaToolModel(task.mediaTool)) throw new Error("Invalid media tool model.");
+    if (!validMediaToolModel(task.mediaTool, task.model)) throw new Error("Invalid media tool model.");
     if (task.model === "Local media tools") return localMediaTool(task.mediaTool, sources, signal, summary => update({ summary }));
+    if ((task.mediaTool.name === "remove_background" || task.mediaTool.name === "upscale_image") && isLocalPictureModel(task.model)) {
+      const bridge = desktopPictureAi();
+      if (!bridge) throw new Error("Local picture tools require the Lomra desktop app.");
+      const url = images[task.mediaTool.image_index];
+      if (!url) throw new Error("Select the source image on the canvas first.");
+      const operation = task.mediaTool.name === "remove_background" ? "remove-background" : "upscale";
+      const scale = task.mediaTool.name === "upscale_image" ? (task.mediaTool.scale as 2 | 4) : undefined;
+      const label = operation === "remove-background" ? "Removing background locally…" : "Upscaling locally…";
+      const abort = () => bridge.cancel(task.id);
+      signal.addEventListener("abort", abort, { once: true });
+      const stopProgress = bridge.onProgress((event) => {
+        if (event.runId !== task.id) return;
+        const detail = event.stage === "processing" && event.total && event.total > 1 ? ` ${event.done ?? 0}/${event.total}` : "";
+        update({ status: `${label}${detail}` });
+      });
+      try {
+        update({ status: label });
+        const result = await bridge.run(task.id, { operation, image: url, ...(scale ? { scale } : {}) });
+        if ("error" in result) throw new Error(result.error);
+        signal.throwIfAborted();
+        return [{ url: result.image, name: task.mediaTool.name === "remove_background" ? "Background removed" : `Upscaled ${scale}x`, kind: "image" }];
+      } finally {
+        stopProgress();
+        signal.removeEventListener("abort", abort);
+      }
+    }
     if (task.mediaTool.name === "animate_3d" && task.mediaTool.motion_prompt) {
       try { return await generateMotion(task, request, signal, update, sources); }
       catch (cause) {

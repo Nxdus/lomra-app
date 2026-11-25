@@ -15,7 +15,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { EffortPicker } from "./effort-picker";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 import { imagePreview, MAX_MEDIA_ITEMS, promptContent, type MediaPart } from "./media";
-import { mediaToolModel, type ToolSource } from "./media-tools";
+import { isLocalPictureModel, mediaToolModel, pictureAiOperation, type ToolSource } from "./media-tools";
+import { downloadPictureAiModel } from "@/hooks/use-picture-ai";
+import { localModelSize } from "@/components/ollama-settings";
 import { SpeechMenu } from "./speech-menu";
 import { VoiceRecorder } from "./voice-recorder";
 import { MarkdownMessage } from "./markdown-message";
@@ -36,7 +38,7 @@ import { canvasFileError, canvasFileKind } from "@/lib/image-canvas/image-canvas
 import { getSetting, saveSetting } from "@/lib/settings";
 import { characterNameKey, type Character } from "@/lib/characters";
 import { isRemoteOllama } from "@/lib/ollama-url";
-import { desktopAgents, desktopOllama, desktopSd, desktopVideo, type AgentToolResult, type DesktopVideoApi } from "@/lib/desktop";
+import { desktopAgents, desktopOllama, desktopPictureAi, desktopSd, desktopVideo, type AgentToolResult, type DesktopVideoApi, type PictureAiModel } from "@/lib/desktop";
 import { swipeDeleteThreshold, useSwipeToDelete } from "@/hooks/use-swipe-to-delete";
 import { agentEfforts, agentLabels, localAgentModel, runAgentChat } from "./agent-chat";
 import { saveAgentLimits } from "./agent-limits";
@@ -173,6 +175,7 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
   const [takePlan, setTakePlan] = useState<{ shotId: string; model: string } | null>(null);
   const [modelSetupOpen, setModelSetupOpen] = useState(false);
   const [modelSetupTarget, setModelSetupTarget] = useState<{ provider?: KeyedProvider; modelName?: string } | null>(null);
+  const [pictureChoice, setPictureChoice] = useState<{ models: PictureAiModel[]; canUseFal: boolean; resolve: (choice: "download" | "fal" | "cancel") => void } | null>(null);
   const { swipe, bind: bindSwipe } = useSwipeToDelete();
   const [storageError, setStorageError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1126,11 +1129,49 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
       setStatus("Thinking…");
       const input = [...history.slice(-20).map(({ role, content }) => ({ role, content })), { role: "user", content }];
       const plan = await request(llmProvider, { action: "route", model: llm, input, signal: controller.signal }) as { text: string; tasks: GenerationTask[] };
+      const pictureBridge = desktopPictureAi();
+      const pictureStatus = pictureBridge && plan.tasks.some((task) => task.mediaTool && pictureAiOperation(task.mediaTool))
+        ? await pictureBridge.status() : undefined;
+      let useFalForPictureTools = false;
+      if (pictureBridge && pictureStatus) {
+        const needed = new Map<string, PictureAiModel>();
+        for (const task of plan.tasks) {
+          const op = task.mediaTool ? pictureAiOperation(task.mediaTool) : undefined;
+          const local = op ? pictureStatus.models.find((m) => m.operation === op) : undefined;
+          if (local && !local.installed) needed.set(local.id, local);
+        }
+        if (needed.size > 0) {
+          setStatus("Waiting for confirmation…");
+          const missing = [...needed.values()];
+          const choice = await new Promise<"download" | "fal" | "cancel">((resolve) => {
+            const settle = (value: "download" | "fal" | "cancel") => {
+              controller.signal.removeEventListener("abort", onAbort);
+              setPictureChoice(null);
+              resolve(value);
+            };
+            const onAbort = () => settle("cancel");
+            controller.signal.addEventListener("abort", onAbort, { once: true });
+            setPictureChoice({ models: missing, canUseFal: !!keys.fal, resolve: settle });
+          });
+          if (choice === "cancel") {
+            setHistory([...fullHistory, ...(plan.text ? [{ role: "assistant" as const, content: plan.text.slice(0, 8000) }] : [])]);
+            return;
+          }
+          if (choice === "download") {
+            for (const item of missing) await downloadPictureAiModel(pictureBridge, item.id, item.name, controller.signal, setStatus);
+          } else {
+            useFalForPictureTools = true;
+          }
+        }
+      }
       const prepared = plan.tasks.map((task) => {
-        const model = task.mediaTool ? mediaToolModel(task.mediaTool) : task.operation ? "Local image tools" : selectedModel(models, task.category);
+        const pictureOp = task.mediaTool ? pictureAiOperation(task.mediaTool) : undefined;
+        const localPicture = pictureOp && pictureStatus && !useFalForPictureTools
+          ? pictureStatus.models.find((m) => m.operation === pictureOp) : undefined;
+        const model = task.mediaTool ? mediaToolModel(task.mediaTool, localPicture?.id) : task.operation ? "Local image tools" : selectedModel(models, task.category);
         if (!model) throw new Error(`Select a ${task.category === "picture" ? "image" : task.category} model first`);
         if (task.category === "3d" && !task.mediaTool && !isLocal3dModel(model) && !keys.fal) throw new Error("Enter your Fal API key in Settings to generate 3D models");
-        if (task.mediaTool && model !== "Local media tools" && !keys.fal) throw new Error("Enter your Fal API key in Settings to run AI media tools");
+        if (task.mediaTool && model !== "Local media tools" && !isLocalPictureModel(model) && !keys.fal) throw new Error("Enter your Fal API key in Settings to run AI media tools");
         const views = task.category === "3d" && isMultiview(model)
           ? resolveMultiview(model, task.viewIndices, images.map(({ image_url }, index) => ({ url: image_url.url, name: `Selected image ${index + 1}` })))
           : undefined;
@@ -1170,7 +1211,9 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
     updateGeneration(task.id, { error: undefined, status: "Checking" });
     try {
       // A local edit starts over, so it needs its picture again; hosted jobs only check what was submitted.
-      const pictures = isSdModel(task.model) && task.startImage ? selection.filter(({ file }) => ["image", "3d"].includes(canvasFileKind(file) ?? "")) : [];
+      const needsSelection = (isSdModel(task.model) && task.startImage)
+        || (isLocalPictureModel(task.model) && (task.mediaTool?.name === "remove_background" || task.mediaTool?.name === "upscale_image"));
+      const pictures = needsSelection ? selection.filter(({ file }) => ["image", "3d"].includes(canvasFileKind(file) ?? "")) : [];
       const content = pictures.length ? await promptContent("", pictures, controller.signal, onModelPreview) : "";
       const images = typeof content === "string" ? undefined : content.flatMap((part) => part.type === "image_url" ? [part.image_url.url] : []);
       const outcome = await runTask(task, controller.signal, undefined, images, selection);
@@ -1379,6 +1422,22 @@ export function FloatingPrompt({ canvasId = "default", loading = false, onAddToC
         <DialogContent><DialogHeader><DialogTitle>Delete chat?</DialogTitle><DialogDescription>“{deleting?.title}” will be permanently deleted. Files already on the canvas will stay.</DialogDescription></DialogHeader>
           <DialogFooter><Button variant="outline" onClick={() => setDeleting(null)}>Cancel</Button><Button variant="destructive" onClick={() => void deleteChat()}>Delete chat</Button></DialogFooter>
         </DialogContent>
+      </Dialog>
+      <Dialog open={!!pictureChoice} onOpenChange={(open) => { if (!open && pictureChoice) pictureChoice.resolve("cancel"); }}>
+        {pictureChoice && <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Download {pictureChoice.models.map((m) => m.name).join(" and ")}?</DialogTitle>
+            <DialogDescription className="flex flex-col gap-2">
+              <span>Run background removal and upscaling locally on your computer without an API key.</span>
+              <span className="text-xs">{pictureChoice.models.map((m) => `${m.name} (${localModelSize(m.bytes)}, ${m.license})`).join(" · ")}</span>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => pictureChoice.resolve("cancel")}>Not now</Button>
+            {pictureChoice.canUseFal && <Button variant="secondary" onClick={() => pictureChoice.resolve("fal")}>Use Fal.AI</Button>}
+            <Button autoFocus onClick={() => pictureChoice.resolve("download")}>Download {localModelSize(pictureChoice.models.reduce((sum, m) => sum + m.bytes, 0))}</Button>
+          </DialogFooter>
+        </DialogContent>}
       </Dialog>
       {(history.length > 0 || generations.length > 0 || status) && <AccordionContent className="border-b pb-2">
       <div ref={transcript} className="flex max-h-[40dvh] flex-col gap-3 overflow-y-auto overscroll-contain py-2 [&>*]:shrink-0" aria-label="Generation results" aria-busy={!!status}>

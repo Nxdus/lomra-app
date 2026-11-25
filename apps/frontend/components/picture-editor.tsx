@@ -3,7 +3,7 @@
 import { Tip } from "@/components/tip";
 import { BackgroundCleanup } from "@/components/background-cleanup";
 import { useCallback, useEffect, useImperativeHandle, useReducer, useRef, useState, type PointerEvent, type Ref } from "react";
-import { ArrowRightIcon, CheckIcon, CircleIcon, EraserIcon, LoaderCircleIcon, MinusIcon, MousePointer2Icon, PenLineIcon, PictureInPicture2Icon, Redo2Icon, ScanIcon, ShapesIcon, SquareIcon, TypeIcon, Undo2Icon, XIcon } from "lucide-react";
+import { ArrowRightIcon, CheckIcon, CircleIcon, EraserIcon, LoaderCircleIcon, Maximize2Icon, MinusIcon, MousePointer2Icon, PenLineIcon, PictureInPicture2Icon, Redo2Icon, ScanIcon, ShapesIcon, SquareIcon, TypeIcon, Undo2Icon, XIcon } from "lucide-react";
 import { PictureTools, type PictureTool } from "@/components/picture-tools";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,7 +15,10 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { toast } from "@/components/ui/toast";
 import { ModelSetupDialog } from "@/components/first-run/model-setup-dialog";
 import { useApiProviders } from "@/components/api-provider";
-import { isBrowserModel, isSdModel, generate, modelProvider, sdPrefix, selectedModel } from "@/components/prompt/generation";
+import { isBrowserModel, isLocalPictureModel, isSdModel, generate, modelProvider, pictureAiPrefix, sdPrefix, selectedModel } from "@/components/prompt/generation";
+import { downloadPictureAiModel } from "@/hooks/use-picture-ai";
+import { desktopPictureAi, type PictureAiModel } from "@/lib/desktop";
+import { localModelSize } from "@/components/ollama-settings";
 import { useSd } from "@/hooks/use-sd";
 import { pictureCapabilities } from "@/lib/picture-capabilities";
 import { getSetting } from "@/lib/settings";
@@ -67,11 +70,13 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
   const [discard, setDiscard] = useState<"mode" | "viewer" | null>(null);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState("");
-  const [cleanup, setCleanup] = useState<{ original: HTMLCanvasElement; cutout: HTMLCanvasElement } | null>(null);
+  const [cleanup, setCleanup] = useState<{ original: HTMLCanvasElement; cutout: HTMLCanvasElement; provenance?: CanvasProvenance } | null>(null);
   const [color, setColor] = useState("#ef4444");
   const [size, setSize] = useState(4);
   const [brushCursor, setBrushCursor] = useState<{ x: number; y: number; diameter: number } | null>(null);
   const [resizeOpen, setResizeOpen] = useState(false);
+  const [upscaleOpen, setUpscaleOpen] = useState(false);
+  const [pictureChoice, setPictureChoice] = useState<{ action: "Remove BG" | "Upscale"; scale?: 2 | 4; model: PictureAiModel } | null>(null);
   const [shapeOpen, setShapeOpen] = useState(false);
   const [colorOpen, setColorOpen] = useState(false);
   const [pictureModel, setPictureModel] = useState("");
@@ -211,7 +216,7 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
     job.current = controller;
     setBusy("Saving…");
     try {
-      await exportResult(result, controller.signal);
+      await exportResult(result, controller.signal, cleanup?.provenance);
       if (!controller.signal.aborted) setCleanup(null);
     } catch (cause) {
       if (!controller.signal.aborted) error(cause);
@@ -220,7 +225,32 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
     }
   }
 
-  async function run(action: PictureTool, aspectRatio?: string, edit = "") {
+  async function startPictureTool(action: "Remove BG" | "Upscale", scale?: 2 | 4) {
+    if (!ready || job.current) return;
+    const bridge = desktopPictureAi();
+    if (!bridge) {
+      await run(action, undefined, "", scale);
+      return;
+    }
+    try {
+      const status = await bridge.status();
+      const op = action === "Remove BG" ? "remove-background" : "upscale";
+      const local = status.models.find(m => m.operation === op);
+      if (!local) {
+        await run(action, undefined, "", scale);
+        return;
+      }
+      if (local.installed) {
+        await run(action, undefined, "", scale, `${pictureAiPrefix}${local.id}`);
+        return;
+      }
+      setPictureChoice({ action, scale, model: local });
+    } catch (cause) {
+      error(cause);
+    }
+  }
+
+  async function run(action: PictureTool, aspectRatio?: string, edit = "", scale?: 2 | 4, localPictureModel?: string, downloadBefore?: PictureAiModel) {
     if (!ready || job.current) return;
     const controller = new AbortController(); job.current = controller;
     setBusy(action === "Markup" ? "Adding markup…" : "Editing image…");
@@ -235,14 +265,23 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
         await exportResult(result, controller.signal);
       } else {
         const background = action === "Remove BG";
+        const upscale = action === "Upscale";
+        if (downloadBefore) {
+          const bridge = desktopPictureAi();
+          if (!bridge) throw new Error("Local picture tools require the Lomra desktop app.");
+          await downloadPictureAiModel(bridge, downloadBefore.id, downloadBefore.name, controller.signal, status => {
+            if (!controller.signal.aborted) setBusy(status);
+          });
+          controller.signal.throwIfAborted();
+        }
         if (action === "Erase" && !history.items.length) throw new Error("Brush over the area you want to change first.");
-        const model = background ? "fal-ai/birefnet/v2" : selectedModel(await getSetting<string[]>("selected-models") ?? [], "picture");
+        const model = localPictureModel ?? (background ? "fal-ai/birefnet/v2" : upscale ? "fal-ai/esrgan" : selectedModel(await getSetting<string[]>("selected-models") ?? [], "picture"));
         controller.signal.throwIfAborted();
-        const keyProvider = background ? "fal" : modelProvider(model ?? "");
-        if (!isBrowserModel(model ?? "") && !isSdModel(model ?? "") && !keys[keyProvider]) throw new Error(`Enter your ${{ fal: "Fal", google: "Google", openrouter: "OpenRouter" }[keyProvider]} API key in Settings first.`);
+        const keyProvider = background || upscale ? "fal" : modelProvider(model ?? "");
+        if (!isBrowserModel(model ?? "") && !isSdModel(model ?? "") && !isLocalPictureModel(model ?? "") && !keys[keyProvider]) throw new Error(`Enter your ${{ fal: "Fal", google: "Google", openrouter: "OpenRouter" }[keyProvider]} API key in Settings first.`);
         if (!model) throw new Error("Select an Image model in the prompt toolbar first.");
-        const local = !background && isSdModel(model);
-        const runCaps = !background ? pictureCapabilities(model, sdStatus) : undefined;
+        const local = !background && !upscale && isSdModel(model);
+        const runCaps = !background && !upscale ? pictureCapabilities(model, sdStatus) : undefined;
         if (runCaps && action === "Resize" && !runCaps.outpaint) {
           throw new Error(local
             ? "Local Stable Diffusion cannot extend a picture to a new shape. Choose another Image model in the prompt toolbar."
@@ -259,7 +298,7 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
           drawMarkup(mask, history.items.map(item => ({ ...item, color: "white" })));
           if (!local) references.push(guide.toDataURL("image/png"), selection.toDataURL("image/png"));
         }
-        const prompt = background ? "Remove background" : local ? edit || sdErase.prompt : action === "Resize"
+        const prompt = background ? "Remove background" : upscale ? `Upscale ${scale ?? 2}x` : local ? edit || sdErase.prompt : action === "Resize"
           ? `Recompose this image into a ${aspectRatio} aspect ratio. Preserve the subject, identity, style, lighting and details. Naturally extend the scene or rearrange surrounding space to fit the new composition. Do not stretch the image, add letterboxing or crop away the main subject.`
           : `Edit image 1. Image 2 highlights the selection. Image 3 is a selection guide (white is selected). ${edit ? `Apply this instruction only within the selection: ${edit}` : "Remove the selected objects and naturally reconstruct the background from surrounding context."}\nReturn only the clean image at the original dimensions. Never render the mask, selection overlay, borders, frames, outlines or letterboxing. Preserve the composition and every unselected area.`;
         const eraseSettings = {
@@ -267,34 +306,41 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
           ...(runCaps?.strength ? { strength: sdErase.settings.strength } : {}),
         };
         let sd: CanvasProvenance["sd"];
-        const files = await generate({ id: crypto.randomUUID(), category: "picture", prompt, model, status: "Waiting", ...(local && selection ? { sdEdit: { mask: selection.toDataURL("image/png"), ...(edit ? {} : eraseSettings) } } : {}), ...(aspectRatio ? { aspectRatio } : {}), ...(background ? { mediaTool: { name: "remove_background" as const, image_index: 0 } } : {}) }, request, controller.signal, change => { if (change.sd) sd = change.sd; if (change.status && !controller.signal.aborted) setBusy(change.status); }, references[0], references);
+        const mediaTool = background ? { name: "remove_background" as const, image_index: 0 } : upscale ? { name: "upscale_image" as const, image_index: 0, scale: scale ?? 2 } : undefined;
+        const files = await generate({ id: crypto.randomUUID(), category: "picture", prompt, model, status: "Waiting", ...(local && selection ? { sdEdit: { mask: selection.toDataURL("image/png"), ...(edit ? {} : eraseSettings) } } : {}), ...(aspectRatio ? { aspectRatio } : {}), ...(mediaTool ? { mediaTool } : {}) }, request, controller.signal, change => { if (change.sd) sd = change.sd; if (change.status && !controller.signal.aborted) setBusy(change.status); }, references[0], references);
         const response = await fetch(files[0].url, { signal: controller.signal });
         if (!response.ok) throw new Error("Could not download the processed picture.");
-        const bitmap = await createImageBitmap(await response.blob());
-        try {
+        const blob = await response.blob();
+        if (upscale) {
           controller.signal.throwIfAborted();
-          if (bitmap.width * bitmap.height > 16_000_000) throw new Error("Processed picture is too large.");
-          if (aspectRatio) {
-            const [w, h] = aspectRatio.split(":").map(Number);
-            if (Math.abs(bitmap.width / bitmap.height / (w / h) - 1) > 0.03) throw new Error("The selected model did not return the requested aspect ratio. Try another Image model.");
-          }
-          const result = selection ? surface(original.width, original.height) : surface(bitmap.width, bitmap.height);
-          const ctx = result.getContext("2d")!;
-          ctx.drawImage(bitmap, 0, 0, result.width, result.height);
-          if (background) {
-            setCleanup({ original, cutout: result });
-            return;
-          }
-          if (selection) {
-            // Only accept generated pixels inside the brush mask, including its antialiased edge.
-            ctx.globalCompositeOperation = "destination-in";
-            ctx.drawImage(selection, 0, 0);
-            ctx.globalCompositeOperation = "destination-over";
-            ctx.drawImage(original, 0, 0);
-            ctx.globalCompositeOperation = "source-over";
-          }
-          await exportResult(result, controller.signal, sd && { model, prompt, sd });
-        } finally { bitmap.close(); }
+          await onSave(new File([blob], `${name.replace(/\.[^.]+$/, "")}-upscaled-${scale ?? 2}x.png`, { type: "image/png" }), { model, prompt });
+        } else {
+          const bitmap = await createImageBitmap(blob);
+          try {
+            controller.signal.throwIfAborted();
+            if (bitmap.width * bitmap.height > 16_000_000) throw new Error("Processed picture is too large.");
+            if (aspectRatio) {
+              const [w, h] = aspectRatio.split(":").map(Number);
+              if (Math.abs(bitmap.width / bitmap.height / (w / h) - 1) > 0.03) throw new Error("The selected model did not return the requested aspect ratio. Try another Image model.");
+            }
+            const result = selection ? surface(original.width, original.height) : surface(bitmap.width, bitmap.height);
+            const ctx = result.getContext("2d")!;
+            ctx.drawImage(bitmap, 0, 0, result.width, result.height);
+            if (background) {
+              setCleanup({ original, cutout: result, provenance: { model, prompt } });
+              return;
+            }
+            if (selection) {
+              // Only accept generated pixels inside the brush mask, including its antialiased edge.
+              ctx.globalCompositeOperation = "destination-in";
+              ctx.drawImage(selection, 0, 0);
+              ctx.globalCompositeOperation = "destination-over";
+              ctx.drawImage(original, 0, 0);
+              ctx.globalCompositeOperation = "source-over";
+            }
+            await exportResult(result, controller.signal, sd && { model, prompt, sd });
+          } finally { bitmap.close(); }
+        }
       }
       if (!controller.signal.aborted) { reset(); setTool(null); }
     } catch (cause) { if (!controller.signal.aborted) error(cause); }
@@ -401,7 +447,13 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
         </div>
       </form> : <>
         <Button variant="ghost" size="sm" disabled={!ready} onClick={() => enter("Markup")}><PenLineIcon data-icon="inline-start" />Markup</Button>
-        <Button variant="ghost" size="sm" disabled={!ready} onClick={() => void run("Remove BG")}><ScanIcon data-icon="inline-start" />Remove BG</Button>
+        <Button variant="ghost" size="sm" disabled={!ready} onClick={() => void startPictureTool("Remove BG")}><ScanIcon data-icon="inline-start" />Remove BG</Button>
+        <DropdownMenu open={upscaleOpen} onOpenChange={setUpscaleOpen}><DropdownMenuTrigger render={<Button variant="ghost" size="sm" disabled={!ready} aria-label="Upscale" />}><Maximize2Icon data-icon="inline-start" />Upscale</DropdownMenuTrigger>
+          <DropdownMenuContent side="top" align="center"><DropdownMenuGroup>
+            <DropdownMenuItem onClick={() => void startPictureTool("Upscale", 2)}><span>Upscale 2×</span><span className="ml-auto text-xs text-muted-foreground">2×</span></DropdownMenuItem>
+            <DropdownMenuItem onClick={() => void startPictureTool("Upscale", 4)}><span>Upscale 4×</span><span className="ml-auto text-xs text-muted-foreground">4×</span></DropdownMenuItem>
+          </DropdownMenuGroup></DropdownMenuContent>
+        </DropdownMenu>
         {eraseBlocked ? (
           <Tip label={eraseUnavailableMessage}><span className="inline-flex"><Button variant="ghost" size="sm" disabled><EraserIcon data-icon="inline-start" />Erase</Button></span></Tip>
         ) : (
@@ -418,6 +470,30 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
     </PictureTools>}
     {/* Nested, so the brushed area and the words stay as they are. */}
     <ModelSetupDialog open={findingModel} onOpenChange={open => { setFindingModel(open); if (!open) void checkModel(); }} imageSearch="stable-diffusion inpainting" />
+    <Dialog open={!!pictureChoice} onOpenChange={open => { if (!open) setPictureChoice(null); }}>
+      {pictureChoice && <DialogContent showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>Download {pictureChoice.model.name}?</DialogTitle>
+          <DialogDescription className="flex flex-col gap-2">
+            <span>{pictureChoice.model.note}</span>
+            <span className="text-xs">Size: {localModelSize(pictureChoice.model.bytes)} · License: {pictureChoice.model.license}. Runs locally on your computer without an API key.</span>
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setPictureChoice(null)}>Not now</Button>
+          {keys.fal && <Button variant="secondary" onClick={() => {
+            const { action, scale } = pictureChoice;
+            setPictureChoice(null);
+            void run(action, undefined, "", scale);
+          }}>Use Fal.AI</Button>}
+          <Button autoFocus onClick={() => {
+            const { action, scale, model } = pictureChoice;
+            setPictureChoice(null);
+            void run(action, undefined, "", scale, `${pictureAiPrefix}${model.id}`, model);
+          }}>Download {localModelSize(pictureChoice.model.bytes)}</Button>
+        </DialogFooter>
+      </DialogContent>}
+    </Dialog>
     <Dialog open={!!discard} onOpenChange={open => { if (!open) setDiscard(null); }}>
       <DialogContent showCloseButton={false}><DialogHeader><DialogTitle>{busy ? "Stop editing?" : "Discard changes?"}</DialogTitle><DialogDescription>{busy ? "The request will be cancelled where supported. The provider may still finish work already submitted." : "Your changes won’t be saved."}</DialogDescription></DialogHeader>
         <DialogFooter><Button variant="outline" autoFocus onClick={() => setDiscard(null)}>Keep editing</Button><Button variant="destructive" onClick={() => { const closeViewer = discard === "viewer"; job.current?.abort(); reset(); setTool(null); setCleanup(null); setDiscard(null); if (closeViewer) onClose(); }}>Discard changes</Button></DialogFooter>

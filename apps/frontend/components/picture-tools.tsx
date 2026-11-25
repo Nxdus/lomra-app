@@ -5,7 +5,7 @@ import { GripVerticalIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PopupBoundaryContext } from "@/components/ui/popup-boundary";
 
-export type PictureTool = "Markup" | "Remove BG" | "Erase" | "Resize";
+export type PictureTool = "Markup" | "Remove BG" | "Upscale" | "Erase" | "Resize";
 
 export function PictureTools({ children }: { children: ReactNode }) {
   const boundary = useContext(PopupBoundaryContext);

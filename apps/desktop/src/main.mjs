@@ -14,6 +14,7 @@ import { createGpuQueue } from './gpu-queue.mjs';
 import { createFfmpeg } from './ffmpeg.mjs';
 import { createSd } from './sd.mjs';
 import { validLocalPick } from './sd-local.mjs';
+import { createPictureAi } from './picture-ai.mjs';
 import { createLocal3d, nvidiaMemory } from './local3d.mjs';
 import { createToolBridge, toolConfig } from './tool-bridge.mjs';
 import { generateBrowserImage } from './browser-image.mjs';
@@ -41,6 +42,8 @@ let ffmpegInstance;
 const ffmpeg = () => ffmpegInstance ??= createFfmpeg({ dir: join(app.getPath('userData'), 'ffmpeg') });
 let sdInstance;
 const sd = () => sdInstance ??= createSd({ dir: join(app.getPath('userData'), 'stable-diffusion'), gpuQueue, gpuMemory: async () => await nvidiaMemory({ env: process.env, spawnProcess: spawn }) * 1024 * 1024 });
+let pictureAiInstance;
+const pictureAi = () => pictureAiInstance ??= createPictureAi({ dir: join(app.getPath('userData'), 'picture-ai') });
 let local3dInstance;
 // The first version of local 3D only had Hunyuan3D and kept it in `hunyuan3d`; carry that install over instead of downloading it again.
 const local3dDir = () => {
@@ -332,6 +335,21 @@ ipcMain.handle('sd:generate', async (event, runId, input) => {
 });
 ipcMain.on('sd:cancel', (event, runId) => { if (trusted(event) && typeof runId === 'string') sd().cancel(runId); });
 
+// Local background removal and upscaling (CPU ONNX). Downloads start only after the user agrees.
+ipcMain.handle('picture:status', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return pictureAi().status(); });
+ipcMain.handle('picture:download', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return typeof id === 'string' && pictureAi().download(id); });
+ipcMain.handle('picture:cancelDownload', async (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); if (id === undefined || typeof id === 'string') await pictureAi().cancelDownload(id); });
+ipcMain.handle('picture:remove', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return typeof id === 'string' && pictureAi().remove(id); });
+ipcMain.handle('picture:run', async (event, runId, input) => {
+  if (!trusted(event)) throw new Error('Untrusted sender');
+  try {
+    return await pictureAi().run(runId, input, (progress) => { if (!event.sender.isDestroyed()) event.sender.send('picture:progress', { runId, ...progress }); });
+  } catch (cause) {
+    return { error: cause instanceof Error && cause.name !== 'AbortError' ? cause.message : 'Stopped.' };
+  }
+});
+ipcMain.on('picture:cancel', (event, runId) => { if (trusted(event) && typeof runId === 'string') pictureAi().cancel(runId); });
+
 // Joining the clips of a storyboard into one video. The app asks before downloading ffmpeg; the renderer sends clip bytes only, never a path or a command.
 ipcMain.handle('video:status', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return ffmpeg().status(); });
 ipcMain.handle('video:download', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return ffmpeg().download(); });
@@ -490,6 +508,6 @@ app.on('before-quit', () => {
   server?.kill();
   whisper?.kill();
   ollama.stop();
-  sdInstance?.stop(); local3dInstance?.stop(); ffmpegInstance?.stop();
+  sdInstance?.stop(); pictureAiInstance?.stop(); local3dInstance?.stop(); ffmpegInstance?.stop();
 });
-process.on('exit', () => { if (!quitting) { server?.kill(); whisper?.kill(); ollama.stop(); sdInstance?.stop(); local3dInstance?.stop(); ffmpegInstance?.stop(); } });
+process.on('exit', () => { if (!quitting) { server?.kill(); whisper?.kill(); ollama.stop(); sdInstance?.stop(); pictureAiInstance?.stop(); local3dInstance?.stop(); ffmpegInstance?.stop(); } });

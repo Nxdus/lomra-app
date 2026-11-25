@@ -33,7 +33,7 @@
     <td width="50%" align="center" valign="top">
       <a href="docs/demos/picture-editor.webp"><picture><source srcset="docs/demos/picture-editor.webp" type="image/webp"><img src="docs/demos/picture-editor.poster.jpg" width="420" alt="A desk lamp marked up with an arrow, text, and an ellipse before saving the edited picture to a Lomra canvas"></picture></a>
       <p><strong>Edit a picture on the canvas</strong><br>
-      Choose <strong>Open / Edit</strong> to add arrows, shapes, or text and save a new PNG. Use a compatible image model to erase a brushed area or recompose a picture for a new aspect ratio. <strong>Remove BG</strong> uses Fal.AI.</p>
+      Choose <strong>Open / Edit</strong> to add arrows, shapes, or text and save a new PNG. Use a compatible image model to erase a brushed area or recompose a picture for a new aspect ratio. <strong>Remove BG</strong> and <strong>Upscale 2× / 4×</strong> run locally on desktop (after model download) or through Fal.AI.</p>
     </td>
   </tr>
   <tr>
@@ -57,7 +57,7 @@
     <td width="50%" align="center" valign="top">
       <a href="docs/demos/edit-media.webp"><picture><source srcset="docs/demos/edit-media.webp" type="image/webp"><img src="docs/demos/edit-media.poster.jpg" width="420" alt="A contact sheet split into two images and a turntable clip trimmed with two still frames on a Lomra canvas."></picture></a>
       <p><strong>Edit images and video</strong><br>
-      Crop, split, resize, rotate, or flip images. Extract PNG frames at specific timestamps or trim a clip to WebM. With a Fal.AI key, remove image backgrounds or upscale images 2× or 4×. Edits create new files and keep the originals.</p>
+      Crop, split, resize, rotate, or flip images. Extract PNG frames at specific timestamps or trim a clip to WebM. Remove image backgrounds or upscale images 2× or 4× locally in the desktop app (or with a Fal.AI key). Edits create new files and keep the originals.</p>
     </td>
   </tr>
   <tr>

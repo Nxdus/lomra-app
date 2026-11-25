@@ -170,6 +170,43 @@ export function desktopSd(): DesktopSdApi | undefined {
   return (window as unknown as { lomra?: { sd?: DesktopSdApi } }).lomra?.sd;
 }
 
+export type PictureAiModel = {
+  id: string;
+  operation: "remove-background" | "upscale";
+  name: string;
+  quality: string;
+  note: string;
+  license: string;
+  source: string;
+  bytes: number;
+  installed: boolean;
+  /** Bytes of an unfinished download kept on disk; `download` continues it and `remove` deletes it. 0 when there is none. */
+  partial: number;
+};
+
+export type PictureAiStatus = {
+  supported: boolean;
+  downloading: { id: string; name: string; received: number; total: number } | null;
+  queued: QueuedModel[];
+  error: string | null;
+  models: PictureAiModel[];
+};
+
+/** Local background removal and upscaling of the desktop app. */
+export type DesktopPictureAiApi = {
+  status(): Promise<PictureAiStatus>;
+  download(id: string): Promise<boolean>;
+  cancelDownload(id?: string): Promise<void>;
+  remove(id: string): Promise<boolean>;
+  run(runId: string, input: { operation: "remove-background" | "upscale"; image: string; scale?: 2 | 4 }): Promise<{ image: string; model: string } | { error: string }>;
+  cancel(runId: string): void;
+  onProgress(callback: (event: { runId: string; stage: string; done?: number; total?: number }) => void): () => void;
+};
+
+export function desktopPictureAi(): DesktopPictureAiApi | undefined {
+  return (window as unknown as { lomra?: { picture?: DesktopPictureAiApi } }).lomra?.picture;
+}
+
 export type VideoToolStatus = {
   /** False on a computer the video tool has no build for. */
   supported: boolean;
