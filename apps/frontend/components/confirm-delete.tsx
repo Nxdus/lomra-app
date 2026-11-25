@@ -4,13 +4,14 @@ import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-export function ConfirmDelete({ open, onOpenChange, title, description, onConfirm, disabled = false }: {
+export function ConfirmDelete({ open, onOpenChange, title, description, onConfirm, disabled = false, actionLabel = "Delete" }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   description: string;
   onConfirm: () => void | Promise<void>;
   disabled?: boolean;
+  actionLabel?: string;
 }) {
   const pending = useRef(false);
   const [busy, setBusy] = useState(false);
@@ -25,7 +26,7 @@ export function ConfirmDelete({ open, onOpenChange, title, description, onConfir
           setBusy(true);
           try { await onConfirm(); onOpenChange(false); }
           finally { pending.current = false; setBusy(false); }
-        }}>{busy ? "Deleting…" : "Delete"}</Button>
+        }}>{busy ? actionLabel === "Delete" ? "Deleting…" : "Removing…" : actionLabel}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>;

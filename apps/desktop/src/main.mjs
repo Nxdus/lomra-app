@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron';
 import pty from '@lydell/node-pty';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -13,6 +13,7 @@ import { unloadOllama } from './ollama-unload.mjs';
 import { createGpuQueue } from './gpu-queue.mjs';
 import { createFfmpeg } from './ffmpeg.mjs';
 import { createSd } from './sd.mjs';
+import { validLocalPick } from './sd-local.mjs';
 import { createLocal3d, nvidiaMemory } from './local3d.mjs';
 import { createToolBridge, toolConfig } from './tool-bridge.mjs';
 import { generateBrowserImage } from './browser-image.mjs';
@@ -280,8 +281,41 @@ ipcMain.handle('sd:status', async (event) => { if (!trusted(event)) throw new Er
 ipcMain.handle('sd:download', (event, request) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sd().download(request); });
 const sdLookup = async (lookup) => { try { return { result: await lookup() }; } catch (cause) { return { error: cause instanceof Error ? cause.message : 'Could not reach Hugging Face.' }; } };
 ipcMain.handle('sd:search', (event, query) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sdLookup(() => sd().search(query)); });
-ipcMain.handle('sd:files', (event, repo) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sdLookup(() => sd().files(repo)); });
+ipcMain.handle('sd:files', (event, repo, file) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sdLookup(() => sd().files(repo, file)); });
 ipcMain.handle('sd:inspect', (event, repo, file) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sdLookup(() => sd().inspect(repo, file)); });
+const localLookup = async (action) => {
+  try { return { result: await action() }; }
+  catch (cause) { return { error: cause instanceof Error && !cause.code ? cause.message : 'Could not access the checkpoint.' }; }
+};
+let pickingCheckpoint = false;
+ipcMain.handle('sd:pickLocal', (event, mode, id) => {
+  if (!trusted(event)) throw new Error('Untrusted sender');
+  return localLookup(async () => {
+    if (pickingCheckpoint || !sd().supported) return null;
+    const folder = mode === 'folder';
+    if (!validLocalPick(mode, id) || (mode === 'locate' && !sd().canLocate(id))) throw new Error('Invalid checkpoint selection.');
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return null;
+    pickingCheckpoint = true;
+    try {
+      const choice = await dialog.showOpenDialog(window, folder
+        ? { title: 'Scan for Stable Diffusion checkpoints', properties: ['openDirectory'] }
+        : { title: mode === 'locate' ? 'Locate checkpoint' : 'Add a model from this computer', properties: ['openFile'], filters: [{ name: 'Model checkpoints', extensions: ['safetensors', 'gguf'] }] });
+      if (choice.canceled || !choice.filePaths[0] || event.sender.isDestroyed() || !trusted(event)) return null;
+      return await sd().pickLocal(choice.filePaths[0], folder, id);
+    } finally { pickingCheckpoint = false; }
+  });
+});
+let addingCheckpoint = false;
+ipcMain.handle('sd:addLocal', (event, id, family, downloadEngine) => {
+  if (!trusted(event)) throw new Error('Untrusted sender');
+  return localLookup(async () => {
+    if (addingCheckpoint) throw new Error('Wait for the current checkpoint to finish.');
+    addingCheckpoint = true;
+    try { return await sd().addLocal(id, family, downloadEngine); }
+    finally { addingCheckpoint = false; }
+  });
+});
 ipcMain.handle('sd:cancelDownload', async (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); if (id === undefined || typeof id === 'string') await sd().cancelDownload(id); });
 ipcMain.handle('sd:remove', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return typeof id === 'string' && sd().remove(id); });
 ipcMain.handle('sd:setProfile', async (event, id, profileId) => {

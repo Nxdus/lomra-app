@@ -1,13 +1,14 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { engineError, createSd } from './sd.mjs';
 import { editDimensions, imageSize, sdInput } from './sd-input.mjs';
-import { sdDimensions, sdEngines, sdModels } from './sd-models.mjs';
+import { sdDimensions, sdEngines, sdModels, sdModelUrl } from './sd-models.mjs';
+import { checkpointSample } from './sd-local.mjs';
 
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 const tempDir = () => mkdtempSync(join(tmpdir(), 'lomra-sd-'));
@@ -330,6 +331,125 @@ test('parseHuggingFace accepts owner/name and huggingface.co links only', () => 
   expect(parseHuggingFace('https://huggingface.co/a/b/resolve/main/w.ckpt')).toEqual({ repo: 'a/b' });
   for (const bad of ['https://evil.com/a/b', 'http://huggingface.co/a/b', '../x/y', 'one', '', 'a/b c']) expect(parseHuggingFace(bad)).toBeNull();
   expect(customModelId('a/b', 'w.safetensors')).toMatch(/^hf-[a-z0-9-]+-[a-f0-9]{6}$/);
+  const file = 'weights/half size/w.safetensors';
+  expect(parseHuggingFace('https://huggingface.co/a/b/resolve/main/weights/half%20size/w.safetensors')).toEqual({ repo: 'a/b', file });
+  expect(sdModelUrl({ repo: 'a/b', file })).toBe('https://huggingface.co/a/b/resolve/main/weights/half%20size/w.safetensors');
+  expect(customModelId('a/b', file)).not.toBe(customModelId('a/b', 'weights-half-size-w.safetensors'));
+  for (const part of ['a/../b', 'a/%2e%2e/b', 'a//b', 'a%2fb', 'a/.hidden', 'a/text_encoder_2']) {
+    expect(parseHuggingFace(`https://huggingface.co/a/b/blob/main/${part}/w.safetensors`)).toBeNull();
+  }
+});
+
+test('Hugging Face lists nested files across bounded pages and directly looks up pasted files', async () => {
+  const file = 'versions/half size/model.safetensors';
+  const seen = [];
+  const { sd, dir } = make({ fetchImpl: async (url) => {
+    seen.push(url);
+    if (seen.length === 1) return Response.json(tree, { headers: { link: '<https://huggingface.co/api/models/a/b/tree/main?recursive=true&cursor=next>; rel="next"' } });
+    return Response.json([{ type: 'file', path: file, size: 123, lfs: { oid: sha('nested') } }], { headers: { link: '<https://example.com/api/models/a/b/tree/main>; rel="next"' } });
+  } });
+  try {
+    const files = await sd.files('a/b');
+    expect(seen).toHaveLength(2);
+    expect(files[1]).toEqual({ id: customModelId('a/b', file), file, bytes: 123, sha256: sha('nested') });
+    expect(await sd.files('a/b', file)).toEqual([files[1]]);
+    expect(seen[2]).toBe('https://huggingface.co/api/models/a/b/tree/main/versions/half%20size');
+    await expect(sd.files('a/b', '../secret.safetensors')).rejects.toThrow('not found');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a nested download uses the encoded resolver and verifies the exact file listing', async () => {
+  const file = 'models/half size/nested.safetensors';
+  const seen = [];
+  const { sd, dir } = make({ fetchImpl: async (url) => {
+    seen.push(url);
+    if (url.includes('/tree/')) return Response.json([{ type: 'file', path: file, size: modelBody.length, lfs: { oid: sha(modelBody) } }]);
+    return new Response(url.endsWith('engine.zip') ? engineBody : modelBody);
+  } });
+  try {
+    expect(sd.download({ repo: 'a/b', file, family: 'sd15' })).toBe(true);
+    await wait(() => !sd.status().downloading);
+    expect(seen.slice(1)).toEqual(['https://huggingface.co/api/models/a/b/tree/main/models/half%20size', 'https://huggingface.co/a/b/resolve/main/models/half%20size/nested.safetensors']);
+    expect(sd.status().models.find((model) => model.id === customModelId('a/b', file))?.installed).toBe(true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+function localFixture(context = 768) {
+  const header = Buffer.from(JSON.stringify({
+    'model.diffusion_model.input_blocks.0.0.weight': { shape: [320, 4] },
+    'model.diffusion_model.input_blocks.1.1.transformer_blocks.0.attn2.to_k.weight': { shape: [320, context] },
+    'first_stage_model.decoder.weight': { shape: [1] },
+    'cond_stage_model.encoder.weight': { shape: [1] },
+  }));
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64LE(BigInt(header.length));
+  return Buffer.concat([length, header]);
+}
+
+test('local add and locate use opaque tokens, recheck changed checkpoints, and only forget records on removal', async () => {
+  const { fetchImpl, seen } = fakeFetch();
+  const { spawnProcess, calls } = fakeProcess((proc, args) => { writeFileSync(args[args.indexOf('-o') + 1], 'png'); proc.emit('exit', 0); });
+  const { sd, dir } = make({ fetchImpl, spawnProcess });
+  const first = join(dir, 'Thai space ไทย.safetensors');
+  const moved = join(dir, 'moved.safetensors');
+  try {
+    writeFileSync(first, localFixture());
+    const [candidate] = await sd.pickLocal(first, false);
+    expect(candidate).toMatchObject({ name: 'Thai space ไทย.safetensors', family: 'sd15', label: 'SD 1.5' });
+    expect(JSON.stringify(candidate)).not.toContain(dir);
+    expect(sd.canLocate(first)).toBe(false);
+    await expect(sd.addLocal(first, 'sd15', true)).rejects.toThrow('Choose a checkpoint');
+    await expect(sd.addLocal(candidate.id, 'sd15', { path: first })).rejects.toThrow('Choose a checkpoint');
+    expect(await sd.addLocal(candidate.id, 'sd15', false)).toBe(true);
+    expect(seen).toHaveLength(0);
+    expect(sd.download(candidate.id)).toBe(true);
+    await wait(() => !sd.status().downloading);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEndWith('engine.zip');
+    expect(sd.status().models.find((model) => model.local)).toMatchObject({ id: candidate.id, installed: true });
+    expect(JSON.stringify(sd.status())).not.toContain(dir);
+    const [duplicate] = await sd.pickLocal(first, false);
+    await expect(sd.addLocal(duplicate.id, 'sd15', false)).rejects.toThrow('already in Lomra');
+    await sd.generate(runId, { model: candidate.id, prompt: 'test' });
+    expect(calls[0].args[calls[0].args.indexOf('-m') + 1]).toBe(first);
+    renameSync(first, moved);
+    await sd.probe();
+    expect(sd.status().models.find((model) => model.local)?.localState).toBe('missing');
+    renameSync(moved, first);
+    await sd.probe();
+    expect(sd.status().models.find((model) => model.local)?.installed).toBe(true);
+    writeFileSync(first, localFixture(2048));
+    await expect(sd.generate(runId, { model: candidate.id, prompt: 'test' })).rejects.toThrow('missing or changed');
+    expect(calls).toHaveLength(1);
+    expect(await sd.setProfile(candidate.id, 'sdxl')).toBe(true);
+    renameSync(first, moved);
+    const [replacement] = await sd.pickLocal(moved, false, candidate.id);
+    expect(await sd.addLocal(replacement.id, 'sdxl', false)).toBe(true);
+    expect(sd.remove(candidate.id)).toBe(true);
+    expect(readFileSync(moved)).toEqual(localFixture(2048));
+    expect(sd.status().models.some((model) => model.local)).toBe(false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a matching local built-in uses the existing id without downloading its weights', async () => {
+  const assets = tempDir();
+  const file = join(assets, 'renamed.safetensors');
+  writeFileSync(file, localFixture());
+  const bytes = localFixture().length;
+  const sample = await checkpointSample(file, bytes);
+  const { sd, dir } = make({ models: [{ ...models[0], bytes, sample }], fetchImpl: fakeFetch().fetchImpl });
+  try {
+    const [candidate] = await sd.pickLocal(file, false);
+    await sd.addLocal(candidate.id, 'sd15', false);
+    expect(sd.status().models).toEqual([expect.objectContaining({ id: 'tiny', local: true })]);
+    expect(sd.download({ repo: 'a/b', file: 'tiny.safetensors', family: 'sd15' })).toBe(false);
+    expect(sd.remove('tiny')).toBe(true);
+    expect(sd.status().models).toEqual([expect.objectContaining({ id: 'tiny', installed: false })]);
+    expect(existsSync(file)).toBe(true);
+  } finally {
+    rmSync(assets, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('files lists top-level checkpoints with Hugging Face’s hashes and explains failures', async () => {

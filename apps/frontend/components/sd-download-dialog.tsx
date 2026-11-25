@@ -40,13 +40,13 @@ export function SdDownloadDialog({ repo, status, onClose, onDownload }: {
 
   useEffect(() => {
     let active = true;
-    void loadSdFiles(repo.id).then((reply) => {
+    void loadSdFiles(repo.id, repo.file).then((reply) => {
       if (!active) return;
       if ("error" in reply) setError(reply.error);
       else setFiles(reply.result);
     });
     return () => { active = false; };
-  }, [repo.id]);
+  }, [repo.id, repo.file]);
 
   useEffect(() => {
     if (!name) return;

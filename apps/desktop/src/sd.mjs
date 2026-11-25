@@ -1,14 +1,15 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { open } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { open, stat } from 'node:fs/promises';
+import { basename, dirname, extname, join, win32 } from 'node:path';
 import { agentEnv } from './agents.mjs';
 import { createGpuQueue, whenGone } from './gpu-queue.mjs';
 import { createDownloadQueue, downloadFile, extractZip, listParts, partBytes, removeParts } from './download.mjs';
 import { namedFewStep, readCheckpoint } from './sd-header.mjs';
 import { editDimensions, sdInput } from './sd-input.mjs';
-import { aspectRatioOf, customModelId, defaultSdModel, hfFilePattern, hfRepoPattern, parseHuggingFace, sdDimensions, sdEngineUrl, sdEngines, sdModelUrl, sdModels, sdRelease } from './sd-models.mjs';
+import { checkpointSample, localModelId, newLocalModelId, readLocalCheckpoint, scanCheckpoints, validLocalRecord } from './sd-local.mjs';
+import { aspectRatioOf, customModelId, defaultSdModel, encodeHfPath, hfFilePattern, hfRepoPattern, parseHuggingFace, sdDimensions, sdEngineUrl, sdEngines, sdModelUrl, sdModels, sdRelease } from './sd-models.mjs';
 import { compatibleSdProfiles, findSdProfile, publicSdProfile, resolveSdProfile, sdProfiles } from './sd-profiles.mjs';
 
 const binaryName = (platform) => platform === 'win32' ? 'sd-cli.exe' : 'sd-cli';
@@ -38,8 +39,11 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
   const engineDir = join(engineRoot, sdRelease);
   const exe = join(engineDir, binaryName(platform));
   const customDir = join(dir, 'custom');
-  const modelFile = (model) => model.custom ? join(customDir, `${model.id}${model.ext}`) : join(dir, 'models', `${model.id}.safetensors`);
+  const localDir = join(dir, 'local');
+  const presetIds = models.filter((model) => model.sample).map((model) => model.id);
+  const modelFile = (model) => model.local ? model.path : model.custom ? join(customDir, `${model.id}${model.ext}`) : join(dir, 'models', `${model.id}.safetensors`);
   const metaFile = (id) => join(customDir, `${id}.json`);
+  const localFile = (id) => join(localDir, `${id}.json`);
   const profile = (id) => findSdProfile(id, profiles);
   const modelProfile = (model) => resolveSdProfile(model, profiles);
   /** A model the user added from Hugging Face, rebuilt from the record saved next to its weights. */
@@ -56,25 +60,54 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
       });
     } catch { return []; }
   };
-  const allModels = () => [...models, ...customModels()];
+  const localModels = () => {
+    try {
+      return readdirSync(localDir).filter((name) => name.endsWith('.json')).flatMap((name) => {
+        try {
+          const record = JSON.parse(readFileSync(join(localDir, name), 'utf8'));
+          if (!validLocalRecord(record, presetIds) || name !== `${record.id}.json` || !profile(record.family)) return [];
+          const ext = extname(record.path);
+          return [{ ...record, ext, name: basename(record.path, ext), quality: profile(record.family).name, note: 'From this computer', custom: true, local: true }];
+        } catch { return []; }
+      });
+    } catch { return []; }
+  };
+  const allModels = () => {
+    const local = localModels();
+    return [...models.filter((model) => !local.some((item) => item.id === model.id)), ...customModels(), ...local];
+  };
   /** Bytes of an unfinished download of `model`. */
-  const partial = (model) => existsSync(modelFile(model)) ? 0 : partBytes(modelFile(model), model.sha256);
+  const partial = (model) => model.local || existsSync(modelFile(model)) ? 0 : partBytes(modelFile(model), model.sha256);
   /** The built-in model a Hugging Face file is, so it is not kept twice. */
   const preset = (repo, file) => models.find((model) => model.repo === repo && model.file === file);
   const find = (id) => allModels().find((model) => model.id === (id ?? defaultSdModel));
 
-  /** Single-file checkpoints at the top of a Hugging Face repository, with the size and SHA-256 it reports. */
-  async function listFiles(repo, signal = AbortSignal.timeout(15_000)) {
+  /** Single-file checkpoints with the size and SHA-256 Hugging Face reports. */
+  async function listFiles(repo, file, signal = AbortSignal.timeout(15_000)) {
     if (typeof repo !== 'string' || !hfRepoPattern.test(repo)) throw new Error('Enter a Hugging Face model as owner/name.');
-    let response;
-    try { response = await fetchImpl(`https://huggingface.co/api/models/${repo}/tree/main`, { signal }); } catch { throw new Error('Could not reach Hugging Face.'); }
-    if (response.status === 404) throw new Error('That model was not found on Hugging Face.');
-    // Hugging Face answers 401 for a repository that does not exist as well as for a private or gated one.
-    if (response.status === 401 || response.status === 403) throw new Error('That model was not found, or it needs a Hugging Face login, which Lomra does not support.');
-    if (!response.ok) throw new Error('Could not reach Hugging Face.');
-    const items = await response.json().catch(() => []);
-    return (Array.isArray(items) ? items : []).flatMap((item) => item?.type === 'file' && hfFilePattern.test(item.path ?? '') && /^[a-f0-9]{64}$/.test(item.lfs?.oid ?? '') && Number.isFinite(item.size) && item.size > 0
-      ? [{ id: preset(repo, item.path)?.id ?? customModelId(repo, item.path), file: item.path, bytes: item.size, sha256: item.lfs.oid }] : []).slice(0, 50);
+    if (file !== undefined && (typeof file !== 'string' || !hfFilePattern.test(file))) throw new Error('That file was not found in the model.');
+    const folder = file && dirname(file).replaceAll('\\', '/');
+    const tree = `https://huggingface.co/api/models/${repo}/tree/main${folder && folder !== '.' ? `/${encodeHfPath(folder)}` : ''}`;
+    let url = file ? tree : `${tree}?recursive=true`;
+    const files = [];
+    for (let page = 0; url && page < 4; page++) {
+      let response;
+      try { response = await fetchImpl(url, { signal, redirect: 'error' }); } catch { throw new Error('Could not reach Hugging Face.'); }
+      if (response.status === 404) throw new Error('That model or folder was not found on Hugging Face.');
+      if (response.status === 401 || response.status === 403) throw new Error('That model was not found, or it needs a Hugging Face login, which Lomra does not support.');
+      if (!response.ok) throw new Error('Could not reach Hugging Face.');
+      const items = await response.json().catch(() => []);
+      for (const item of Array.isArray(items) ? items.slice(0, 1000) : []) {
+        if (item?.type !== 'file' || typeof item.path !== 'string' || !hfFilePattern.test(item.path)
+          || !/^[a-f0-9]{64}$/.test(item.lfs?.oid ?? '') || !Number.isSafeInteger(item.size) || item.size <= 0 || (file && item.path !== file)) continue;
+        files.push({ id: preset(repo, item.path)?.id ?? customModelId(repo, item.path), file: item.path, bytes: item.size, sha256: item.lfs.oid });
+        if (file || files.length === 50) return files;
+      }
+      const next = response.headers?.get('link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
+      const parsed = URL.canParse(next, tree) && new URL(next, tree);
+      url = parsed && `${parsed.origin}${parsed.pathname}` === tree && !parsed.username && !parsed.password ? parsed.href : null;
+    }
+    return files;
   }
   const downloads = createDownloadQueue(install, failure);
   const runs = new Map();
@@ -83,6 +116,49 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
   let probing;
   /** Header classification (`{ supported, inpaint, headerType }`) cached once per installed custom model. */
   const headers = new Map();
+  const localHeaders = new Map();
+  const candidates = new Map();
+  let selection = 0;
+
+  function writeLocal(id, { path, bytes, mtimeMs }, family) {
+    mkdirSync(localDir, { recursive: true });
+    const temp = `${localFile(id)}.tmp`;
+    try {
+      writeFileSync(temp, JSON.stringify({ id, path, bytes, mtimeMs, family }));
+      renameSync(temp, localFile(id));
+    } finally { rmSync(temp, { force: true }); }
+  }
+
+  async function checkLocal(model) {
+    const info = await stat(model.path).catch(() => null);
+    if (!info?.isFile()) {
+      const result = { state: 'missing' };
+      localHeaders.set(model.id, result);
+      return result;
+    }
+    const stamp = `${model.path}\0${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+    const cached = localHeaders.get(model.id);
+    if (cached?.stamp === stamp) return cached;
+    const found = await readLocalCheckpoint(model.path).catch(() => null);
+    const result = { stamp, state: found ? 'ready' : 'changed', found };
+    localHeaders.set(model.id, result);
+    return result;
+  }
+
+  const compatible = (found, family) => compatibleSdProfiles(found.header, profiles).some((item) => item.id === family);
+  const localState = (model, result) => result?.state === 'ready' && !compatible(result.found, model.family) ? 'changed' : result?.state;
+
+  async function duplicate(found, sample, except) {
+    const sameSize = allModels().filter((model) => model.id !== except && (model.local || model.bytes === found.bytes));
+    for (const model of sameSize) {
+      const path = modelFile(model);
+      if (path === found.resolved || path === found.path) return true;
+      const info = await stat(path).catch(() => null);
+      if (!info?.isFile() || info.size !== found.bytes) continue;
+      if (sample && sample === await checkpointSample(path, found.bytes).catch(() => null)) return true;
+    }
+    return false;
+  }
 
   /** What a Hugging Face checkpoint is, read from its first bytes without downloading it; `known` is false when they cannot be read. */
   async function inspect(repo, file) {
@@ -148,10 +224,10 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
         rmSync(zip, { force: true });
       }
     }
-    if (!existsSync(modelFile(model))) {
+    if (!model.local && !existsSync(modelFile(model))) {
       if (model.custom) {
         // The size and hash come from Hugging Face's own listing, so a corrupted download is still caught.
-        const info = (await listFiles(model.repo, AbortSignal.any([signal, AbortSignal.timeout(15_000)]))).find((item) => item.file === model.file);
+        const [info] = await listFiles(model.repo, model.file, AbortSignal.any([signal, AbortSignal.timeout(15_000)]));
         if (!info) throw new Error('That file was not found in the model.');
         model = { ...model, bytes: info.bytes, sha256: info.sha256 };
         // Saved before the download, so that it can be continued after a restart.
@@ -171,6 +247,22 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
 
   async function execute(runId, model, resolvedProfile, { prompt, aspectRatio, image, mask, settings }, controller, onProgress) {
     controller.signal.throwIfAborted();
+    let checkpointPath = modelFile(model);
+    if (model.local) {
+      const result = await checkLocal(model);
+      if (localState(model, result) !== 'ready') throw new Error('The checkpoint is missing or changed. Open Settings → Local models to locate it or update its profile.');
+      const { found } = result;
+      // The pinned Windows engine needs the extended-length path form once MAX_PATH is reached.
+      checkpointPath = platform === 'win32' && found.resolved.length >= 260 ? win32.toNamespacedPath(found.resolved) : found.resolved;
+      if (found.bytes !== model.bytes || found.mtimeMs !== model.mtimeMs) {
+        const current = localModels().find((item) => item.id === model.id);
+        if (current?.path === model.path) {
+          try { writeLocal(model.id, found, current.family); }
+          catch { throw new Error('Could not update the checkpoint record.'); }
+        }
+      }
+      controller.signal.throwIfAborted();
+    }
     const outDir = join(dir, 'out');
     // Best effort: what the engine still holds goes with the next run, since only one runs at a time.
     const clear = (folder, maxRetries = 0) => { try { rmSync(folder, { recursive: true, force: true, maxRetries }); } catch { /* still in use */ } };
@@ -178,7 +270,7 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
     const runDir = join(outDir, runId);
     const out = join(runDir, 'out.png');
     const { width, height } = image ? editDimensions(aspectRatio ? aspectRatioOf(aspectRatio) : image.width / image.height, resolvedProfile.size) : sdDimensions(aspectRatio, resolvedProfile.size);
-    const args = ['-m', modelFile(model), '-p', prompt, '-o', out, '-W', String(width), '-H', String(height), '--steps', String(settings.steps), '--cfg-scale', String(settings.cfg), '-s', String(settings.seed)];
+    const args = ['-m', checkpointPath, '-p', prompt, '-o', out, '-W', String(width), '-H', String(height), '--steps', String(settings.steps), '--cfg-scale', String(settings.cfg), '-s', String(settings.seed)];
     // Tiling saves memory but shifts colors from tile to tile, which shows as a seam around an edited area.
     if (!image || width * height > 512 * 512) args.push('--vae-tiling');
     if (settings.negativePrompt) args.push('-n', settings.negativePrompt);
@@ -221,8 +313,15 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
         whenGone(proc).then((status) => { controller.signal.removeEventListener('abort', stop); resolve(status); }, () => reject(new Error('The image engine could not start.')));
       });
       if (controller.signal.aborted) throw new Error('Stopped.');
-      if (code !== 0 || !existsSync(out)) throw new Error(engineError(output));
+      if (code !== 0 || !existsSync(out)) {
+        const message = engineError(output);
+        throw new Error(model.local && message.startsWith('Image generation failed')
+          ? 'The image engine could not run this checkpoint. Check that the drive is connected and the file is readable.' : message);
+      }
       return { image: `data:image/png;base64,${readFileSync(out).toString('base64')}`, settings };
+    } catch (cause) {
+      if (model.local && cause?.path) throw new Error('The image engine could not access its files.');
+      throw cause;
     } finally {
       clear(runDir, 5);
     }
@@ -242,32 +341,85 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
         gpuBytes,
         profiles: profiles.map((item) => publicSdProfile(resolveSdProfile(item, profiles))),
         models: allModels().map((model) => {
-          const installed = existsSync(modelFile(model));
+          const local = model.local && localHeaders.get(model.id);
+          const state = model.local ? localState(model, local) ?? 'missing' : undefined;
+          const installed = model.local ? state === 'ready' && existsSync(exe) : existsSync(modelFile(model));
           const resolved = modelProfile(model);
-          const header = headers.get(model.id);
+          const header = model.local ? local?.found?.header : headers.get(model.id);
           return {
-            id: model.id, name: model.name, quality: model.quality, note: model.note, bytes: model.bytes,
+            id: model.id, name: model.name, quality: model.quality, note: model.note, bytes: local?.found?.bytes ?? model.bytes,
             recommended: !!model.default, installed, partial: partial(model), custom: !!model.custom,
+            ...(model.local ? { local: true, localState: state } : {}),
             inpaint: header?.inpaint ?? false,
             profile: publicSdProfile(resolved),
-            ...(model.custom && installed ? {
+            ...(model.custom && (installed || header) ? {
               compatibleProfiles: compatibleSdProfiles(header, profiles).map((item) => item.id),
             } : {}),
           };
-        }).filter((model) => !model.custom || model.installed || model.partial),
+        }).filter((model) => model.local || !model.custom || model.installed || model.partial),
       };
     },
     /** Finds out what `status()` cannot read at once: the graphics memory and which added models are made for inpainting. Never rejects. */
     async probe() {
       probing ??= gpuMemory().then((bytes) => { gpuBytes = Number.isFinite(bytes) ? bytes : 0; }, () => {});
-      await Promise.all([probing, ...customModels().filter((model) => !headers.has(model.id) && existsSync(modelFile(model))).map(async (model) => {
+      await Promise.all([probing, ...localModels().map(checkLocal), ...customModels().filter((model) => !headers.has(model.id) && existsSync(modelFile(model))).map(async (model) => {
         headers.set(model.id, await probeFile(model).catch(() => ({ supported: true, inpaint: false, headerType: null })));
       })]);
+    },
+    canLocate(id) { return typeof id === 'string' && localModels().some((item) => item.id === id); },
+    async pickLocal(path, folder, replace) {
+      const current = ++selection;
+      candidates.clear();
+      const target = replace && localModels().find((model) => model.id === replace);
+      if (!engine || (replace && !target)) return [];
+      const scan = folder ? await scanCheckpoints(path) : { files: [path] };
+      const publicFiles = [];
+      for (const file of scan.files) {
+        const candidate = await readLocalCheckpoint(file, scan.root).catch((cause) => { if (!folder) throw cause; return null; });
+        if (current !== selection) return [];
+        if (!candidate) continue;
+        const id = newLocalModelId();
+        candidates.set(id, { ...candidate, root: scan.root, replace });
+        const { label, inpaint, fewStep, family, fewStepFamily } = candidate.header;
+        publicFiles.push({ id, name: basename(file), bytes: candidate.bytes, label, inpaint, family,
+          suggestedProfile: fewStep ? fewStepFamily : family,
+          compatibleProfiles: compatibleSdProfiles(candidate.header, profiles).map((item) => item.id) });
+      }
+      return publicFiles;
+    },
+    async addLocal(id, family, downloadEngine) {
+      if (typeof id !== 'string' || !localModelId.test(id) || typeof family !== 'string' || !profile(family) || typeof downloadEngine !== 'boolean') throw new Error('Choose a checkpoint and a compatible profile.');
+      const candidate = candidates.get(id);
+      if (!candidate) throw new Error('Choose the checkpoint again.');
+      candidates.delete(id);
+      const found = await readLocalCheckpoint(candidate.path, candidate.root);
+      if (found.resolved !== candidate.resolved || found.bytes !== candidate.bytes || found.mtimeMs !== candidate.mtimeMs) throw new Error('The checkpoint changed. Choose it again.');
+      if (!compatible(found, family)) throw new Error('Choose a profile compatible with this checkpoint.');
+      const sample = await checkpointSample(found.resolved, found.bytes).catch(() => null);
+      const builtIn = models.find((model) => model.bytes === found.bytes && model.sample && model.sample === sample);
+      if (candidate.replace && (presetIds.includes(candidate.replace) || builtIn) && candidate.replace !== builtIn?.id) throw new Error('Choose the original checkpoint file for this model.');
+      if (await duplicate(found, sample, candidate.replace)) throw new Error('This checkpoint is already in Lomra.');
+      const modelId = candidate.replace ?? builtIn?.id ?? id;
+      if (candidate.replace && (runs.size || downloads.has(modelId) || !localModels().some((model) => model.id === modelId))) throw new Error('The model cannot be located right now.');
+      if (!candidate.replace && builtIn && (downloads.has(modelId) || existsSync(modelFile(builtIn)))) throw new Error('This checkpoint is already in Lomra.');
+      if (localModels().some((model) => (!candidate.replace || model.id !== modelId) && (model.id === modelId || model.path === found.path))) throw new Error('This checkpoint is already in Lomra.');
+      writeLocal(modelId, found, family);
+      const model = localModels().find((item) => item.id === modelId);
+      await checkLocal(model);
+      if (downloadEngine && !existsSync(exe)) this.download(modelId);
+      return true;
     },
     inspect,
     /** Updates the profile of an installed Hugging Face model when it is compatible with the file's header. */
     async setProfile(id, profileId) {
       if (typeof id !== 'string' || typeof profileId !== 'string') return false;
+      const local = localModels().find((item) => item.id === id);
+      if (local) {
+        const { found } = await checkLocal(local);
+        if (!found || !compatible(found, profileId) || !localModels().some((item) => item.id === id && item.path === local.path)) return false;
+        writeLocal(id, found, profileId);
+        return true;
+      }
       const model = customModels().find((item) => item.id === id);
       if (!model || !existsSync(modelFile(model)) || downloads.has(id)) return false;
       const next = profile(profileId);
@@ -294,21 +446,24 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
         const kind = profile(request.family);
         if (!kind || typeof request.repo !== 'string' || typeof request.file !== 'string' || !hfRepoPattern.test(request.repo) || !hfFilePattern.test(request.file)) return false;
         const ext = extname(request.file).toLowerCase();
-        model = preset(request.repo, request.file) ?? { id: customModelId(request.repo, request.file), name: request.file.slice(0, -ext.length), custom: true, repo: request.repo, file: request.file, family: kind.id, profile: kind.id, ext, bytes: 0 };
+        const builtIn = preset(request.repo, request.file);
+        if (builtIn && find(builtIn.id)?.local) return false;
+        model = builtIn ?? { id: customModelId(request.repo, request.file), name: request.file.slice(0, -ext.length), custom: true, repo: request.repo, file: request.file, family: kind.id, profile: kind.id, ext, bytes: 0 };
       } else model = find(request);
       if (!engine || !model) return false;
       return downloads.add({ id: model.id, name: model.name, model, stage: 'engine', received: 0, total: 0 });
     },
     /** Single-file checkpoints of a Hugging Face repository (`owner/name`). Rejects with a message the user can read. */
-    files(repo) { return listFiles(repo); },
+    files(repo, file) { return listFiles(repo, file); },
     /**
      * `{ repo, file? }` when `query` is a Hugging Face `owner/name` or link, else the text-to-image models
      * matching it that have a usable file, most downloaded first.
      */
     async search(query) {
-      if (typeof query !== 'string' || !query.trim() || query.length > 200) throw new Error('Enter something to search for.');
+      if (typeof query !== 'string' || !query.trim() || query.length > 1800) throw new Error('Enter something to search for.');
       const direct = query.includes('/') ? parseHuggingFace(query) : null;
       if (direct) return { ...direct, models: [] };
+      if (query.includes('://')) throw new Error('Enter a supported Hugging Face model or checkpoint link.');
       if (query.length > 100) throw new Error('Enter something to search for.');
       let response;
       try { response = await fetchImpl(`https://huggingface.co/api/models?${new URLSearchParams({ search: query.trim(), filter: 'text-to-image', sort: 'downloads', limit: '40', full: 'true' })}`, { signal: AbortSignal.timeout(15_000) }); } catch { throw new Error('Could not reach Hugging Face.'); }
@@ -332,6 +487,13 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
     /** Deletes a model or its unfinished download; the engine goes with the last one. */
     remove(id) {
       const model = allModels().find((item) => item.id === id);
+      if (model?.local) {
+        if (downloads.has(id) || runs.size) return false;
+        rmSync(localFile(id), { force: true });
+        downloads.forget(id);
+        localHeaders.delete(id);
+        return true;
+      }
       // Which model an image is being made with is not known here, so installed ones stay until it is done.
       if (!model || downloads.has(id) || (runs.size && existsSync(modelFile(model)))) return false;
       rmSync(modelFile(model), { force: true });
@@ -340,7 +502,7 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
       headers.delete(id);
       if (model.custom) rmSync(metaFile(model.id), { force: true });
       const holds = (folder) => existsSync(folder) && readdirSync(folder).some((file) => /\.(?:safetensors|gguf)(?:\.[a-f0-9]{16}\.part)?$/.test(file));
-      const left = holds(join(dir, 'models')) || holds(customDir);
+      const left = holds(join(dir, 'models')) || holds(customDir) || localModels().length;
       if (!left && downloads.idle && !runs.size) rmSync(engineRoot, { recursive: true, force: true });
       return true;
     },
@@ -348,7 +510,8 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
     generate(runId, input, onProgress) {
       const model = input && typeof input === 'object' ? allModels().find((item) => item.id === input.model) : undefined;
       if (typeof runId !== 'string' || !/^[a-f0-9-]{36}$/.test(runId) || runs.has(runId)) return Promise.reject(new Error('Invalid image run.'));
-      if (!model || !engine || !existsSync(exe) || !existsSync(modelFile(model))) return Promise.reject(new Error('Download this model in Settings → Local models first.'));
+      if (model?.local && !existsSync(exe)) return Promise.reject(new Error('Download the image engine in Settings → Local models first.'));
+      if (!model || !engine || !existsSync(exe) || (!model.local && !existsSync(modelFile(model)))) return Promise.reject(new Error('Download this model in Settings → Local models first.'));
       const resolved = modelProfile(model);
       let request;
       try { request = sdInput(input, resolved); } catch (cause) { return Promise.reject(cause); }

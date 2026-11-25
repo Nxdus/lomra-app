@@ -107,8 +107,10 @@ export type SdModel = {
   id: string; name: string; quality: string; note: string; bytes: number; recommended: boolean; installed: boolean;
   /** Bytes of an unfinished download kept on disk; `download` continues it and `remove` deletes it. 0 when there is none. */
   partial: number;
-  /** Added from Hugging Face rather than one of the built-in models; `note` is then its repository. */
+  /** Added from Hugging Face or from this computer. */
   custom: boolean;
+  local?: boolean;
+  localState?: "ready" | "missing" | "changed";
   /** Made for filling in a brushed area; only known for models the user added. */
   inpaint: boolean;
   /** Resolved profile for this model. */
@@ -119,6 +121,7 @@ export type SdModel = {
 /** What a Hugging Face file is, from its header. `fewStep` is a guess from its name; the two families are what to download it as. */
 export type SdInspection = { known: false } | { known: true; supported: false }
   | { known: true; supported: true; label: string; inpaint: boolean; family: string; fewStepFamily: string; fewStep: boolean };
+export type SdLocalCandidate = { id: string; name: string; bytes: number; label: string; inpaint: boolean; suggestedProfile: string; compatibleProfiles: string[] };
 export type SdDownloadRequest = string | { repo: string; file: string; family: string };
 export type SdStatus = {
   /** False on a computer the image engine has no build for. */
@@ -144,10 +147,12 @@ export type DesktopSdApi = {
   download(request?: SdDownloadRequest): Promise<boolean>;
   /** A Hugging Face `owner/name` or link gives `repo` (and `file` for a file link); other text searches text-to-image models with a usable file. */
   search(query: string): Promise<{ result: { repo?: string; file?: string; models: { id: string; downloads: number; license?: string }[] } } | { error: string }>;
-  /** Single-file checkpoints at the top of a Hugging Face repository; `id` is the model each one becomes in `status()`. */
-  files(repo: string): Promise<{ result: { id: string; file: string; bytes: number; sha256: string }[] } | { error: string }>;
+  /** Lists checkpoints in a Hugging Face repository or looks up a specific checkpoint. */
+  files(repo: string, file?: string): Promise<{ result: { id: string; file: string; bytes: number; sha256: string }[] } | { error: string }>;
   /** What one of those files is, read from its first bytes. */
   inspect(repo: string, file: string): Promise<{ result: SdInspection } | { error: string }>;
+  pickLocal(mode: "file" | "folder" | "locate", id?: string): Promise<{ result: SdLocalCandidate[] | null } | { error: string }>;
+  addLocal(id: string, family: string, downloadEngine: boolean): Promise<{ result: true } | { error: string }>;
   /** Stop the download of one model (the running one when omitted); what was downloaded is kept. */
   cancelDownload(id?: string): Promise<void>;
   /** Delete a downloaded model or its unfinished download; the engine goes with the last one. */
