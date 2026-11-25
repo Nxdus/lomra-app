@@ -65,6 +65,7 @@ export function SdSettingsPopover({ model, sdStatus, disabled }: { model: string
   const anySaved = Object.keys(settings).length > 0;
   const change = (next: SdSettings) => changeSdSettings(model, { ...settings, ...next }, saveFailed);
   const label = changed ? "Image settings (changed)" : "Image settings";
+  const effectiveCfg = settings.cfg ?? caps.defaults.cfg;
   const defaultPlaceholder = (value?: number) => value === undefined ? "Default" : `Default (${value})`;
 
   return <Popover>
@@ -78,7 +79,10 @@ export function SdSettingsPopover({ model, sdStatus, disabled }: { model: string
       </div>
       <FieldGroup key={model} className="gap-3">
         {caps.negativePrompt && <Field>
-          <FieldLabel htmlFor={`${id}-negative`}>Negative prompt</FieldLabel>
+          <div className="flex items-baseline justify-between gap-2">
+            <FieldLabel htmlFor={`${id}-negative`}>Negative prompt</FieldLabel>
+            {effectiveCfg === 1 && <span className="text-xs text-muted-foreground">No effect at CFG 1</span>}
+          </div>
           <Textarea id={`${id}-negative`} rows={2} className="max-h-32" maxLength={caps.negativePromptLimit} placeholder="What to keep out of the picture"
             value={settings.negativePrompt ?? ""} onChange={(event) => change({ negativePrompt: event.target.value })} />
         </Field>}
@@ -95,11 +99,7 @@ export function SdSettingsPopover({ model, sdStatus, disabled }: { model: string
           <NumberField range={caps.ranges.steps} label="Steps" placeholder={defaultPlaceholder(caps.defaults.steps)} step={1} value={settings.steps} onChange={(steps) => change({ steps })} />
         )}
         {caps.strength && <NumberField range={caps.ranges.strength} label="Strength for edits" placeholder={defaultPlaceholder(caps.defaults.strength)} step={0.05} value={settings.strength} onChange={(strength) => change({ strength })} />}
-        <FieldDescription>
-          {caps.strength ? "Higher strength changes a picture more. " : ""}
-          {!caps.cfg && !caps.negativePrompt ? "Runs at fixed CFG 1 (no negative prompt). " : ""}
-          Empty fields use the model’s defaults.
-        </FieldDescription>
+        <FieldDescription>{caps.strength ? "Higher strength changes a picture more. " : ""}Empty fields use the model’s defaults.</FieldDescription>
       </FieldGroup>
     </PopoverContent>
   </Popover>;

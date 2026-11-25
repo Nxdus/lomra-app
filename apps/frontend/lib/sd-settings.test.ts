@@ -1,6 +1,7 @@
 // @ts-expect-error Bun provides this module at test runtime; Next.js does not load it.
 import { expect, test } from "bun:test";
 import { validateValue } from "./local-store/validation";
+import { validSdRangeNumber } from "./sd-settings";
 import { changeSdSettings, loadSdSettings, sdSettingsOf, subscribeSdSettings } from "./sd-settings-store";
 
 const setting = (value: unknown) => validateValue("settings", "sd-settings", value);
@@ -45,4 +46,11 @@ test("settings are kept per model, load once, save what changed and drop what wa
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(saved).toEqual([{ turbo: { steps: 4 } }]);
   } finally { unsubscribe(); globalThis.fetch = original; }
+});
+
+test("profile range validation flags saved values outside a narrower profile range", () => {
+  const narrow = { min: 1, max: 12, whole: true };
+  expect(validSdRangeNumber(narrow, 4)).toBe(true);
+  expect(validSdRangeNumber(narrow, 25)).toBe(false);
+  expect(validSdRangeNumber(narrow, 2.5)).toBe(false);
 });

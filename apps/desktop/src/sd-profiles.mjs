@@ -23,8 +23,6 @@ export const defaultSdRanges = {
 export const defaultSdStrength = 0.75;
 
 const fullCapabilities = { ...defaultSdCapabilities };
-// With CFG 1 the unconditional pass is skipped, so a negative prompt has no effect.
-const fewStepCapabilities = { ...defaultSdCapabilities, negativePrompt: false, cfg: false };
 
 export const sdProfiles = [
   {
@@ -69,11 +67,11 @@ export const sdProfiles = [
     strength: defaultSdStrength,
     headerTypes: ['sd15', 'sdxl'],
     ranges: {
-      steps: { min: 1, max: 12, whole: true },
-      cfg: { min: 1, max: 1, whole: false },
+      steps: { min: 1, max: 50, whole: true },
+      cfg: { min: 0, max: 20, whole: false },
       strength: { min: 0, max: 1, whole: false },
     },
-    capabilities: fewStepCapabilities,
+    capabilities: fullCapabilities,
   },
   {
     id: 'sdxl-few',
@@ -85,11 +83,11 @@ export const sdProfiles = [
     strength: defaultSdStrength,
     headerTypes: ['sdxl'],
     ranges: {
-      steps: { min: 1, max: 12, whole: true },
-      cfg: { min: 1, max: 1, whole: false },
+      steps: { min: 1, max: 50, whole: true },
+      cfg: { min: 0, max: 20, whole: false },
       strength: { min: 0, max: 1, whole: false },
     },
-    capabilities: fewStepCapabilities,
+    capabilities: fullCapabilities,
   },
 ];
 

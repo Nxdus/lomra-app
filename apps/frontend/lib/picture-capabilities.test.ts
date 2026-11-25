@@ -12,16 +12,16 @@ const turboProfile: SdProfile = {
   cfg: 1,
   strength: 0.75,
   ranges: {
-    steps: { min: 1, max: 12, whole: true },
-    cfg: { min: 1, max: 1, whole: false },
+    steps: { min: 1, max: 50, whole: true },
+    cfg: { min: 0, max: 20, whole: false },
     strength: { min: 0, max: 1, whole: false },
   },
   capabilities: {
     textToImage: true,
     imageToImage: true,
     inpaint: true,
-    negativePrompt: false,
-    cfg: false,
+    negativePrompt: true,
+    cfg: true,
     strength: true,
     outpaint: false,
     referencePictures: false,
@@ -70,13 +70,13 @@ const status: SdStatus = {
 
 test("pictureCapabilities derives local model capabilities and ranges from sdStatus", () => {
   const turbo = pictureCapabilities("sd/sd-turbo", status);
-  expect(turbo.negativePrompt).toBe(false);
-  expect(turbo.cfg).toBe(false);
+  expect(turbo.negativePrompt).toBe(true);
+  expect(turbo.cfg).toBe(true);
   expect(turbo.outpaint).toBe(false);
   expect(turbo.referencePictures).toBe(false);
   expect(turbo.maxInputImages).toBe(1);
   expect(turbo.defaults).toEqual({ steps: 4, cfg: 1, strength: 0.75 });
-  expect(turbo.ranges.steps).toEqual({ min: 1, max: 12, whole: true });
+  expect(turbo.ranges.steps).toEqual({ min: 1, max: 50, whole: true });
 
   const fake = pictureCapabilities("sd/fake", status);
   expect(fake.textToImage).toBe(false);

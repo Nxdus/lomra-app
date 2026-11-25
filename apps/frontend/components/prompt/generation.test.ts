@@ -342,7 +342,7 @@ test("a local 3D model sends one picture through the desktop bridge, returns a G
   }
 });
 
-test("local and hosted picture generation enforces profile capabilities and omits unsupported settings", async () => {
+test("local and hosted picture generation enforces profile capabilities and forwards full few-step settings", async () => {
   const picture = "data:image/png;base64,YQ==";
   const calls: Record<string, unknown>[] = [];
   const fakeStatus = {
@@ -352,8 +352,8 @@ test("local and hosted picture generation enforces profile capabilities and omit
         id: "sd-turbo", name: "SD Turbo", quality: "Fast", note: "", bytes: 1, recommended: true, installed: true, partial: 0, custom: false, inpaint: false,
         profile: {
           id: "turbo", name: "Turbo", note: "", size: 512, steps: 4, cfg: 1, strength: 0.75,
-          ranges: { steps: { min: 1, max: 12, whole: true }, cfg: { min: 1, max: 1, whole: false }, strength: { min: 0, max: 1, whole: false } },
-          capabilities: { textToImage: true, imageToImage: true, inpaint: true, negativePrompt: false, cfg: false, strength: true, outpaint: false, referencePictures: false },
+          ranges: { steps: { min: 1, max: 50, whole: true }, cfg: { min: 0, max: 20, whole: false }, strength: { min: 0, max: 1, whole: false } },
+          capabilities: { textToImage: true, imageToImage: true, inpaint: true, negativePrompt: true, cfg: true, strength: true, outpaint: false, referencePictures: false },
         },
       },
       {
@@ -373,16 +373,20 @@ test("local and hosted picture generation enforces profile capabilities and omit
     generate: async (_runId: string, input: Record<string, unknown>) => { calls.push(input); return { image: picture, settings: used }; },
   };
   const { changeSdSettings } = await import("@/lib/sd-settings-store");
-  changeSdSettings("sd-turbo", { negativePrompt: "blur", cfg: 7, steps: 4 });
+  changeSdSettings("sd-turbo", { negativePrompt: "blur", cfg: 1.5, steps: 16 });
+  changeSdSettings("no-inpaint", { negativePrompt: "blur", cfg: 7, steps: 4 });
   const browser = fakeBrowser(sd);
   try {
     await generate({ id: "11111111-1111-1111-1111-111111111111", category: "picture", prompt: "fox", model: "sd/sd-turbo", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {});
-    assert.deepEqual(calls.pop(), { model: "sd-turbo", prompt: "fox", steps: 4 });
+    assert.deepEqual(calls.pop(), { model: "sd-turbo", prompt: "fox", negativePrompt: "blur", cfg: 1.5, steps: 16 });
+    await generate({ id: "11111111-1111-1111-1111-111111111114", category: "picture", prompt: "fox", model: "sd/no-inpaint", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]);
+    assert.deepEqual(calls.pop(), { model: "sd/no-inpaint".slice(3), prompt: "fox", steps: 4, image: "data:image/png;base64,1500x1000#fff" });
     await assert.rejects(generate({ id: "11111111-1111-1111-1111-111111111112", category: "picture", prompt: "fox", model: "sd/no-inpaint", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}), /Select a picture/);
     await assert.rejects(generate({ id: "11111111-1111-1111-1111-111111111113", category: "picture", prompt: "fox", model: "sd/no-inpaint", sdEdit: { mask: picture }, status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]), /cannot edit a brushed area/);
     await assert.rejects(generate({ id: "g1", category: "picture", prompt: "fox", model: "google-ai/imagen-3", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]), /does not support reference images/);
   } finally {
     browser.restore();
     changeSdSettings("sd-turbo", {});
+    changeSdSettings("no-inpaint", {});
   }
 });

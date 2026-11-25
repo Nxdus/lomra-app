@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSd } from './sd.mjs';
@@ -58,14 +58,15 @@ function setupBuiltIns() {
   return { dir, sd, calls };
 }
 
-test('built-in models keep their exact defaults, engine args and truthful few-step capabilities', async () => {
+test('built-in models keep their exact defaults, ranges and engine args from e2ac95e for text, image-to-image and inpaint', async () => {
   const { dir, sd, calls } = setupBuiltIns();
   try {
     const status = sd.status();
     expect(status.profiles.map((p) => p.id)).toEqual(['sd15', 'sdxl', 'turbo', 'sdxl-few']);
     expect(status.models.find((m) => m.id === 'sd-turbo').profile).toMatchObject({
       id: 'turbo', size: 512, steps: 4, cfg: 1,
-      capabilities: { textToImage: true, imageToImage: true, inpaint: true, negativePrompt: false, cfg: false, strength: true, outpaint: false, referencePictures: false },
+      ranges: { steps: { min: 1, max: 50, whole: true }, cfg: { min: 0, max: 20, whole: false }, strength: { min: 0, max: 1, whole: false } },
+      capabilities: { textToImage: true, imageToImage: true, inpaint: true, negativePrompt: true, cfg: true, strength: true, outpaint: false, referencePictures: false },
     });
     expect(status.models.find((m) => m.id === 'sdxl-turbo').profile.id).toBe('turbo');
     expect(status.models.find((m) => m.id === 'sd15').profile).toMatchObject({
@@ -73,18 +74,44 @@ test('built-in models keep their exact defaults, engine args and truthful few-st
       capabilities: { negativePrompt: true, cfg: true, outpaint: false, referencePictures: false },
     });
 
-    await sd.generate(runId, { model: 'sd-turbo', prompt: 'fox', seed: 1 });
-    expect(calls[0]).toEqual(['-m', join(dir, 'models', 'sd-turbo.safetensors'), '-p', 'fox', '-o', join(dir, 'out', runId, 'out.png'), '-W', '512', '-H', '512', '--steps', '4', '--cfg-scale', '1', '-s', '1', '--vae-tiling']);
+    const image = png(1500, 1000);
+    const mask = png(1500, 1000, 'm');
+    const erasePrompt = 'plain empty background, natural continuation, nothing there';
+    const eraseNegative = 'object, person, animal, text, watermark, frame, border';
+    const out = join(dir, 'out', runId, 'out.png');
+    const init = join(dir, 'out', runId, 'init.png');
+    const maskPath = join(dir, 'out', runId, 'mask.png');
 
-    await sd.generate(runId, { model: 'sdxl-turbo', prompt: 'fox', seed: 2 });
-    expect(calls[1]).toEqual(['-m', join(dir, 'models', 'sdxl-turbo.safetensors'), '-p', 'fox', '-o', join(dir, 'out', runId, 'out.png'), '-W', '512', '-H', '512', '--steps', '4', '--cfg-scale', '1', '-s', '2', '--vae-tiling']);
+    for (const [index, [model, defaultSteps, defaultCfg, maskCfg]] of [
+      ['sd-turbo', '4', '1', '1'],
+      ['sdxl-turbo', '4', '1', '1'],
+      ['sd15', '20', '7', '4'],
+    ].entries()) {
+      const weights = join(dir, 'models', `${model}.safetensors`);
+      const base = index * 3;
 
-    await sd.generate(runId, { model: 'sd15', prompt: 'fox', negativePrompt: 'blur', seed: 3 });
-    expect(calls[2]).toEqual(['-m', join(dir, 'models', 'sd15.safetensors'), '-p', 'fox', '-o', join(dir, 'out', runId, 'out.png'), '-W', '512', '-H', '512', '--steps', '20', '--cfg-scale', '7', '-s', '3', '--vae-tiling', '-n', 'blur']);
+      await sd.generate(runId, { model, prompt: 'fox', seed: 1 });
+      expect(calls[base]).toEqual(['-m', weights, '-p', 'fox', '-o', out, '-W', '512', '-H', '512', '--steps', defaultSteps, '--cfg-scale', defaultCfg, '-s', '1', '--vae-tiling']);
 
-    await expect(sd.generate(runId, { model: 'sd-turbo', prompt: 'fox', negativePrompt: 'blur' })).rejects.toThrow('negative prompt');
-    await expect(sd.generate(runId, { model: 'sd-turbo', prompt: 'fox', cfg: 5 })).rejects.toThrow('fixed CFG');
-    await expect(sd.generate(runId, { model: 'sd-turbo', prompt: 'fox', steps: 20 })).rejects.toThrow('1 to 12 steps');
+      await sd.generate(runId, { model, prompt: 'fox', seed: 2, image });
+      expect(calls[base + 1]).toEqual([
+        '-m', weights, '-p', 'fox', '-o', out, '-W', '576', '-H', '384', '--steps', defaultSteps, '--cfg-scale', defaultCfg, '-s', '2',
+        '-i', init, '--image-preprocess', 'target=init,mode=stretch,filter=bicubic,antialias=true', '--strength', '0.75',
+      ]);
+
+      await sd.generate(runId, { model, prompt: erasePrompt, negativePrompt: eraseNegative, strength: 1, seed: 3, image, mask });
+      expect(calls[base + 2]).toEqual([
+        '-m', weights, '-p', erasePrompt, '-o', out, '-W', '576', '-H', '384', '--steps', defaultSteps, '--cfg-scale', maskCfg, '-s', '3', '-n', eraseNegative,
+        '-i', init, '--image-preprocess', 'target=init,mode=stretch,filter=bicubic,antialias=true',
+        '--mask', maskPath, '--image-preprocess', 'target=mask,mode=stretch', '--strength', '1',
+      ]);
+    }
+
+    // Few-step models still accept custom steps, CFG and negative prompt as on e2ac95e.
+    await sd.generate(runId, { model: 'sd-turbo', prompt: 'fox', negativePrompt: 'blur', steps: 20, cfg: 1.5, seed: 4 });
+    expect(calls.at(-1)).toEqual([
+      '-m', join(dir, 'models', 'sd-turbo.safetensors'), '-p', 'fox', '-o', out, '-W', '512', '-H', '512', '--steps', '20', '--cfg-scale', '1.5', '-s', '4', '--vae-tiling', '-n', 'blur',
+    ]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -98,12 +125,12 @@ test('a fake extra profile appears in status and is enforced by sd-input without
     note: '768 px, 8 steps',
     size: 768,
     steps: 8,
-    cfg: 3,
+    cfg: 1,
     strength: 0.6,
     headerTypes: ['sdxl'],
     ranges: {
       steps: { min: 4, max: 80, whole: true },
-      cfg: { min: 2, max: 5, whole: false },
+      cfg: { min: 1, max: 1, whole: false },
       strength: { min: 0.2, max: 0.8, whole: false },
     },
     capabilities: {
@@ -111,7 +138,7 @@ test('a fake extra profile appears in status and is enforced by sd-input without
       imageToImage: true,
       inpaint: false,
       negativePrompt: false,
-      cfg: true,
+      cfg: false,
       strength: true,
       outpaint: false,
       referencePictures: false,
@@ -131,20 +158,20 @@ test('a fake extra profile appears in status and is enforced by sd-input without
     const sd = createSd({ dir, platform: 'win32', arch: 'x64', profiles: [...sdProfiles, fakeProfile], models: [fakeModel], engines: sdEngines });
     const status = sd.status();
     expect(status.profiles.some((p) => p.id === 'fake-edit')).toBe(true);
-    expect(status.models[0].profile).toMatchObject({ id: 'fake-edit', size: 768, steps: 8, cfg: 3 });
+    expect(status.models[0].profile).toMatchObject({ id: 'fake-edit', size: 768, steps: 8, cfg: 1 });
 
     const image = png(64, 64);
     expect(() => sdInput({ prompt: 'edit' }, fakeProfile)).toThrow('needs a picture');
     expect(() => sdInput({ prompt: 'edit', image, mask: image }, fakeProfile)).toThrow('brushed area');
     expect(() => sdInput({ prompt: 'edit', image, negativePrompt: 'bad' }, fakeProfile)).toThrow('negative prompt');
+    expect(() => sdInput({ prompt: 'edit', image, cfg: 5 }, fakeProfile)).toThrow('fixed CFG');
     // Hard upper limit (50) still wins over profile max (80).
     expect(() => sdInput({ prompt: 'edit', image, steps: 51 }, fakeProfile)).toThrow('4 to 50 steps');
     expect(() => sdInput({ prompt: 'edit', image, steps: 3 }, fakeProfile)).toThrow('4 to 50 steps');
-    expect(() => sdInput({ prompt: 'edit', image, cfg: 1.5 }, fakeProfile)).toThrow('2 to 5');
     expect(() => sdInput({ prompt: 'edit', image, strength: 0.9 }, fakeProfile)).toThrow('0.2 to 0.8');
     expect(() => sdInput({ prompt: 'edit', image, outpaint: true }, fakeProfile)).toThrow('new shape');
     expect(() => sdInput({ prompt: 'edit', image, images: [image] }, fakeProfile)).toThrow('reference pictures');
-    expect(sdInput({ prompt: 'edit', image, steps: 10, cfg: 4, strength: 0.5 }, fakeProfile).settings).toMatchObject({ steps: 10, cfg: 4, strength: 0.5 });
+    expect(sdInput({ prompt: 'edit', image, steps: 10, strength: 0.5 }, fakeProfile).settings).toMatchObject({ steps: 10, cfg: 1, strength: 0.5 });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -159,7 +186,7 @@ test('installed Hugging Face models expose compatible profiles and can switch pr
   const sd15Id = customModelId('a/b', sd15File);
   const sdxlId = customModelId('a/b', sdxlFile);
   writeFileSync(join(customDir, `${sd15Id}.safetensors`), safetensors(checkpoint()));
-  writeFileSync(join(customDir, `${sd15Id}.json`), JSON.stringify({ id: sd15Id, repo: 'a/b', file: sd15File, family: 'turbo', bytes: 100, sha256: 'a'.repeat(64) }));
+  writeFileSync(join(customDir, `${sd15Id}.json`), JSON.stringify({ id: sd15Id, repo: 'a/b', file: sd15File, family: 'turbo', bytes: 100, sha256: 'a'.repeat(64), local: true, extra: { source: 'disk' } }));
   writeFileSync(join(customDir, `${sdxlId}.safetensors`), safetensors(checkpoint({ context: 2048, level: 4, text: 'conditioner.embedders.0.x' })));
   writeFileSync(join(customDir, `${sdxlId}.json`), JSON.stringify({ id: sdxlId, repo: 'a/b', file: sdxlFile, family: 'sdxl', bytes: 100, sha256: 'b'.repeat(64) }));
 
@@ -179,8 +206,11 @@ test('installed Hugging Face models expose compatible profiles and can switch pr
     expect(await sd.setProfile(sd15Id, 'sd15')).toBe(true);
     expect(await sd.setProfile(sdxlId, 'sdxl-few')).toBe(true);
 
-    expect(JSON.parse(readFileSync(join(customDir, `${sd15Id}.json`), 'utf8')).family).toBe('sd15');
+    expect(JSON.parse(readFileSync(join(customDir, `${sd15Id}.json`), 'utf8'))).toEqual({
+      id: sd15Id, repo: 'a/b', file: sd15File, family: 'sd15', bytes: 100, sha256: 'a'.repeat(64), local: true, extra: { source: 'disk' },
+    });
     expect(JSON.parse(readFileSync(join(customDir, `${sdxlId}.json`), 'utf8')).family).toBe('sdxl-few');
+    expect(readdirSync(customDir).some((name) => name.endsWith('.tmp'))).toBe(false);
 
     // Reloading from disk preserves the updated profile.
     const reloaded = createSd({ dir, platform: 'win32', arch: 'x64' });

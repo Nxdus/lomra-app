@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { extname, join } from 'node:path';
@@ -274,7 +275,16 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
       if (!headers.has(id)) headers.set(id, await probeFile(model).catch(() => ({ supported: true, inpaint: false, headerType: null })));
       const header = headers.get(id);
       if (!compatibleSdProfiles(header, profiles).some((item) => item.id === next.id)) return false;
-      writeFileSync(metaFile(model.id), JSON.stringify({ id: model.id, repo: model.repo, file: model.file, family: next.id, bytes: model.bytes, sha256: model.sha256 }));
+      const path = metaFile(model.id);
+      const existing = JSON.parse(readFileSync(path, 'utf8'));
+      const temp = `${path}.${randomBytes(6).toString('hex')}.tmp`;
+      try {
+        writeFileSync(temp, JSON.stringify({ ...existing, id: model.id, repo: model.repo, file: model.file, family: next.id, bytes: model.bytes, sha256: model.sha256 }));
+        renameSync(temp, path);
+      } catch (cause) {
+        rmSync(temp, { force: true });
+        throw cause;
+      }
       return true;
     },
     /** Downloads the engine (if missing) and a model in the background, after the ones already waiting; progress is in `status()`. Continues an unfinished download. */
