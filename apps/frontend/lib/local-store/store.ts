@@ -50,7 +50,7 @@ export function createLocalStore(root: string, secret: Buffer) {
       throw error;
     });
     const rows: { id: string; value: unknown }[] = [];
-    for (const name of names) {
+    for (const name of names.sort()) {
       if (!name.endsWith('.json')) continue;
       const raw = await readOptional(join(dir(kind), name));
       if (!raw) continue;

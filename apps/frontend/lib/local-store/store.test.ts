@@ -1,6 +1,6 @@
 // @ts-expect-error Bun provides this module at test runtime; Next.js does not load it.
 import { test, expect } from 'bun:test';
-import { mkdtemp, readFile, readdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLocalStore } from './store';
@@ -19,6 +19,15 @@ test('saved state round-trips as readable JSON files', async () => {
   expect(await s.list('canvas')).toEqual([{ id: 'default', value: [item('a')] }]);
   expect(JSON.parse(await readFile(join(root, 'canvas', 'default.json'), 'utf8'))).toEqual([item('a')]);
   expect(await readdir(join(root, 'canvas'))).toEqual(['default.json']);
+});
+
+test('list returns entries in filename order regardless of save order', async () => {
+  const { root, store: s } = await store();
+  await mkdir(join(root, 'canvas'), { recursive: true });
+  for (const id of ['zeta', 'alpha', 'middle']) {
+    await writeFile(join(root, 'canvas', `${id}.json`), '[]');
+  }
+  expect((await s.list('canvas')).map(({ id }) => id)).toEqual(['alpha', 'middle', 'zeta']);
 });
 
 test('invalid state and unsafe IDs are rejected', async () => {
