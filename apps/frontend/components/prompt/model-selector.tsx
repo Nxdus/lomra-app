@@ -6,6 +6,7 @@ import { AgentIcon } from "@/components/agent-icon";
 import Image from "next/image";
 
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { createSelectionSaver } from "./selection-saver";
 import { isMultiview } from "./multiview";
 import { browserImageModel, geminiImageModel, geminiVideoModel, modelProvider, isOllamaModel, ollamaPrefix, isSdModel, sdPrefix, isLocal3dModel, local3dPrefix } from "./generation";
 import { useOllama } from "@/hooks/use-ollama";
@@ -196,7 +197,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
   const [googleStatus, setGoogleStatus] = useState<CatalogStatus>("loading");
   const [catalogAttempt, setCatalogAttempt] = useState(0);
   const { swipe, bind: bindSwipe } = useSwipeToDelete();
-  const preferencesReady = useRef(false);
+  const saveSelection = useRef<ReturnType<typeof createSelectionSaver>>(undefined);
   const [deletingModel, setDeletingModel] = useState<{ value: string; name: string } | null>(null);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const { disabled: disabledAgents } = useDisabledAgents();
@@ -356,8 +357,8 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
         setGroups(results);
         onCatalogInfoChange?.({ prices, vision });
         setHiddenModels(hidden ?? []);
-        const useSavedSelection = !preferencesReady.current;
-        preferencesReady.current = true;
+        const useSavedSelection = !saveSelection.current;
+        saveSelection.current ??= createSelectionSaver(savedSelection ?? [], (values) => saveSetting('selected-models', values));
         const failed = results.filter((group) => group.error);
         if (failed.length) toast.add({ id: "model-load-error", title: `Could not load ${failed.map((group) => group.label).join(", ")} models.`, type: "error", actionProps: { children: "Retry", onClick: () => setAttempt((value) => value + 1) } });
         onModelsChange((current) => results.flatMap((group) => {
@@ -374,7 +375,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
   }, [attempt, onModelsChange, onCatalogInfoChange, keysReady, falKey]);
 
   useEffect(() => {
-    if (!preferencesReady.current) return;
+    if (!saveSelection.current) return;
     const isAvailable = (value: string) => {
       const provider = modelApiKeyProvider(value);
       return (!provider || !!keys[provider]) && isInstalled(value) && allGroups.some((group) =>
@@ -388,11 +389,16 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
       onModelsChange(available);
       return;
     }
+  }, [models, allGroups, hiddenModels, isInstalled, keys, onModelsChange, onSelectableChange]);
+
+  useEffect(() => {
+    const save = saveSelection.current;
+    if (!save) return;
     const timer = setTimeout(() => {
-      void saveSetting('selected-models', models).catch(() => toast.add({ id: 'model-settings-error', title: 'Could not save selected models. Please retry.', type: 'error' }));
+      void save(models).catch(() => toast.add({ id: 'model-settings-error', title: 'Could not save selected models. Please retry.', type: 'error' }));
     }, 400);
     return () => clearTimeout(timer);
-  }, [models, allGroups, hiddenModels, isInstalled, keys, onModelsChange, onSelectableChange]);
+  }, [models]);
 
   const existingValues = new Set(allGroups.flatMap((group) => group.models
     .filter((item) => item.custom || !hiddenModels.includes(item.value))

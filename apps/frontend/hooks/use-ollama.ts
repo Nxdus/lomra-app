@@ -14,6 +14,7 @@ type Store = { state: State | null; pull: OllamaPull | null; installing: boolean
 
 // Downloads and installs outlive the settings screen: they live here, not in a component, so closing
 // the dialog or switching tabs does not stop them and a screen opened later shows their progress.
+const emptyModels: OllamaModel[] = [];
 const initial: Store = { state: null, pull: null, installing: false, uninstalling: false, starting: false };
 let store = initial;
 const listeners = new Set<() => void>();
@@ -167,7 +168,7 @@ export function useOllama() {
   const { state, pull, installing, uninstalling, starting } = useSyncExternalStore(subscribe, () => store, () => initial);
   useEffect(() => { void refresh(); }, []);
   return {
-    running: state?.running ?? null, models: state?.models ?? [], pull, installing, uninstalling, starting,
+    running: state?.running ?? null, models: state?.models ?? emptyModels, pull, installing, uninstalling, starting,
     canStart: state?.canStart ?? false, canUninstall: state?.canUninstall ?? false, installMethod: state?.installMethod ?? null,
     url: state?.url ?? defaultOllamaUrl, remote: state?.remote ?? false,
     refresh, install, cancel, remove, start, installCli, uninstallCli, setServer,
