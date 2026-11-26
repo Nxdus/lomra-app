@@ -3,4 +3,4 @@ Copyright 2026 The Lomra contributors
 
 Local picture tools may download on user request:
 - BiRefNet Lite (onnx-community/BiRefNet_lite-ONNX, from ZhengPeng7/BiRefNet) — MIT License
-- Real-ESRGAN x4v3 (Heliosoph/realesrgan-onnx, from xinntao/Real-ESRGAN) — BSD 3-Clause License
+- Real-ESRGAN x4v3 (ONNX conversion from Heliosoph/realesrgan-onnx, from xinntao/Real-ESRGAN; served from the Nxdus/lomra-app models-realesrgan-x4v3 release) — BSD 3-Clause License

@@ -85,11 +85,11 @@ async function downloadAndWait(ai, id) {
   throw new Error('download did not finish');
 }
 
-test('pinned picture models carry SHA-256, commit revision, byte size, and commercial-allowed license', () => {
+test('pinned picture models carry SHA-256, a fixed source, byte size, and commercial-allowed license', () => {
   expect(pictureAiModels.length).toBe(2);
   for (const model of pictureAiModels) {
     expect(model.sha256).toMatch(/^[a-f0-9]{64}$/);
-    expect(model.url).toMatch(/\/resolve\/[a-f0-9]{40}\//);
+    expect(model.url).toMatch(/^https:\/\/(huggingface\.co\/[\w.-]+\/[\w.-]+\/resolve\/[a-f0-9]{40}\/|github\.com\/Nxdus\/lomra-app\/releases\/download\/models-[\w.-]+\/)/);
     expect(model.bytes).toBeGreaterThan(0);
     expect(model.source).toMatch(/^https:\/\//);
     expect(model.license).toMatch(/MIT|BSD-3-Clause|Apache/i);

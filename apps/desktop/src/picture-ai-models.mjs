@@ -1,6 +1,7 @@
 /**
  * Local picture tools (background removal and upscaling) run ONNX models on CPU through `onnxruntime-node`.
- * Every model below allows commercial use and is pinned by commit revision, SHA-256 and exact byte size;
+ * Every model below allows commercial use and is pinned by SHA-256 and exact byte size, at a Hugging Face commit
+ * or as an asset of a `models-*` prerelease of Nxdus/lomra-app (a byte-identical copy we control);
  * the renderer can only pick them by id or operation.
  */
 export const pictureAiModels = [
@@ -27,10 +28,9 @@ export const pictureAiModels = [
     note: 'Sharpens photos and illustrations on CPU. Commercial use allowed.',
     license: 'BSD-3-Clause license',
     source: 'https://github.com/xinntao/Real-ESRGAN',
-    repo: 'Heliosoph/realesrgan-onnx',
-    revision: '488e5dda07333179f229a6205d92135eea4c25e9',
+    // Copy of huggingface.co/Heliosoph/realesrgan-onnx @ 488e5dda07333179f229a6205d92135eea4c25e9 (same SHA-256).
     file: 'realesr-general-x4v3.onnx',
-    url: 'https://huggingface.co/Heliosoph/realesrgan-onnx/resolve/488e5dda07333179f229a6205d92135eea4c25e9/realesr-general-x4v3.onnx',
+    url: 'https://github.com/Nxdus/lomra-app/releases/download/models-realesrgan-x4v3/realesr-general-x4v3.onnx',
     sha256: '09b757accd747d7e423c1d352b3e8f23e77cc5742d04bae958d4eb8082b76fa4',
     bytes: 4871181,
   },
