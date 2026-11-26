@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { Combobox as ComboboxPrimitive } from "@base-ui/react"
+import { Tip } from "@/components/tip"
 import { cn } from "cn"
 import { PopupBoundaryContext } from "@/components/ui/popup-boundary"
 
@@ -33,21 +34,22 @@ function ComboboxTrigger({
       {...props}
     >
       {children}
-      <ChevronDownIcon className="pointer-events-none size-4 text-muted-foreground" />
+      <ChevronDownIcon aria-hidden="true" className="pointer-events-none size-4 text-muted-foreground" />
     </ComboboxPrimitive.Trigger>
   )
 }
 
 function ComboboxClear({ className, ...props }: ComboboxPrimitive.Clear.Props) {
   return (
-    <ComboboxPrimitive.Clear
+    <Tip label={props["aria-label"] ?? "Clear input"}><ComboboxPrimitive.Clear
+      aria-label="Clear input"
       data-slot="combobox-clear"
       render={<InputGroupButton variant="ghost" size="icon-xs" />}
       className={cn(className)}
       {...props}
     >
-      <XIcon className="pointer-events-none" />
-    </ComboboxPrimitive.Clear>
+      <XIcon className="pointer-events-none" aria-hidden="true" />
+    </ComboboxPrimitive.Clear></Tip>
   )
 }
 
@@ -70,14 +72,14 @@ function ComboboxInput({
       />
       <InputGroupAddon align="inline-end">
         {showTrigger && (
-          <InputGroupButton
+          <Tip label="Show options"><InputGroupButton
             size="icon-xs"
             variant="ghost"
             render={<ComboboxTrigger />}
             data-slot="input-group-button"
             className="group-has-data-[slot=combobox-clear]/input-group:hidden data-pressed:bg-transparent"
             disabled={disabled}
-          />
+          /></Tip>
         )}
         {showClear && <ComboboxClear disabled={disabled} />}
       </InputGroupAddon>
@@ -236,9 +238,11 @@ function ComboboxChip({
   className,
   children,
   showRemove = true,
+  removeLabel = "Remove item",
   ...props
 }: ComboboxPrimitive.Chip.Props & {
   showRemove?: boolean
+  removeLabel?: string
 }) {
   return (
     <ComboboxPrimitive.Chip
@@ -251,13 +255,14 @@ function ComboboxChip({
     >
       {children}
       {showRemove && (
-        <ComboboxPrimitive.ChipRemove
+        <Tip label={removeLabel}><ComboboxPrimitive.ChipRemove
+          aria-label={removeLabel}
           render={<Button variant="ghost" size="icon-xs" />}
           className="-ml-1 opacity-50 hover:opacity-100"
           data-slot="combobox-chip-remove"
         >
-          <XIcon className="pointer-events-none" />
-        </ComboboxPrimitive.ChipRemove>
+          <XIcon className="pointer-events-none" aria-hidden="true" />
+        </ComboboxPrimitive.ChipRemove></Tip>
       )}
     </ComboboxPrimitive.Chip>
   )

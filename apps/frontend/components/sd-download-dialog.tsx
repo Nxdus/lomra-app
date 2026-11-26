@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowUpRightIcon } from "lucide-react";
 import { localModelSize } from "@/components/ollama-settings";
 import { defaultSdFile, sdVersions, type SdFile } from "@/components/sd-versions";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -22,8 +23,12 @@ export function SdDownloadDialog({ repo, status, onClose, onDownload }: {
   repo: SdRepo;
   status: SdStatus;
   onClose: () => void;
-  onDownload: (request: SdDownloadRequest) => void;
+  onDownload: (request: SdDownloadRequest) => Promise<void>;
 }) {
+  const dismiss = useRef<HTMLButtonElement>(null);
+  const pending = useRef(false);
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState("");
   const [files, setFiles] = useState<SdFile[]>();
   const [error, setError] = useState("");
   const [chosen, setChosen] = useState<string>();
@@ -65,7 +70,7 @@ export function SdDownloadDialog({ repo, status, onClose, onDownload }: {
   /** What the model list already says about a file, so it is not added twice. */
   const model = file && status.models.find((item) => item.id === file.id);
   const state = !file ? undefined : status.downloading?.id === file.id ? "Downloading"
-    : status.queued.some((item) => item.id === file.id) ? "Waiting" : model?.installed ? "Installed" : model?.partial ? "Paused" : undefined;
+    : status.queued.some((item) => item.id === file.id) ? "Queued" : model?.installed ? "Installed" : model?.partial ? "Paused" : undefined;
   const problem = error || (files && !files.length ? "This model has no single-file checkpoint." : kind && "error" in kind ? kind.error
     : kind && "known" in kind && kind.known && !kind.supported ? "Lomra can’t run this file. It needs a Stable Diffusion 1.x, 2.x or SDXL checkpoint." : "");
   const license = repo.license === "other" ? undefined : repo.license;
@@ -73,8 +78,8 @@ export function SdDownloadDialog({ repo, status, onClose, onDownload }: {
   const versions = sdVersions(repo.id, files ?? []);
   const note = [!status.engine && `+${localModelSize(status.engineBytes)} image engine`, status.downloading && "Starts after the other downloads"].filter(Boolean).join(" · ");
 
-  return <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-    <DialogContent showCloseButton={false} className="gap-5">
+  return <Dialog open onOpenChange={(open) => { if (!open && !pending.current) onClose(); }}>
+    <DialogContent showCloseButton={false} initialFocus={dismiss} className="gap-5">
       <DialogHeader className="gap-2.5">
         <DialogTitle className="break-words">{files?.length ? versions.title : repo.id}</DialogTitle>
         <DialogDescription className="sr-only">Choose a version and download it from Hugging Face.</DialogDescription>
@@ -91,7 +96,7 @@ export function SdDownloadDialog({ repo, status, onClose, onDownload }: {
 
       {files && files.length > 1 && <Field>
         <FieldLabel htmlFor="sd-version">Version</FieldLabel>
-        <Select value={name ?? null} onValueChange={(value) => { if (value) setChosen(value); }}>
+        <Select disabled={starting} value={name ?? null} onValueChange={(value) => { if (value) setChosen(value); }}>
           <SelectTrigger id="sd-version" className="h-11 w-full"><SelectValue>{file && <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
             <span className="truncate">{versions.label(file.file)}</span><span className="shrink-0 tabular-nums text-muted-foreground">{localModelSize(file.bytes)}</span>
           </span>}</SelectValue></SelectTrigger>
@@ -103,25 +108,36 @@ export function SdDownloadDialog({ repo, status, onClose, onDownload }: {
 
       {!problem && unknown && !builtIn && <Field>
         <FieldLabel htmlFor="sd-family">Model type</FieldLabel>
-        <Select value={family} onValueChange={(value) => { if (value) setFamily(value); }}>
+        <Select disabled={starting} value={family} onValueChange={(value) => { if (value) setFamily(value); }}>
           <SelectTrigger id="sd-family" className="h-11 w-full"><SelectValue>{status.profiles.find((item) => item.id === family)?.name}</SelectValue></SelectTrigger>
           <SelectContent>{status.profiles.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent>
         </Select>
       </Field>}
       {!problem && supported && !builtIn && <div className="flex items-center justify-between gap-4">
         <label htmlFor="sd-few-step">Few-step model <span className="text-xs text-muted-foreground">Turbo, Lightning, LCM</span></label>
-        <Switch id="sd-few-step" checked={fewStep} onCheckedChange={(checked) => { if (name) setFewSteps((all) => ({ ...all, [name]: checked })); }} />
+        <Switch disabled={starting} id="sd-few-step" checked={fewStep} onCheckedChange={(checked) => { if (name) setFewSteps((all) => ({ ...all, [name]: checked })); }} />
       </div>}
       {problem && <p role="alert" className="text-destructive">{problem}</p>}
 
+      {startError && <Alert variant="destructive"><AlertDescription>{startError}</AlertDescription></Alert>}
       <DialogFooter className="items-center">
-        {!problem && note && <p className="mr-auto text-xs text-muted-foreground">{note}</p>}
-        <Button variant="outline" autoFocus onClick={onClose}>{problem && !(files && files.length > 1) ? "Close" : "Not now"}</Button>
-        {!(problem && !(files && files.length > 1)) && <Button disabled={!file || !kind || !!problem || !!state} onClick={() => {
-          if (!file) return;
-          onDownload({ repo: repo.id, file: file.file, family: supported ? fewStep ? supported.fewStepFamily : supported.family : family });
-          onClose();
-        }}>{state ?? `Download${file ? ` ${localModelSize(file.bytes)}` : ""}`}</Button>}
+        {!problem && file && <p className="mr-auto text-xs text-muted-foreground">{[localModelSize(file.bytes), note].filter(Boolean).join(" · ")}</p>}
+        <Button variant="outline" ref={dismiss} disabled={starting} onClick={onClose}>{problem && !(files && files.length > 1) ? "Close" : "Not now"}</Button>
+        {!(problem && !(files && files.length > 1)) && <Button disabled={starting || !file || !kind || !!problem || !!state} onClick={async () => {
+          if (!file || pending.current) return;
+          pending.current = true;
+          setStarting(true);
+          setStartError("");
+          try {
+            await onDownload({ repo: repo.id, file: file.file, family: supported ? fewStep ? supported.fewStepFamily : supported.family : family });
+            onClose();
+          } catch (cause) {
+            setStartError(cause instanceof Error ? cause.message : "Could not start the download.");
+          } finally {
+            pending.current = false;
+            setStarting(false);
+          }
+        }}>{starting ? "Starting…" : state ?? "Download"}</Button>}
       </DialogFooter>
     </DialogContent>
   </Dialog>;

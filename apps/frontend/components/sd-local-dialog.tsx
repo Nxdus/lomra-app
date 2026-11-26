@@ -20,6 +20,8 @@ export function SdLocalDialog({ files, limited, scanned, status, replacing, onCl
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
+  const dismiss = useRef<HTMLButtonElement>(null);
+  const needsEngine = !status.engine && !added.length;
   const file = files.find((item) => item.id === id);
   const currentProfile = status.models.find((model) => model.id === replacing)?.profile.id;
   const family = file && (overrides[file.id] ?? (currentProfile && file.compatibleProfiles.includes(currentProfile) ? currentProfile : file.suggestedProfile));
@@ -32,7 +34,7 @@ export function SdLocalDialog({ files, limited, scanned, status, replacing, onCl
     setBusy(true);
     setError("");
     try {
-      const reply = await desktopSd()!.addLocal(file.id, family, !status.engine);
+      const reply = await desktopSd()!.addLocal(file.id, family, needsEngine);
       if ("error" in reply) setError(reply.error);
       else {
         window.dispatchEvent(new Event("sd-status-changed"));
@@ -47,11 +49,12 @@ export function SdLocalDialog({ files, limited, scanned, status, replacing, onCl
   }
 
   return <Dialog open onOpenChange={(open) => { if (!open && !pending.current) onClose(); }}>
-    <DialogContent showCloseButton={false}>
+    <DialogContent showCloseButton={false} initialFocus={dismiss}>
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
         <DialogDescription>{file ? "Lomra uses the checkpoint in its current location." : "No supported Stable Diffusion checkpoints were found."}</DialogDescription>
       </DialogHeader>
+      {file && needsEngine && <p className="text-sm text-muted-foreground">Lomra needs to download the image engine to use {file.name}. {localModelSize(status.engineBytes)}.</p>}
       {limited && <p className="text-sm text-muted-foreground">The scan reached a limit. Choose a narrower folder to find more checkpoints.</p>}
       {file && (files.length === 1 ? <p className="break-all text-sm">{label(file)}</p> : <Field>
         <FieldLabel htmlFor="local-checkpoint">Checkpoint</FieldLabel>
@@ -71,8 +74,8 @@ export function SdLocalDialog({ files, limited, scanned, status, replacing, onCl
       {added.length > 0 && <p role="status" className="text-sm text-muted-foreground">{added.length} of {files.length} checkpoints added.</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <DialogFooter>
-        <Button variant="outline" autoFocus disabled={busy} onClick={onClose}>{scanned ? "Done" : file ? "Cancel" : "Close"}</Button>
-        {file && !added.includes(file.id) && <Button disabled={busy} onClick={() => void confirm()}>{busy ? "Checking…" : !status.engine && added.length === 0 ? `Save and download engine (${localModelSize(status.engineBytes)})` : replacing ? "Use this file" : "Add to Lomra"}</Button>}
+        <Button variant="outline" ref={dismiss} disabled={busy} onClick={onClose}>{file && needsEngine ? "Not now" : scanned ? "Done" : file ? "Cancel" : "Close"}</Button>
+        {file && !added.includes(file.id) && <Button disabled={busy} onClick={() => void confirm()}>{busy ? needsEngine ? "Starting…" : "Checking…" : needsEngine ? "Download" : replacing ? "Use this file" : "Add to Lomra"}</Button>}
       </DialogFooter>
     </DialogContent>
   </Dialog>;

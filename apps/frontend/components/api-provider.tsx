@@ -37,6 +37,7 @@ const ApiContext = createContext<{
   setKey: (provider: KeyedProvider, key: string) => Promise<void>;
   keysReady: boolean;
   storageError: string;
+  retryKeys: () => void;
   request: (provider: Provider, options: ProviderRequest) => Promise<unknown>;
 } | null>(null);
 
@@ -60,6 +61,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   const [keys, setKeys] = useState<Keys>({ openrouter: "", fal: "", google: "" });
   const [keysReady, setKeysReady] = useState(false);
   const [storageError, setStorageError] = useState("");
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let cancelled = false;
     void storage('keys').then((rows: { id: KeyedProvider; value: string }[]) => {
@@ -67,14 +69,15 @@ export function ApiProvider({ children }: { children: ReactNode }) {
       setKeys({ openrouter: rows.find((row) => row.id === 'openrouter')?.value ?? '', fal: rows.find((row) => row.id === 'fal')?.value ?? '', google: rows.find((row) => row.id === 'google')?.value ?? '' });
       setKeysReady(true);
     }).catch(() => { if (!cancelled) {
-      const title = 'Could not load API keys. Reload to retry.';
+      const title = 'Could not load API keys.';
       setStorageError(title);
       toast.add({ id: 'api-keys-error', title, type: 'error' });
     } });
     return () => { cancelled = true; };
-  }, []);
+  }, [attempt]);
   return <ApiContext.Provider value={{
     keys, keysReady, storageError,
+    retryKeys: () => { setStorageError(""); setAttempt((value) => value + 1); },
     setKey: async (provider, key) => {
       if (!keysReady) throw new Error('API keys are still loading. Reload if this persists.');
       await storage(`keys/${provider}`, key.trim() ? 'PUT' : 'DELETE', key.trim() || undefined);

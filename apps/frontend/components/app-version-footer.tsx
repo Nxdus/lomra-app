@@ -95,7 +95,7 @@ export function AppVersionFooter() {
                   event.preventDefault();
                   void openUrl(info.url!);
                 }}
-                className="shrink-0 underline underline-offset-4 hover:text-foreground"
+                className="shrink-0 underline underline-offset-4 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
               >
                 Release notes
               </a>
@@ -117,7 +117,7 @@ export function AppVersionFooter() {
           disabled={busy}
           onClick={() => void check(true)}
         >
-          <RefreshCwIcon aria-hidden="true" className={checking ? "animate-spin" : undefined} />
+          <RefreshCwIcon aria-hidden="true" className={checking ? "motion-safe:animate-spin" : undefined} />
         </Button>
       </Tip>
     </footer>

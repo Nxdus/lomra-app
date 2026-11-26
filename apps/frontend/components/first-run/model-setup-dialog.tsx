@@ -76,12 +76,12 @@ export function ModelSetupDialog({
             {imageSearch
               ? "Find an image model on Hugging Face and download it."
               : onContinue
-              ? "Save an API key or install a local model. Lomra checks that at least one provider is ready before starting the tutorial."
+              ? "Save an API key or install a local chat, image generation, or 3D model. Lomra checks that at least one provider is ready before starting the tutorial."
               : targetProvider && modelName
                 ? `Add your ${providerLabel(targetProvider)} API key to start using ${modelName}.`
                 : targetProvider
                   ? `Configure ${providerLabel(targetProvider)} to start generating.`
-                  : "Configure your cloud API keys (Google AI, OpenRouter, Fal.ai) or local models (Ollama, Stable Diffusion, Hunyuan 3D) to start generating."}
+                  : "Configure your cloud API keys (Google AI, OpenRouter, Fal.AI) or local models (Ollama, Stable Diffusion, Hunyuan 3D) to start generating."}
           </DialogDescription>
         </DialogHeader>
 

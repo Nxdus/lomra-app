@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { RefreshCwIcon } from "lucide-react";
+import { Tip } from "@/components/tip";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AgentIcon } from "@/components/agent-icon";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -30,7 +32,8 @@ export function AgentSettings() {
   const [stats, setStats] = useState<AgentStats | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [refresh, setRefresh] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing] = useState(true);
+  const [listError, setListError] = useState(false);
   const { disabled, setEnabled } = useDisabledAgents();
 
   useEffect(() => {
@@ -39,29 +42,32 @@ export function AgentSettings() {
     bridge.list().then((list) => {
       if (cancelled) return;
       setAgents(list);
+      setListError(false);
       for (const agent of list) {
         if (!agent.available) continue;
         void bridge.accountEmail(agent.id).then((email) => {
           if (!cancelled && email) setEmails((current) => ({ ...current, [agent.id]: email }));
         }, () => {});
       }
-    }, () => { if (!cancelled) setAgents([]); });
+    }, () => { if (!cancelled) setListError(true); }).finally(() => { if (!cancelled) setRefreshing(false); });
     void bridge.stats?.("opencode").then((value) => { if (!cancelled) setStats(value); }, () => {});
     void Promise.all([bridge.limits("codex"), bridge.limits("claude"), readClaudeLimits()]).then(([codex, live, saved]) => {
       if (!cancelled) { setLimits({ codex, claude: live.length ? live : saved?.windows ?? [] }); setNow(Date.now()); }
-    }, () => {}).finally(() => { if (!cancelled) setRefreshing(false); });
+    }, () => {});
     return () => { cancelled = true; };
   }, [bridge, refresh]);
 
   return <section aria-labelledby="agents-heading" className="flex flex-col gap-3">
     <div className="flex items-center justify-between gap-2">
       <h2 id="agents-heading" className="text-sm font-medium">Local agents</h2>
-      {bridge && <Button type="button" variant="outline" size="icon-sm" className="rounded-lg" aria-label="Refresh local agents" disabled={refreshing} onClick={() => { setRefreshing(true); setRefresh((value) => value + 1); }}>
-        <RefreshCwIcon aria-hidden="true" className={refreshing ? "animate-spin" : undefined} />
-      </Button>}
+      {bridge && <Tip label="Refresh local agents"><Button type="button" variant="outline" size="icon-sm" className="rounded-lg" aria-label="Refresh local agents" disabled={refreshing} onClick={() => { setRefreshing(true); setRefresh((value) => value + 1); }}>
+        <RefreshCwIcon aria-hidden="true" className={refreshing ? "motion-safe:animate-spin" : undefined} />
+      </Button></Tip>}
     </div>
     {!bridge ? <p role="status" className="text-xs text-muted-foreground">Local agents are available in the desktop app only.</p>
+      : listError ? <Alert variant="destructive"><AlertDescription>Could not load local agents. Use Refresh to try again.</AlertDescription></Alert>
       : !agents ? <p role="status" className="text-xs text-muted-foreground">Looking for installed agents…</p>
+      : !agents.length ? <p role="status" className="text-xs text-muted-foreground">No local agents found.</p>
       : <ul className="flex flex-col gap-2">
         {agents.map((agent) => {
           const windows = limits[agent.id] ?? [];

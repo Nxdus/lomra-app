@@ -74,7 +74,7 @@ export async function verifyTutorialProvider(keys: Record<KeyedProvider, string>
   try {
     await Promise.any(checks);
   } catch {
-    throw new Error("Save a working API key or install a local model before starting the tutorial.");
+    throw new Error("Save a working API key or install a local chat, image generation, or 3D model before starting the tutorial.");
   }
 }
 

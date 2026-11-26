@@ -40,6 +40,7 @@ export function FirstRunFlow({ canvasRef, canvasReady }: {
     <>
       <FirstRunDialog
         open={isFirstRun === true && !setupOpen}
+        onDismiss={() => setIsFirstRun(false)}
         onStartBlank={finishFirstRun}
         onStartTutorial={() => {
           beginTutorialSetup();
