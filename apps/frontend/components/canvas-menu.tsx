@@ -138,7 +138,7 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
           {open ? <XIcon /> : <MenuIcon />}
         </span>
       </PopoverTrigger>
-      <PopoverContent side="right" align="center" sideOffset={12} className="group/fab w-auto flex-row gap-3 overflow-visible bg-transparent p-0 shadow-none ring-0 transition-opacity duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] data-open:animate-none data-closed:animate-none data-starting-style:opacity-0 data-ending-style:opacity-0 motion-reduce:transition-none">
+      <PopoverContent side="top" align="start" sideOffset={8} className="group/fab w-auto gap-2 bg-transparent p-1 shadow-none ring-0 transition-opacity duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] data-open:animate-none data-closed:animate-none data-starting-style:opacity-0 data-ending-style:opacity-0 motion-reduce:transition-none">
         <PopoverTitle className="sr-only">Canvas menu</PopoverTitle>
         <Tip label="New canvas"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || busy} onClick={onNew} aria-label="New canvas"><FilePlusIcon /></Button></Tip>
         <Tip label="Import project"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || busy} onClick={() => fileInputRef.current?.click()} aria-label="Import project"><UploadIcon /></Button></Tip>
@@ -207,10 +207,10 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
             </div>
           </PopoverContent>
         </Popover>
-        <div className="transition-[translate,scale,opacity] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] group-data-starting-style/fab:-translate-x-6 group-data-starting-style/fab:scale-75 group-data-starting-style/fab:opacity-0 group-data-ending-style/fab:-translate-x-6 group-data-ending-style/fab:scale-75 group-data-ending-style/fab:opacity-0 motion-reduce:transition-none">
+        <div className="transition-[translate,scale,opacity] duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] group-data-starting-style/fab:translate-y-6 group-data-starting-style/fab:scale-75 group-data-starting-style/fab:opacity-0 group-data-ending-style/fab:translate-y-6 group-data-ending-style/fab:scale-75 group-data-ending-style/fab:opacity-0 motion-reduce:transition-none">
           <SettingsDialog />
         </div>
-        <div className="transition-[translate,scale,opacity] duration-250 delay-50 ease-[cubic-bezier(0.22,1,0.36,1)] group-data-starting-style/fab:-translate-x-12 group-data-starting-style/fab:scale-75 group-data-starting-style/fab:opacity-0 group-data-ending-style/fab:-translate-x-12 group-data-ending-style/fab:scale-75 group-data-ending-style/fab:opacity-0 motion-reduce:transition-none">
+        <div className="transition-[translate,scale,opacity] duration-250 delay-50 ease-[cubic-bezier(0.22,1,0.36,1)] group-data-starting-style/fab:translate-y-12 group-data-starting-style/fab:scale-75 group-data-starting-style/fab:opacity-0 group-data-ending-style/fab:translate-y-12 group-data-ending-style/fab:scale-75 group-data-ending-style/fab:opacity-0 motion-reduce:transition-none">
           <Popover open={zoomOpen} onOpenChange={setZoomOpen}>
             <Tip label="Zoom"><PopoverTrigger render={<Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover text-popover-foreground shadow-sm" />} aria-label="Zoom">
               <SearchIcon />
