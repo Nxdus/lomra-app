@@ -62,24 +62,30 @@ async function persistChatFiles(chat: Chat): Promise<Chat> {
   }))) };
 }
 
+export async function writeChat(chat: Chat): Promise<Chat> {
+  const saved = await persistChatFiles(chat);
+  await storage(`chats/${encodeURIComponent(saved.id)}`, 'PUT', saved);
+  return saved;
+}
+
 export async function chatStorage(change?: Chat | string, canvasId = "default"): Promise<Chat[]> {
   migration ??= (async () => {
     if (localStorage.getItem('lomra-chats-migrated')) return;
     const existing: { id: string }[] = await storage('chats');
     for (const chat of await localChats()) {
-      if (!existing.some((row) => row.id === chat.id)) await storage(`chats/${encodeURIComponent(chat.id)}`, 'PUT', await persistChatFiles(chat));
+      if (!existing.some((row) => row.id === chat.id)) await writeChat(chat);
     }
     localStorage.setItem('lomra-chats-migrated', 'true');
   })().catch((error) => { migration = undefined; throw error; });
   await migration;
   if (typeof change === 'string') await storage(`chats/${encodeURIComponent(change)}`, 'DELETE');
-  else if (change) await storage(`chats/${encodeURIComponent(change.id)}`, 'PUT', await persistChatFiles(change));
+  else if (change) await writeChat(change);
   const rows: { value: Chat }[] = await storage('chats');
   return rows.map((row) => row.value).filter((chat) => (chat.canvasId ?? 'default') === canvasId).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export function restoreGenerations(generations: Generation[]): Generation[] {
-  return generations.map((task) => task.status === "Done" || task.status === "Completed" || task.error ? task : {
+  return generations.map((task) => task.status === "Done" || task.status === "Completed" || task.status === "Stopped" || task.error ? task : {
     ...task, status: "Interrupted", error: task.requestId ? "Reopen the existing job with Check job." : "Interrupted before a job ID was saved. You can try again.",
   });
 }

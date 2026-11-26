@@ -546,7 +546,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
             onClick={() => { setModelActionsOpen(false); if (group.value === "llm") void refreshOllama(); if (group.value === "picture") void refreshSd(); if (group.value === "3d") void refreshLocal3d(); setAddProvider(null); setModelId(null); setLocalCatalog([]); setBrowserAvailable(false); setCatalog([]); setCatalogStatus("loading"); setGoogleCatalog([]); setGoogleStatus("loading"); setAddingGroup(group); }}>
             <PlusIcon data-icon="inline-start" />Add {group.value === "llm" ? "LLM" : group.value === "3d" ? "3D" : group.label.toLowerCase()} model
           </Button>)}
-          <Button type="button" variant="ghost" size="sm" className="justify-start" onClick={() => { setModelActionsOpen(false); onOpenModelSetup(); }}>
+          <Button type="button" variant="ghost" size="sm" className="h-auto justify-start py-1.5 text-left whitespace-normal" onClick={() => { setModelActionsOpen(false); onOpenModelSetup(); }}>
             <KeyIcon data-icon="inline-start" />Configure API keys &amp; local models…
           </Button>
         </PopoverContent>

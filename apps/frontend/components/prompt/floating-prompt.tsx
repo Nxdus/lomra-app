@@ -6,7 +6,7 @@ import { useEffect, useId, useImperativeHandle, useRef, useState, type KeyboardE
 import { createPortal } from "react-dom";
 import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, ImagesIcon, Loader2Icon, MessageCircleIcon, MicIcon, SquareIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, Rows3Icon, ScanEyeIcon, TrashIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { chatStorage, persistentUrl, restoreGenerations, type Chat } from "./chat-storage";
+import { chatStorage, persistentUrl, restoreGenerations, writeChat, type Chat } from "./chat-storage";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent } from "@/components/ui/popover";
@@ -403,10 +403,13 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   async function persistStoryboardChange(change: (current: Storyboard) => Storyboard) {
     if (!boardOwner) throw new Error("The storyboard chat is unavailable.");
     const save = saves.current.then(async () => {
-      const owner = (await chatStorage(undefined, canvasId)).find(({ id }) => id === boardOwner);
+      const chats = await chatStorage(undefined, canvasId);
+      const owner = chats.find(({ id }) => id === boardOwner);
       if (!owner?.storyboard) throw new Error("The storyboard is missing from its workspace chat.");
-      setChats(await chatStorage({ ...owner, storyboard: change(owner.storyboard) }, canvasId));
-      setStoryboard((current) => current ? change(current) : current);
+      const next = change(owner.storyboard);
+      const committed = next === owner.storyboard ? owner : await writeChat({ ...owner, storyboard: next });
+      setChats(chats.map((chat) => chat.id === committed.id ? committed : chat));
+      setStoryboard(committed.storyboard);
       setStorageError("");
     });
     saves.current = save.catch(() => {});
@@ -507,7 +510,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       const message = signal.aborted ? (cause instanceof Error && cause.name !== "AbortError" ? cause.message : "Request aborted. This provider may still finish submitted work and charge for it.") : cause instanceof Error ? cause.message : "Generation failed";
       if (signal.aborted) toast.add({ title: message });
       else notifyError(message);
-      updateGeneration(task.id, { status: "Failed", error: message });
+      updateGeneration(task.id, signal.aborted ? { status: "Stopped", error: undefined } : { status: "Failed", error: message });
       return `${task.category} did not complete: ${message}`;
     }
   }
@@ -661,7 +664,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       for (let index = 0; index < tasks.length; index++) {
         const task = tasks[index];
         if (controller.signal.aborted) {
-          updateGeneration(task.id, { status: "Failed", error: "Stopped before submission" });
+          updateGeneration(task.id, { status: "Stopped", error: undefined });
           continue;
         }
         setStatus(`Generating · ${label(index)}`);
@@ -707,9 +710,9 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
           }
         } catch (cause) {
           const message = controller.signal.aborted ? "Generation stopped" : cause instanceof Error ? cause.message : "Generation failed";
-          updateGeneration(task.id, { status: "Failed", error: message });
+          updateGeneration(task.id, controller.signal.aborted ? { status: "Stopped", error: undefined } : { status: "Failed", error: message });
           for (const rest of tasks.slice(index + 1)) {
-            updateGeneration(rest.id, { status: "Failed", error: controller.signal.aborted ? "Stopped before submission" : "Stopped after previous error" });
+            updateGeneration(rest.id, controller.signal.aborted ? { status: "Stopped", error: undefined } : { status: "Failed", error: "Stopped after previous error" });
           }
           if (!controller.signal.aborted) notifyError(message);
           else toast.add({ title: again ? "Generation stopped" : "Stopped remaining variations" });
@@ -1023,11 +1026,15 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     } : current);
   }
 
-  async function removeCharacter(index: number) {
+  async function removeCharacter(index: number, expectedCast: StoryCharacter[]) {
+    if (!expectedCast[index]) throw new Error("The character is no longer in the storyboard.");
+    const remaining = expectedCast.filter((_, position) => position !== index);
     await persistStoryboardChange((current) => {
-      if (!current.characters?.[index]) throw new Error("The character is no longer in the storyboard.");
+      const savedCast = JSON.stringify(current.characters ?? []);
+      if (savedCast === JSON.stringify(remaining)) return current;
+      if (savedCast !== JSON.stringify(expectedCast)) throw new Error("The cast changed. Reopen the confirmation and try again.");
       return {
-        ...current, characters: current.characters.filter((_, position) => position !== index),
+        ...current, characters: remaining,
         shots: current.shots?.map((shot) => ({ ...shot, characters: shot.characters?.filter((position) => position !== index)
           .map((position) => position > index ? position - 1 : position) })),
       };
@@ -1520,7 +1527,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       const outcomes: string[] = [];
       for (const { task, images: generationImages } of prepared) {
         if (controller.signal.aborted) {
-          updateGeneration(task.id, { status: "Failed", error: "Stopped before submission" });
+          updateGeneration(task.id, { status: "Stopped", error: undefined });
           continue;
         }
         setStatus(`Generating · ${task.category === "picture" ? "image" : task.category} · ${task.model}`);
@@ -1555,7 +1562,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       const message = controller.signal.aborted ? "Generation stopped." : cause instanceof Error ? cause.message : "Could not try again";
       if (controller.signal.aborted) toast.add({ title: message });
       else notifyError(message);
-      updateGeneration(task.id, { status: "Failed", error: message });
+      updateGeneration(task.id, controller.signal.aborted ? { status: "Stopped", error: undefined } : { status: "Failed", error: message });
     }
     finally { active.current = null; setStatus(""); }
   }
@@ -1704,6 +1711,19 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
           </DialogFooter>
         </DialogContent>}
       </Dialog>
+      <Dialog open={renderingTimeline && !timelineDownload && !timelinePreview}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Rendering timeline</DialogTitle>
+            <DialogDescription role="status">{status || "Preparing timeline…"}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={status === "Stopping…"} onClick={stopGeneration}>
+              <SquareIcon data-icon="inline-start" />Stop
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={!!timelinePreview} onOpenChange={(open) => { if (!open) returnToTimeline(); }}>
         {timelinePreview && <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
@@ -1809,6 +1829,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
             <span role="alert" className="text-destructive">{task.error}</span>
             <Tip label={task.requestId ? "Check job" : "Try again"}><Button variant="ghost" size="icon-xs" className="ml-1 inline-flex align-middle text-destructive hover:text-destructive" aria-label={task.requestId ? "Check job" : "Try again"} disabled={!!status} onClick={() => void checkJob(task)}><RefreshCwIcon /></Button></Tip>
           </div>}
+          {task.status === "Stopped" && task.requestId && <Button variant="outline" size="sm" disabled={!!status} onClick={() => void checkJob(task)}>Check job</Button>}
           {task.files?.map((file) => <div key={file.url} className="flex items-center gap-2 rounded-xl border bg-background p-1">
             <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground">
               {file.kind === "image"
@@ -1864,7 +1885,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         <StoryboardShots shots={storyboard.shots} images={storyImages} characters={storyboard.characters ?? []}
           busy={!!status} status={checkingVideo ? "Checking storyboard…" : status} onEdit={editShot} onReorder={reorderShots} onGenerate={(index) => void generateShot(index, storyboard)} onStop={stopGeneration}
           renderCharacterReference={(index, close) => <StoryboardCharacters characters={storyboard.characters ?? []} index={index} images={storyImages} status={status}
-            onEdit={editCharacter} onRemove={async () => { await removeCharacter(index); close(); }}
+            onEdit={editCharacter} onRemove={async () => { await removeCharacter(index, storyboard.characters ?? []); close(); }}
             onGenerate={() => void generateCharacter(index, storyboard.characters![index], storyboard.story)}
             onStop={stopGeneration} />}
           renderTakeControls={(shot, close) => shot.id && <StoryboardTakes shot={shot} model={videoStartImage(videoModel) ? videoModel : ""} aspectRatio={storyboard.timeline?.aspectRatio} disabled={!!status} price={videoPrice}
