@@ -46,7 +46,7 @@ export const isSdModel = (model: string) => model.startsWith(sdPrefix);
 export const local3dPrefix = "local3d/";
 export const isLocal3dModel = (model: string) => model.startsWith(local3dPrefix);
 /** Local pictures and local 3D take turns on the graphics card; `ahead` is only set on progress about that. */
-const waitingStatus = (ahead?: number) => ahead === undefined ? undefined : ahead > 0 ? `Waiting for the graphics card… ${ahead} ahead` : "Generating locally…";
+const waitingStatus = (ahead?: number) => ahead === undefined ? undefined : ahead > 0 ? `Queued · GPU queue · ${ahead} ahead` : "Generating · Locally";
 export const browserImageModel = "chatgpt-browser/create-image";
 export const geminiImageModel = "gemini-browser/create-image";
 export const geminiVideoModel = "gemini-browser/create-video";
@@ -133,7 +133,7 @@ async function generateMotion(task: Generation, request: RequestProvider, signal
     const deadline = Date.now() + 20 * 60_000;
     while (true) {
       signal.throwIfAborted();
-      update({ status: stage === "rig" ? "Rigging character" : "Generating custom motion" });
+      update({ status: stage === "rig" ? "Generating · Rigging character" : "Generating · Custom motion" });
       const result = await request("fal", { model, action: "status", requestId: id, signal }) as { status?: string };
       if (result.status === "COMPLETED") {
         outputs[stage] = await request("fal", { model, action: "result", requestId: id, signal });
@@ -148,7 +148,7 @@ async function generateMotion(task: Generation, request: RequestProvider, signal
   const rig = outputs.rig as { rigged_character_glb?: { url?: string } };
   const motion = outputs.motion as { fbx_file?: { url?: string } };
   if (!safeMediaUrl(rig?.rigged_character_glb?.url) || !safeMediaUrl(motion?.fbx_file?.url)) throw new Error("Fal returned no rigged GLB or motion FBX.");
-  update({ status: "Fitting motion to character" });
+  update({ status: "Generating · Fitting motion to character" });
   const files = await (await import("./retarget-motion")).fitMotion(rig.rigged_character_glb.url, motion.fbx_file.url, signal);
   update({ summary: "Custom motion fitted to the character's rest pose and leg proportions. Check foot contact and limb overlap; automatic fitting does not guarantee collision-free motion." });
   return files;
@@ -169,7 +169,7 @@ export async function generate(
     const abort = () => bridge.cancelBrowserImage?.(task.id);
     signal.addEventListener("abort", abort, { once: true });
     try {
-      update({ status: "Generating in ChatGPT…" });
+      update({ status: "Generating · ChatGPT" });
       const result = await bridge.browserImage(task.id, { prompt: task.prompt, images, aspectRatio: task.aspectRatio });
       if (signal.aborted) throw new Error("Stopped waiting for ChatGPT. Check your ChatGPT history for any submitted generation.");
       if ("error" in result) throw new Error(result.error);
@@ -187,7 +187,7 @@ export async function generate(
     const abort = () => bridge.cancelBrowserImage?.(task.id);
     signal.addEventListener("abort", abort, { once: true });
     try {
-      update({ status: "Generating in Gemini…" });
+      update({ status: "Generating · Gemini" });
       const result = await bridge.browserGemini(task.id, { kind, prompt: task.prompt, images: kind === "video" ? images.slice(0, 1) : images, aspectRatio: task.aspectRatio });
       if (signal.aborted) throw new Error("Stopped waiting for Gemini. Check your Gemini activity for any submitted generation.");
       if ("error" in result) throw new Error(result.error);
@@ -218,9 +218,9 @@ export async function generate(
     }
     const abort = () => bridge.cancel(task.id);
     signal.addEventListener("abort", abort, { once: true });
-    const stopProgress = bridge.onProgress((event) => { if (event.runId === task.id) update({ status: waitingStatus(event.waiting) ?? `Generating locally… ${event.step}/${event.total}` }); });
+    const stopProgress = bridge.onProgress((event) => { if (event.runId === task.id) update({ status: waitingStatus(event.waiting) ?? `Generating · Step ${event.step} of ${event.total}` }); });
     try {
-      update({ status: "Generating locally…" });
+      update({ status: "Generating · Locally" });
       await loadSdSettings();
       const { mask: maskUrl, ...override } = task.sdEdit ?? {};
       const { strength, ...settings } = filterSdSettings(task.sdSettings ?? { ...sdSettingsOf(model), ...override }, caps);
@@ -251,13 +251,13 @@ export async function generate(
     if (!imageUrl || !/^data:image\/(?:png|jpeg|webp);base64,/.test(imageUrl)) throw new Error("Select one PNG, JPEG or WebP picture on the canvas before using a local 3D model.");
     const abort = () => bridge.cancel(task.id);
     signal.addEventListener("abort", abort, { once: true });
-    const labels: Record<string, string> = { loading: "Starting the 3D engine…", background: "Removing the background…", model: "Loading the model…", shape: "Making the 3D shape…", mesh: "Cleaning up the mesh…" };
+    const labels: Record<string, string> = { loading: "Starting the 3D engine", background: "Removing the background", model: "Loading the model", shape: "Making the 3D shape", mesh: "Cleaning up the mesh" };
     const stopProgress = bridge.onProgress((event) => {
       const status = waitingStatus(event.waiting) ?? labels[event.stage];
-      if (event.runId === task.id && status) update({ status });
+      if (event.runId === task.id && status) update({ status: waitingStatus(event.waiting) ?? `Generating · ${status}` });
     });
     try {
-      update({ status: "Generating locally…" });
+      update({ status: "Generating · Locally" });
       const result = await bridge.generate(task.id, { model: task.model.slice(local3dPrefix.length), image: imageUrl });
       if ("error" in result) throw new Error(result.error);
       signal.throwIfAborted();
@@ -278,7 +278,7 @@ export async function generate(
       if (!url) throw new Error("Select the source image on the canvas first.");
       const operation = task.mediaTool.name === "remove_background" ? "remove-background" : "upscale";
       const scale = task.mediaTool.name === "upscale_image" ? (task.mediaTool.scale as 2 | 4) : undefined;
-      const label = operation === "remove-background" ? "Removing background locally…" : "Upscaling locally…";
+      const label = operation === "remove-background" ? "Generating · Removing background locally" : "Generating · Upscaling locally";
       const abort = () => bridge.cancel(task.id);
       signal.addEventListener("abort", abort, { once: true });
       const stopProgress = bridge.onProgress((event) => {
@@ -341,7 +341,7 @@ export async function generate(
       const submitted = await request(provider, { model: task.model, signal: provider === "fal" ? AbortSignal.timeout(60_000) : signal, action: task.category === "video" ? "video" : "submit", ...(task.category === "video" && task.startImage ? { images: images.slice(0, 1), ...(task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}), ...(task.duration ? { duration: task.duration } : {}) } : {}), input: toolInput ?? (task.category === "video" ? task.prompt : multi ? viewInput : imageInput ? { image_url: imageUrl } : { prompt: task.prompt }) }) as { id?: string; request_id?: string };
       requestId = task.category === "video" ? submitted.id : submitted.request_id;
       if (!requestId || !/^[a-zA-Z0-9_-]{1,100}$/.test(requestId)) throw new Error("Provider returned no valid job ID");
-      update({ requestId, status: "Queued" });
+      update({ requestId, status: "Queued · Provider queue" });
     }
     const deadline = Date.now() + 20 * 60_000;
     while (Date.now() < deadline) {
@@ -350,7 +350,7 @@ export async function generate(
       const status = result.status?.toLowerCase();
       if (["failed", "cancelled", "expired"].includes(status ?? "")) throw new Error("Generation failed at the provider");
       if (status === "completed") {
-        update({ status: "Loading result" });
+        update({ status: "Generating · Loading result" });
         if (task.mediaTool) {
           if (task.mediaTool.name === "rig_3d") return rigFiles(await call({ action: "result", requestId }));
           if (task.mediaTool.name === "animate_3d") return animationFiles(await call({ action: "result", requestId }));
@@ -368,7 +368,7 @@ export async function generate(
         return [{ url, name: "Video", kind: "video" }];
       }
       if (!["pending", "in_queue", "in_progress"].includes(status ?? "")) throw new Error("Provider returned an unknown job status");
-      update({ status: status === "in_progress" ? "Generating" : "Queued" });
+      update({ status: status === "in_progress" ? "Generating" : "Queued · Provider queue" });
       await pause(task.category === "video" ? 15_000 : 5000, signal);
     }
     throw new Error("Still waiting. Use Check job to continue without generating again.");

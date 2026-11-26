@@ -1,5 +1,6 @@
 "use client";
 
+import { Tip } from "@/components/tip";
 import { ConfirmDelete } from "@/components/confirm-delete";
 
 import { useRef, useState } from "react";
@@ -53,7 +54,7 @@ export function MultiviewInput({ model, views, onChange, selection, disabled, on
       <p className="flex items-center gap-2 text-sm font-medium"><BoxIcon className="size-4 text-muted-foreground" aria-hidden="true" />Images to 3D</p>
       <Badge variant="secondary">{Object.keys(views).length} added</Badge>
     </div>
-    <ConfirmDelete open={!!deletingView} onOpenChange={(open) => { if (!open) setDeletingView(null); }} title="Remove view image?" description={`The ${deletingView} view image will be removed from this input.`} disabled={disabled} onConfirm={() => { if (deletingView && !disabled) { const next = { ...views }; delete next[deletingView]; onChange(next); } }} />
+    <ConfirmDelete open={!!deletingView} onOpenChange={(open) => { if (!open) setDeletingView(null); }} title="Remove view image?" actionLabel="Remove" description={`The ${deletingView} view image will be removed from this input.`} disabled={disabled} onConfirm={async () => { if (deletingView && !disabled) { const next = { ...views }; delete next[deletingView]; onChange(next); } }} />
     <FieldGroup className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       {(config?.order ?? modelViews).map((view) => <Field key={view} className="min-w-0 gap-2">
         <div className="relative">
@@ -65,11 +66,11 @@ export function MultiviewInput({ model, views, onChange, selection, disabled, on
           <span className="sr-only">Replace {view} view</span>
           </> : <><PlusIcon className="size-5" aria-hidden="true" /><span className="text-xs">Add image</span></>}
           </label>
-          {views[view] && <Button type="button" variant="secondary" size="icon-xs" className="absolute top-1.5 right-1.5" aria-label={`Remove ${view} view`} disabled={disabled} onClick={() => setDeletingView(view)}><XIcon /></Button>}
+          {views[view] && <Tip label={`Remove ${view} view`}><Button type="button" variant="secondary" size="icon-xs" className="absolute top-1.5 right-1.5" aria-label={`Remove ${view} view`} disabled={disabled} onClick={() => setDeletingView(view)}><XIcon /></Button></Tip>}
         </div>
         <div className="flex items-center justify-between gap-1">
           <FieldLabel htmlFor={`multiview-${view}`} className="text-xs">{view[0].toUpperCase() + view.slice(1)}</FieldLabel>
-          <span className="text-[10px] text-muted-foreground">{config?.required.includes(view) ? "Required" : "Optional"}</span>
+          <span className="text-xs text-muted-foreground">{config?.required.includes(view) ? "Required" : "Optional"}</span>
         </div>
         {images.length > 0 && <Select value={null} disabled={disabled} onValueChange={(id) => { const item = images.find((image) => image.id === id); if (item) void assign(view, item.file); }}>
           <SelectTrigger size="sm" className="w-full min-w-0" aria-label={`Choose ${view} from canvas`}><SelectValue placeholder="Use canvas image" /></SelectTrigger>
