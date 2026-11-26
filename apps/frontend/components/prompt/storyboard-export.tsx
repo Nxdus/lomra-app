@@ -29,6 +29,7 @@ function ExportDraft({ storyboard, images }: Pick<StoryboardDialogProps, "storyb
   const [draft, setDraft] = useState<Draft>();
   const [edited, setEdited] = useState<string>();
   const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -37,9 +38,12 @@ function ExportDraft({ storyboard, images }: Pick<StoryboardDialogProps, "storyb
       () => { if (!controller.signal.aborted) setError("Could not prepare the storyboard export."); },
     );
     return () => controller.abort();
-  }, [storyboard, images]);
+  }, [storyboard, images, attempt]);
 
-  if (!draft) return <p role="status" className="text-muted-foreground">{error || "Checking storyboard pictures…"}</p>;
+  if (!draft) return error ? <div className="space-y-2">
+    <p role="alert" className="text-destructive">{error}</p>
+    <Button variant="outline" onClick={() => { setError(""); setAttempt((current) => current + 1); }}>Retry</Button>
+  </div> : <p role="status" className="text-muted-foreground">Checking storyboard pictures…</p>;
   const markdown = edited ?? draft.markdown;
 
   function downloadZip(files: Draft["files"]) {
@@ -64,9 +68,9 @@ function ExportDraft({ storyboard, images }: Pick<StoryboardDialogProps, "storyb
       {error && <p role="alert" className="text-destructive">{error}</p>}
       <DialogFooter>
         <Button type="button" variant="outline" onClick={() => download("storyboard.md", new Blob([markdown], { type: "text/markdown;charset=utf-8" }))}>
-          Download Markdown
+          Export Markdown
         </Button>
-        <Button type="button" onClick={() => downloadZip(draft.files)}>Download ZIP</Button>
+        <Button type="button" onClick={() => downloadZip(draft.files)}>Export ZIP</Button>
       </DialogFooter>
     </>
   );

@@ -22,7 +22,7 @@ export function StoryboardVideoTrack({ shots, images, edit, busy, onSelectTake, 
   images: readonly { url: string }[];
   edit: StoryboardTimelineEdit;
   busy: boolean;
-  onSelectTake?: (shotId: string, fileId: string) => void;
+  onSelectTake: (shotId: string, fileId: string) => void;
   onTrim: (trim: TimelineTrim) => void;
 }) {
   const [selected, setSelected] = useState(0);
@@ -43,14 +43,14 @@ export function StoryboardVideoTrack({ shots, images, edit, busy, onSelectTake, 
   const active = Math.min(selected, clips.length - 1);
   const { shot, fileId, trim } = clips[active];
   const items = shotTakes(shot).map((take, index) => ({ value: take.fileId, label: `Take ${index + 1}${take.stale ? " · Stale" : ""}` }));
-  const minWidth = Math.ceil(48 * offsets[clips.length] / Math.min(...clips.map(({ seconds }) => seconds)));
+  const minWidth = Math.ceil(64 * offsets[clips.length] / Math.min(...clips.map(({ seconds }) => seconds)));
 
   return (
     <section aria-label="Video track" className="space-y-3">
-      <div className="rounded-2xl bg-zinc-950 p-3 text-zinc-50 sm:p-4">
+      <div className="rounded-2xl border bg-card p-3 text-card-foreground sm:p-4">
         <div className="mb-3 flex items-center justify-between gap-2">
-          <h3 className="flex items-center gap-2 text-sm font-medium"><FilmIcon aria-hidden="true" className="size-4 text-zinc-400" />Video track</h3>
-          <span className="text-xs tabular-nums text-zinc-400">{clips.length} {clips.length === 1 ? "shot" : "shots"}</span>
+          <h3 className="flex items-center gap-2 text-sm font-medium"><FilmIcon aria-hidden="true" className="size-4 text-muted-foreground" />Video track</h3>
+          <span className="text-xs tabular-nums text-muted-foreground">{clips.length} {clips.length === 1 ? "shot" : "shots"}</span>
         </div>
         <div className="overflow-x-auto pb-1">
           <div role="group" aria-label="Select a storyboard shot" className="grid" style={{
@@ -59,24 +59,24 @@ export function StoryboardVideoTrack({ shots, images, edit, busy, onSelectTake, 
           }}>
             {clips.map(({ shot, picture, fileId, trim }, index) => (
               <div key={shot.id ?? index} className="min-w-0">
-                <div aria-hidden="true" className="h-6 overflow-hidden whitespace-nowrap border-l border-zinc-700 pl-1.5 text-[10px] leading-4 tabular-nums text-zinc-400">{timecode(offsets[index])}</div>
-                <Button type="button" variant="ghost" aria-pressed={index === active} aria-label={`Shot ${index + 1}${shot.scene ? `, ${shot.scene}` : ""}${fileId ? "" : ", no selected take"}`}
+                <div aria-hidden="true" className="h-6 overflow-hidden whitespace-nowrap border-l pl-1.5 text-xs leading-4 tabular-nums text-muted-foreground">{timecode(offsets[index])}</div>
+                <Button type="button" variant="ghost" disabled={busy} aria-pressed={index === active} aria-label={`Shot ${index + 1}${shot.scene ? `, ${shot.scene}` : ""}${fileId ? "" : ", no selected take"}`}
                   onClick={(event) => {
                     setSelected(index);
                     event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" });
                   }}
                   className={cn(
-                    "relative h-20 w-full justify-start overflow-hidden rounded-none border-0 border-r-2 border-zinc-950 bg-zinc-800 p-0 text-left text-white hover:bg-zinc-700 hover:text-white focus-visible:z-10 focus-visible:ring-inset focus-visible:ring-amber-300 sm:h-24",
-                    index === active && "z-1 after:pointer-events-none after:absolute after:inset-0 after:rounded-sm after:ring-2 after:ring-amber-300 after:ring-inset",
+                    "relative h-20 w-full justify-start overflow-hidden rounded-none border-0 border-r-2 border-card bg-muted p-0 text-left text-foreground hover:bg-accent focus-visible:z-10 focus-visible:ring-inset focus-visible:ring-ring sm:h-24",
+                    index === active && "z-1 after:pointer-events-none after:absolute after:inset-0 after:rounded-sm after:ring-2 after:ring-ring after:ring-inset",
                   )}>
                   {picture && (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={picture} alt="" className="absolute inset-0 size-full object-cover" />
                   )}
-                  <span className="absolute inset-0 bg-linear-to-t from-black/90 via-black/20 to-black/20" aria-hidden="true" />
-                  <span className="absolute top-1.5 left-1.5 rounded-sm bg-black/65 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums">{String(index + 1).padStart(2, "0")}</span>
-                  {trim.mute && <VolumeXIcon aria-hidden="true" className="absolute top-2 right-2 size-3.5 drop-shadow-md" />}
-                  <span className="absolute inset-x-2 bottom-1.5 truncate text-xs font-medium">{fileId ? shot.scene || `Shot ${index + 1}` : "No take"}</span>
+                  {picture && <span className="absolute inset-0 bg-linear-to-t from-black/90 via-black/20 to-black/20" aria-hidden="true" />}
+                  <span className={cn("absolute top-1.5 left-1.5 rounded-sm px-1.5 py-0.5 text-[10px] font-semibold tabular-nums", picture ? "bg-black/65 text-white" : "bg-background")}>{String(index + 1).padStart(2, "0")}</span>
+                  {trim.mute && <VolumeXIcon aria-hidden="true" className={cn("absolute top-2 right-2 size-3.5", picture && "text-white drop-shadow-md")} />}
+                  <span className={cn("absolute inset-x-2 bottom-1.5 truncate text-xs font-medium", picture && "text-white")}>{fileId ? shot.scene || `Shot ${index + 1}` : "No take"}</span>
                 </Button>
               </div>
             ))}
@@ -90,8 +90,8 @@ export function StoryboardVideoTrack({ shots, images, edit, busy, onSelectTake, 
         <div className="grid grid-cols-2 items-end gap-2.5 sm:grid-cols-[minmax(7rem,1.2fr)_1fr_1fr_auto]">
           {!!items.length && <div className="grid gap-1 text-xs font-medium">
             <span>Take</span>
-            <Select items={items} value={fileId ?? null} disabled={busy || !shot.id || !onSelectTake}
-              onValueChange={(takeId) => { if (shot.id && takeId) onSelectTake?.(shot.id, takeId); }}>
+            <Select items={items} value={fileId ?? null} disabled={busy || !shot.id}
+              onValueChange={(takeId) => { if (shot.id && takeId) onSelectTake(shot.id, takeId); }}>
               <SelectTrigger aria-label={`Selected take for shot ${active + 1}`} className="w-full min-w-0"><SelectValue placeholder="Select take" /></SelectTrigger>
               <SelectContent>{items.map(({ value, label }) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent>
             </Select>

@@ -1,4 +1,7 @@
-import { CheckIcon, ImageIcon, RefreshCwIcon, TrashIcon } from "lucide-react";
+import { useState } from "react";
+import { CheckIcon, ImageIcon, RefreshCwIcon, SquareIcon, TrashIcon } from "lucide-react";
+import { ConfirmDelete } from "@/components/confirm-delete";
+import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,10 +13,11 @@ export function StoryboardCharacters({ characters, index, images, status, onEdit
   images: { name: string; url: string }[];
   status: string;
   onEdit: (index: number, change: Partial<StoryCharacter>) => void;
-  onRemove: () => void;
+  onRemove: () => Promise<void>;
   onGenerate: () => void;
   onStop: () => void;
 }) {
+  const [removing, setRemoving] = useState(false);
   const character = characters[index];
   if (!character) return null;
   const selected = character.image === null ? undefined : images[character.image];
@@ -24,7 +28,7 @@ export function StoryboardCharacters({ characters, index, images, status, onEdit
   return <section aria-label={`Reference for ${name}`} className="grid gap-3 border-t bg-muted/25 p-3">
     {status && <div className="flex items-center gap-2">
       <p role="status" className="min-w-0 flex-1 text-xs text-muted-foreground">{status}</p>
-      <Button variant="outline" size="sm" onClick={onStop}>Stop</Button>
+      <Button variant="outline" size="sm" onClick={onStop}><SquareIcon data-icon="inline-start" />Stop</Button>
     </div>}
     <div className="flex min-w-0 items-center gap-3">
       {url && (
@@ -53,9 +57,12 @@ export function StoryboardCharacters({ characters, index, images, status, onEdit
         onChange={(event) => onEdit(index, { notes: event.target.value })} />
     </label>}
     <div className="flex flex-wrap items-center gap-2">
-      <Button variant="ghost" size="icon-sm" className="text-muted-foreground"
-        aria-label={`Remove ${name} from storyboard`} title={`Remove ${name} from storyboard`}
-        disabled={!!status} onClick={onRemove}><TrashIcon /></Button>
+      <Tip label="Remove character"><Button variant="ghost" size="icon-sm" className="text-muted-foreground"
+        aria-label={`Remove ${name} from storyboard`}
+        disabled={!!status} onClick={() => setRemoving(true)}><TrashIcon /></Button></Tip>
+      <ConfirmDelete open={removing} onOpenChange={setRemoving} title="Remove character?"
+        description={`${name} will be removed from the storyboard and its shot assignments will be cleared.`}
+        actionLabel="Remove" onConfirm={async () => { await onRemove(); }} />
       {canGenerate && <div className="ml-auto flex min-w-0 flex-wrap justify-end gap-2">
         <Button variant="outline" size="sm" disabled={!!status || !character.name.trim()} onClick={onGenerate}>
           {character.generatedId ? <RefreshCwIcon data-icon="inline-start" /> : <ImageIcon data-icon="inline-start" />}

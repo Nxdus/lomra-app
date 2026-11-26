@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronDownIcon, ClapperboardIcon, DownloadIcon, FilmIcon, GripVerticalIcon, ImageIcon, ListIcon, PencilIcon, RotateCcwIcon, SlidersHorizontalIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronDownIcon, ClapperboardIcon, DownloadIcon, EllipsisIcon, FilmIcon, GripVerticalIcon, ImageIcon, ListIcon, PencilIcon, RotateCcwIcon, SlidersHorizontalIcon, SquareIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
+import { Tip } from "@/components/tip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CharacterDialog } from "@/components/character-dialog";
 import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { toast } from "@/components/ui/toast";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -98,11 +99,14 @@ export function StoryboardShots({ shots, images, characters, busy, status, onEdi
 }) {
   const [editing, setEditing] = useState<number | null>(null);
   const [referenceCharacter, setReferenceCharacter] = useState<number | null>(null);
+  const [listOpen, setListOpen] = useState(false);
+  const listContent = useRef<HTMLDivElement>(null);
+  const returnToShot = useRef<number | null>(null);
   function closeSettings() {
     setEditing(null);
     setReferenceCharacter(null);
+    if (returnToShot.current !== null) setListOpen(true);
   }
-  const [listOpen, setListOpen] = useState(false);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const reorderFrom = useRef<number | null>(null);
   const [saveAs, setSaveAs] = useState<{ id: string; file: File; url: string; x: number; y: number; width: number; height: number }[] | null>(null);
@@ -173,11 +177,26 @@ export function StoryboardShots({ shots, images, characters, busy, status, onEdi
     onEdit(index, { position: undefined });
   }
 
+  function shotActions(index: number, Item: typeof ContextMenuItem | typeof DropdownMenuItem) {
+    const item = shots[index];
+    const url = pictureUrl(item);
+    return <>
+      <Item onClick={() => setEditing(index)}><SlidersHorizontalIcon /> Shot settings</Item>
+      {!url && <Item disabled={busy || !item.description.trim()} onClick={() => onGenerate(index)}><ImageIcon /> Generate image</Item>}
+      {url && <Item onClick={() => void saveAsCharacter(index)}><UserRoundPlusIcon /> Save as character</Item>}
+      {url && <Item onClick={() => download(index)}><DownloadIcon /> Export image</Item>}
+      {item.videoId && <Item onClick={() => download(index, true)}><DownloadIcon /> Export clip</Item>}
+      {item.videoId && <Item disabled={busy} onClick={() => onEdit(index, { videoId: undefined })}><Trash2Icon /> Remove clip</Item>}
+      <Item disabled={!item.position} onClick={() => reset(index)}><RotateCcwIcon /> Reset position</Item>
+    </>;
+  }
+
   const spots = shots.length ? shots.map((_, index) => place(index)) : [{ x: 0, y: 0 }];
   const frame = shotsFrame(spots, video);
   const shot = editing === null ? undefined : shots[editing];
   const number = (editing ?? 0) + 1;
   const shotCharacters = shot?.characters ?? [];
+  const checkingVideo = status === "Checking storyboard…";
   return <>
     {/* The section follows the shots and finished video, with its name and actions on top. */}
     <div aria-hidden="true" className="pointer-events-none absolute rounded-3xl border bg-muted/30" style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height }} />
@@ -189,23 +208,48 @@ export function StoryboardShots({ shots, images, characters, busy, status, onEdi
       {video && shots.length > 0 && <path d={arrow({ ...place(shots.length - 1), width: shotNodeWidth, height: nodeHeight }, video)} fill="none" stroke="currentColor" strokeWidth="1.5" markerEnd="url(#shot-arrow)" />}
     </svg>
     <div className="pointer-events-none absolute flex h-10 items-center gap-3" style={{ left: frame.left, top: frame.top - 56, width: frame.width }}>
-      <h3 onPointerDown={onMoveStart} title="Drag to move the storyboard" className="pointer-events-auto shrink-0 cursor-grab touch-none rounded-md px-1 text-sm leading-none font-medium text-muted-foreground select-none active:cursor-grabbing">Storyboard</h3>
+      <Tip label="Drag or use arrow keys to move the storyboard">
+        <Button variant="ghost" size="sm" aria-label="Move storyboard with arrow keys" onPointerDown={onMoveStart}
+          className="pointer-events-auto shrink-0 cursor-grab touch-none px-1 text-muted-foreground select-none active:cursor-grabbing"
+          onKeyDown={(event) => {
+            const direction = {
+              ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+              ArrowUp: [0, -1], ArrowDown: [0, 1],
+            }[event.key];
+            if (!direction) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const layout = storyboardLayout.read();
+            if (!layout?.origin) return;
+            const step = event.shiftKey ? 40 : 10;
+            storyboardLayout.record?.(layout);
+            storyboardLayout.write({
+              ...layout,
+              origin: { x: layout.origin.x + direction[0] * step, y: layout.origin.y + direction[1] * step },
+            });
+          }}>Storyboard</Button>
+      </Tip>
     {busy
       ? <div className="pointer-events-auto ml-auto flex w-max min-w-0 items-center gap-2 rounded-full border bg-background py-1 pr-1 pl-3 shadow">
         <p role="status" className="truncate text-sm text-muted-foreground">{status}</p>
-        <Button variant="outline" size="sm" onClick={onStop}>Stop</Button>
+        <Button variant="outline" size="sm" onClick={onStop}><SquareIcon data-icon="inline-start" />Stop</Button>
       </div>
       : <div role="toolbar" aria-label="Storyboard actions" className="pointer-events-auto ml-auto flex w-max items-center gap-1 rounded-full border bg-background p-1 shadow">
-        <Button size="sm" onClick={onMakeVideo}><FilmIcon data-icon="inline-start" />Make video</Button>
+        <Button size="sm" disabled={checkingVideo} onClick={onMakeVideo}>
+          <FilmIcon data-icon="inline-start" />{checkingVideo ? "Checking storyboard…" : "Make video"}
+        </Button>
         <Dialog open={listOpen} onOpenChange={setListOpen}>
-          <Tooltip>
-            <TooltipTrigger render={<DialogTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Shot List" />} />}><ListIcon /></TooltipTrigger>
-            <TooltipContent>Shot List</TooltipContent>
-          </Tooltip>
-          <DialogContent className="flex w-[calc(100%-2rem)] min-w-0 max-w-xl flex-col gap-0 overflow-hidden rounded-3xl p-0 sm:max-w-xl">
+          <Tip label="Shot list">
+            <DialogTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Shot list" />}><ListIcon /></DialogTrigger>
+          </Tip>
+          <DialogContent ref={listContent} initialFocus={() => {
+            const index = returnToShot.current;
+            returnToShot.current = null;
+            return index === null ? undefined : listContent.current?.querySelector<HTMLElement>(`[data-edit-shot="${index}"]`);
+          }} className="flex w-[calc(100%-2rem)] min-w-0 max-w-xl flex-col gap-0 overflow-hidden rounded-3xl p-0 sm:max-w-xl">
             <DialogHeader className="shrink-0 gap-1 border-b px-4 pt-4 pb-3 pr-14 sm:px-5 sm:pr-14">
               <div className="flex flex-wrap items-center gap-2">
-                <DialogTitle>Shot List</DialogTitle>
+                <DialogTitle>Shot list</DialogTitle>
                 <Badge variant="secondary" className="tabular-nums">{shots.length} {shots.length === 1 ? "shot" : "shots"}</Badge>
               </div>
               <DialogDescription>Drag a handle or use the arrows to reorder.</DialogDescription>
@@ -219,7 +263,7 @@ export function StoryboardShots({ shots, images, characters, busy, status, onEdi
                 const title = scene || description || "Untitled shot";
                 return <li key={item.id ?? index} className={cn(
                   "grid min-w-0 grid-cols-[0.875rem_3rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1 rounded-xl border bg-card p-2 min-[420px]:grid-cols-[0.875rem_3rem_minmax(0,1fr)_auto] sm:grid-cols-[1rem_5rem_minmax(0,1fr)_auto] sm:gap-x-3 sm:px-3",
-                  dropIndex === index && "border-amber-500 ring-1 ring-amber-500",
+                  dropIndex === index && "border-ring ring-1 ring-ring",
                 )}
                   onDragOver={(event) => {
                     if (reorderFrom.current === null) return;
@@ -251,14 +295,15 @@ export function StoryboardShots({ shots, images, characters, busy, status, onEdi
                       : <ImageIcon aria-label="No image" className="size-4" />}
                   </div>
                   <div className="col-start-3 min-w-0 space-y-0.5">
-                    <p className="truncate text-[11px] tabular-nums text-muted-foreground">{label} · {item.seconds}s</p>
+                    <p className="truncate text-xs tabular-nums text-muted-foreground">{label} · {item.seconds}s</p>
                     <p className="line-clamp-2 text-sm leading-snug font-medium wrap-anywhere" title={title}>{title}</p>
                     {scene && description && <p className="truncate text-xs text-muted-foreground" title={description}>{description}</p>}
                   </div>
                   <div className="col-start-3 flex shrink-0 items-center justify-self-end rounded-full bg-muted/60 p-0.5 min-[420px]:col-start-auto">
-                    <Button variant="ghost" size="icon-xs" aria-label={`Move ${label.toLowerCase()} up`} title="Move up" disabled={index === 0} onClick={() => onReorder(index, index - 1)}><ArrowUpIcon /></Button>
-                    <Button variant="ghost" size="icon-xs" aria-label={`Move ${label.toLowerCase()} down`} title="Move down" disabled={index === shots.length - 1} onClick={() => onReorder(index, index + 1)}><ArrowDownIcon /></Button>
-                    <Button variant="ghost" size="icon-xs" aria-label={`Edit ${label.toLowerCase()} settings`} title="Shot settings" onClick={() => { setListOpen(false); setEditing(index); }}><SlidersHorizontalIcon /></Button>
+                    <Tip label="Move up"><Button variant="ghost" size="icon-xs" aria-label={`Move ${label.toLowerCase()} up`} disabled={index === 0} onClick={() => onReorder(index, index - 1)}><ArrowUpIcon /></Button></Tip>
+                    <Tip label="Move down"><Button variant="ghost" size="icon-xs" aria-label={`Move ${label.toLowerCase()} down`} disabled={index === shots.length - 1} onClick={() => onReorder(index, index + 1)}><ArrowDownIcon /></Button></Tip>
+                    <Tip label="Shot settings"><Button variant="ghost" size="icon-xs" aria-label={`Edit ${label.toLowerCase()} settings`} data-edit-shot={index}
+                      onClick={() => { returnToShot.current = index; setListOpen(false); setEditing(index); }}><SlidersHorizontalIcon /></Button></Tip>
                   </div>
                 </li>;
               })}
@@ -266,14 +311,8 @@ export function StoryboardShots({ shots, images, characters, busy, status, onEdi
           </DialogContent>
         </Dialog>
         {toolbarActions}
-        <Tooltip>
-          <TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Edit story" onClick={onEditStory} />}><PencilIcon /></TooltipTrigger>
-          <TooltipContent>Edit story</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Redraft shots" onClick={onRedraft} />}><ClapperboardIcon /></TooltipTrigger>
-          <TooltipContent>Redraft shots</TooltipContent>
-        </Tooltip>
+        <Tip label="Edit story"><Button variant="ghost" size="icon-sm" aria-label="Edit story" onClick={onEditStory}><PencilIcon /></Button></Tip>
+        <Tip label="Redraft shots"><Button variant="ghost" size="icon-sm" aria-label="Redraft shots" onClick={onRedraft}><ClapperboardIcon /></Button></Tip>
       </div>}
     </div>
     {shots.map((item, index) => {
@@ -291,17 +330,18 @@ export function StoryboardShots({ shots, images, characters, busy, status, onEdi
         </div>
         <Badge variant="secondary" className="pointer-events-none absolute top-2 left-2 bg-background/85"><ClapperboardIcon data-icon="inline-start" />{index + 1}</Badge>
         {item.videoId && <Badge variant="secondary" title="Clip ready" aria-label="Clip ready" className="pointer-events-none absolute bottom-2 left-2 size-5 bg-background/85 p-0"><FilmIcon /></Badge>}
+        <DropdownMenu>
+          <Tip label="Shot actions">
+            <DropdownMenuTrigger render={<Button type="button" variant="secondary" size="icon-xs" data-canvas-interactive
+              aria-label={`Actions for shot ${index + 1}`} className="absolute top-2 right-2" />}><EllipsisIcon /></DropdownMenuTrigger>
+          </Tip>
+          <DropdownMenuContent data-canvas-interactive>
+            <DropdownMenuGroup>{shotActions(index, DropdownMenuItem)}</DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
         </ContextMenuTrigger>
         <ContextMenuContent data-canvas-interactive>
-          <ContextMenuGroup>
-            <ContextMenuItem onClick={() => setEditing(index)}><SlidersHorizontalIcon /> Shot settings</ContextMenuItem>
-            {!url && <ContextMenuItem disabled={busy || !item.description.trim()} onClick={() => onGenerate(index)}><ImageIcon /> Generate image</ContextMenuItem>}
-            {url && <ContextMenuItem onClick={() => void saveAsCharacter(index)}><UserRoundPlusIcon /> Save as Character</ContextMenuItem>}
-            {url && <ContextMenuItem onClick={() => download(index)}><DownloadIcon /> Download image</ContextMenuItem>}
-            {item.videoId && <ContextMenuItem onClick={() => download(index, true)}><DownloadIcon /> Download clip</ContextMenuItem>}
-            {item.videoId && <ContextMenuItem disabled={busy} onClick={() => onEdit(index, { videoId: undefined })}><Trash2Icon /> Remove clip</ContextMenuItem>}
-            <ContextMenuItem disabled={!item.position} onClick={() => reset(index)}><RotateCcwIcon /> Reset position</ContextMenuItem>
-          </ContextMenuGroup>
+          <ContextMenuGroup>{shotActions(index, ContextMenuItem)}</ContextMenuGroup>
         </ContextMenuContent>
       </ContextMenu>;
     })}

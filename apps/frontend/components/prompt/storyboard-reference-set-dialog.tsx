@@ -19,6 +19,7 @@ export function StoryboardReferenceSetDialog({ shots, images, onApply, onClose }
   const [setId, setSetId] = useState<string | null>(null);
   const [selected, setSelected] = useState(() => new Set(shots.flatMap(({ id }) => id ? [id] : [])));
   const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
   const active = sets?.find(({ id }) => id === setId);
 
   useEffect(() => {
@@ -27,7 +28,7 @@ export function StoryboardReferenceSetDialog({ shots, images, onApply, onClose }
       if (!cancelled) setSets(rows.map(({ value }) => value).sort((a, b) => a.name.localeCompare(b.name)));
     }, () => { if (!cancelled) setError("Could not load reference sets."); });
     return () => { cancelled = true; };
-  }, []);
+  }, [attempt]);
 
   function toggle(id: string) {
     const next = new Set(selected);
@@ -88,7 +89,7 @@ export function StoryboardReferenceSetDialog({ shots, images, onApply, onClose }
                       // eslint-disable-next-line @next/next/no-img-element
                       ? <img src={url} alt="" className="size-full object-cover" />
                       : <ImageIcon aria-hidden="true" className="size-4" />}
-                    <span className="absolute top-1 left-1 rounded-md bg-background px-1.5 py-1 text-[11px] text-foreground tabular-nums">Shot {index + 1}</span>
+                    <span className="absolute top-1 left-1 rounded-md bg-background px-1.5 py-1 text-xs text-foreground tabular-nums">Shot {index + 1}</span>
                     <span aria-hidden="true" className="absolute top-1 right-1 flex size-5 items-center justify-center rounded-md border border-input bg-background group-has-checked:border-primary group-has-checked:bg-primary group-has-checked:text-primary-foreground">
                       <CheckIcon className="invisible size-3 group-has-checked:visible" />
                     </span>
@@ -102,6 +103,8 @@ export function StoryboardReferenceSetDialog({ shots, images, onApply, onClose }
           ? "Right-click selected canvas images and choose Save reference set to create one."
           : "Loading reference sets…"}</p>}
         {error && <FieldError>{error}</FieldError>}
+        {error && !sets && <Button variant="outline" className="self-start"
+          onClick={() => { setError(""); setAttempt((current) => current + 1); }}>Retry</Button>}
       </div>
       <DialogFooter className="shrink-0 flex-row flex-wrap justify-end border-t px-4 py-3 sm:px-5">
         <Button variant="outline" onClick={onClose}>Cancel</Button>
