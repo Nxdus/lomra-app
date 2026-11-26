@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { ArrowUpIcon, LoaderCircleIcon, SquareIcon, XIcon } from "lucide-react";
+import { RefreshCwIcon, LoaderCircleIcon, SquareIcon, XIcon } from "lucide-react";
+import { Tip } from "@/components/tip";
 import { toast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import { useSpeechModel } from "@/hooks/use-speech-model";
@@ -25,13 +26,13 @@ export function VoiceRecorder({ onCancel, onTranscribed }: {
   const [error, setError] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
 
-  // Any failure shows its message and returns to the chat input.
+  // A microphone failure returns to chat. Transcription failures keep the recording.
   const leave = useEffectEvent(onCancel);
   useEffect(() => {
     if (!error) return;
     toast.add({ title: status, type: "error" });
-    leave();
-  }, [error, status]);
+    if (!audioUrl) leave();
+  }, [audioUrl, error, status]);
 
   async function transcribe() {
     if (!audio.current || upload.current) return;
@@ -54,10 +55,13 @@ export function VoiceRecorder({ onCancel, onTranscribed }: {
       });
       if (!response.ok) {
         const failure: unknown = await response.json().catch(() => null);
-        let message = failure && typeof failure === "object" && "message" in failure ? failure.message : undefined;
+        const message = failure && typeof failure === "object" && "message" in failure ? failure.message : undefined;
         if (response.status === 409 && failure && typeof failure === "object" && "code" in failure && failure.code === "model-missing") {
           const started = await askDownload(model);
-          message = started ? "The speech model is downloading, this can take a few minutes" : "Voice input needs the speech model";
+          if (controller.signal.aborted) return;
+          if (started) toast.add({ title: "The speech model is downloading.", description: "Retry transcription after the download finishes." });
+          setStatus(started ? "Retry transcription after the download finishes." : "Transcription canceled.");
+          return;
         }
         throw new Error(typeof message === "string" ? `${message}. Try again.` : "Could not transcribe audio. Try again.");
       }
@@ -221,21 +225,21 @@ export function VoiceRecorder({ onCancel, onTranscribed }: {
 
   return (
     <>
-      <Button variant="secondary" size="icon-sm" aria-label="Cancel recording" onClick={onCancel}>
+      <Tip label="Cancel recording"><Button variant="secondary" size="icon-sm" aria-label="Cancel recording" onClick={onCancel}>
         <XIcon />
-      </Button>
-      <span className={error || (!transcribing && (recording || audioUrl)) ? "sr-only" : "min-w-0 flex-1 text-xs text-muted-foreground"} role="status">
-        {error ? "Recording unavailable" : status}
+      </Button></Tip>
+      <span className={!error && !transcribing && (recording || audioUrl) ? "sr-only" : "min-w-0 flex-1 text-xs text-muted-foreground"} role="status">
+        {status}
       </span>
-      {!error && !transcribing && (audioUrl
+      {!transcribing && (audioUrl
         ? <audio aria-label="Recorded audio" controls src={audioUrl} className="h-8 min-w-0 flex-1" />
         : <canvas ref={canvas} width={640} height={32} aria-hidden="true" className={recording ? "h-8 min-w-0 flex-1 text-muted-foreground" : "hidden"} />)}
-      <Button variant="secondary" size="icon-sm" aria-label="Stop recording" disabled={!recording} onClick={() => recorder.current?.stop()}>
+      <Tip label="Stop recording"><Button variant="secondary" size="icon-sm" aria-label="Stop recording" disabled={!recording} onClick={() => recorder.current?.stop()}>
         <SquareIcon fill="currentColor" strokeWidth={0} />
-      </Button>
-      <Button size="icon-sm" disabled={!audioUrl || transcribing} aria-label={transcribing ? "Transcribing audio" : "Retry transcription"} onClick={() => void transcribe()}>
-        {transcribing ? <LoaderCircleIcon className="animate-spin" /> : <ArrowUpIcon />}
-      </Button>
+      </Button></Tip>
+      <Tip label={transcribing ? "Transcribing audio" : "Retry transcription"}><Button size="icon-sm" disabled={!audioUrl || transcribing} aria-label={transcribing ? "Transcribing audio" : "Retry transcription"} onClick={() => void transcribe()}>
+        {transcribing ? <LoaderCircleIcon aria-hidden="true" className="motion-safe:animate-spin" /> : <RefreshCwIcon aria-hidden="true" />}
+      </Button></Tip>
       {downloadDialog}
     </>
   );

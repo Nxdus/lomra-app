@@ -52,7 +52,17 @@ export function SdSettingsPopover({ model, sdStatus, disabled }: { model: string
   const id = useId();
   const settings = useSyncExternalStore(subscribeSdSettings, () => sdSettingsOf(model), () => sdSettingsOf(model));
   const lastSeed = useSyncExternalStore(subscribeSdSettings, lastSdSeed, lastSdSeed);
-  useEffect(() => { void loadSdSettings().catch(() => {}); }, []);
+  useEffect(() => {
+    function load() {
+      void loadSdSettings().catch(() => toast.add({
+        id: "image-settings-load-error",
+        title: "Could not load image settings.",
+        type: "error",
+        actionProps: { children: "Retry", onClick: load },
+      }));
+    }
+    load();
+  }, []);
   const caps = pictureCapabilities(`${sdPrefix}${model}`, sdStatus);
   const visibleFields: (keyof SdSettings)[] = [
     ...(caps.negativePrompt ? ["negativePrompt" as const] : []),
@@ -72,7 +82,7 @@ export function SdSettingsPopover({ model, sdStatus, disabled }: { model: string
     <Tip label={label}><PopoverTrigger render={<Button type="button" variant={changed ? "secondary" : "ghost"} size="icon-sm" disabled={disabled} aria-label={label} />}>
       <SlidersHorizontalIcon />
     </PopoverTrigger></Tip>
-    <PopoverContent side="top" align="end" className="w-80">
+    <PopoverContent side="top" align="end" className="w-80 max-w-[calc(100vw-2rem)]">
       <div className="flex items-center justify-between gap-2">
         <PopoverTitle>Image settings</PopoverTitle>
         <Button type="button" variant="ghost" size="sm" disabled={!anySaved} onClick={() => changeSdSettings(model, {}, saveFailed)}>Reset</Button>

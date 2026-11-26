@@ -97,7 +97,7 @@ test("local desktop picture tools route locally without Fal, report progress, ho
     const upTask: Generation = { id: "22222222-2222-2222-2222-222222222222", category: "picture", prompt: "upscale", model: mediaToolModel({ name: "upscale_image", image_index: 0, scale: 4 }, "realesrgan-x4v3"), status: "Waiting", mediaTool: { name: "upscale_image", image_index: 0, scale: 4 } };
     const up = await generate(upTask, providerMustNotRun, new AbortController().signal, (c) => { if (c.status) statuses.push(c.status); }, undefined, ["data:image/png;base64,YQ=="]);
     assert.deepEqual(up, [{ url: "data:image/png;base64,b3V0", name: "Upscaled 4x", kind: "image" }]);
-    assert.ok(statuses.includes("Upscaling locally… 1/2"));
+    assert.ok(statuses.includes("Generating · Upscaling locally 1/2"));
     assert.equal(progress, undefined);
 
     // Local failure must not fall back to Fal.

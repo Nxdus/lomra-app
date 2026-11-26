@@ -40,7 +40,7 @@ export function StoryboardTakes({ shot, model, aspectRatio, disabled, price, onS
         {!pending && price && <span className="text-sm text-muted-foreground">{price}</span>}
       </div>
       {selected && <video key={selected.fileId} controls playsInline preload="metadata" aria-label="Selected clip take"
-        className="max-h-52 w-full rounded-md bg-black" src={`/api/storage/files/${encodeURIComponent(selected.fileId)}`} />}
+        className="max-h-52 w-full rounded-md bg-black focus-visible:ring-2 focus-visible:ring-ring" src={`/api/storage/files/${encodeURIComponent(selected.fileId)}`} />}
       {selected?.stale && <p className="text-sm text-muted-foreground">This take uses an earlier first frame or prompt.</p>}
       {pending && <p className="text-sm text-muted-foreground">
         Saved job model {pending.model}{earlierRatio ? ` · ${pending.aspectRatio}` : ""}

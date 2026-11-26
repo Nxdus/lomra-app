@@ -24,7 +24,7 @@ async function localChats(change?: Chat | string): Promise<Chat[]> {
     request.onerror = () => reject(request.error);
     request.onblocked = () => {
       blocked = true;
-      reject(new Error("Chat storage is blocked. Close other Lomra tabs and retry."));
+      reject(new Error("Chat storage is blocked. Close other Lomra windows and retry."));
     };
     request.onsuccess = () => {
       if (blocked) request.result.close();
@@ -79,7 +79,7 @@ export async function chatStorage(change?: Chat | string, canvasId = "default"):
 }
 
 export function restoreGenerations(generations: Generation[]): Generation[] {
-  return generations.map((task) => task.status === "Completed" || task.error ? task : {
+  return generations.map((task) => task.status === "Done" || task.status === "Completed" || task.error ? task : {
     ...task, status: "Interrupted", error: task.requestId ? "Reopen the existing job with Check job." : "Interrupted before a job ID was saved. You can try again.",
   });
 }
