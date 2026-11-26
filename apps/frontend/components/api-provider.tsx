@@ -10,7 +10,7 @@ export type KeyedProvider = "openrouter" | "fal" | "google";
 export type Provider = KeyedProvider | "ollama";
 const apiProviderNames: Record<KeyedProvider, string> = {
   openrouter: "OpenRouter",
-  fal: "Fal.AI",
+  fal: "Fal",
   google: "Google AI",
 };
 

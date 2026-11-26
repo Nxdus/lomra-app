@@ -7,8 +7,24 @@ import { storage } from "@/lib/storage";
 
 export const FIRST_RUN_STORAGE_KEY = "lomra-first-run-done";
 
+const welcomeDismissedKey = "lomra-welcome-dismissed";
+
+export function dismissWelcomeForSession() {
+  try {
+    window.sessionStorage.setItem(welcomeDismissedKey, "true");
+  } catch {
+    // The dialog still closes for this mount if storage is unavailable.
+  }
+}
+
 export async function checkIsFirstRun(): Promise<boolean> {
   if (typeof window === "undefined") return false;
+
+  try {
+    if (window.sessionStorage?.getItem(welcomeDismissedKey) === "true") return false;
+  } catch {
+    // A blocked session store does not prevent checking persistent completion.
+  }
 
   try {
     const firstRun = localStorage.getItem(FIRST_RUN_STORAGE_KEY);

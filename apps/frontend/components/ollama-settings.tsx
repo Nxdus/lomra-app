@@ -1,11 +1,12 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { DownloadIcon, ExternalLinkIcon, LoaderCircleIcon, PauseIcon, PlayIcon, PowerOffIcon, RefreshCwIcon, SaveIcon, SlidersHorizontalIcon, Trash2Icon } from "lucide-react";
+import { DownloadIcon, ExternalLinkIcon, LoaderCircleIcon, PauseIcon, PlayIcon, PowerOffIcon, RefreshCwIcon, SaveIcon, SlidersHorizontalIcon, Trash2Icon, XIcon } from "lucide-react";
 import { Tip } from "@/components/tip";
 import { LocalModelRow } from "@/components/local-model-row";
 import { OllamaIcon } from "@/components/ollama-icon";
 import { ConfirmDelete } from "@/components/confirm-delete";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList } from "@/components/ui/combobox";
@@ -14,7 +15,7 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
-import { ollamaStore, useOllama } from "@/hooks/use-ollama";
+import { useOllama } from "@/hooks/use-ollama";
 import { useOllamaLibrary, useOllamaModelDetails } from "@/hooks/use-ollama-library";
 import { defaultOllamaUrl } from "@/lib/ollama-url";
 
@@ -72,45 +73,36 @@ export function OllamaSettings() {
   const [savingAddress, setSavingAddress] = useState(false);
   const address = addressDraft ?? (url === defaultOllamaUrl ? "" : url);
   const [confirmingModel, setConfirmingModel] = useState<{ id: string; custom?: boolean } | null>(null);
+  const [failedPull, setFailedPull] = useState<{ id: string; custom?: boolean; error: string } | null>(null);
   const [custom, setCustom] = useState("");
   // The suggestions are as wide as the whole search bar, not just its text field.
   const searchBar = useRef<HTMLFormElement>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const busy = !!pull;
 
-  function download(model: string, fromSearch?: boolean) {
-    return new Promise<void>((resolve, reject) => {
-      let acknowledged = false;
-      const unsubscribe = ollamaStore.subscribe(() => {
-        const active = ollamaStore.snapshot().pull;
-        if (active?.model === model && active.status !== "Starting…") {
-          acknowledged = true;
-          unsubscribe();
-          resolve();
-        }
-      });
-      void install(model).then(() => {
-        if (fromSearch) setCustom((current) => current.trim() === model ? "" : current);
-        toast.add({ title: `${model} installed`, type: "success" });
-        resolve();
-      }, (error: unknown) => {
-        const title = error instanceof Error ? error.message : "Could not install the model";
-        if (title.startsWith("Download stopped.")) {
-          toast.add({ title: "Download paused", description: "Choose Download again to resume." });
-          resolve();
-        }
-        else if (acknowledged) toast.add({ title, type: "error" });
-        else reject(error);
-      }).finally(unsubscribe);
+  function download(model: { id: string; custom?: boolean }) {
+    setFailedPull(null);
+    // install publishes a Starting row as soon as the client dispatches the request.
+    void install(model.id).then(() => {
+      if (model.custom) setCustom((current) => current.trim() === model.id ? "" : current);
+      toast.add({ title: `${model.id} installed`, type: "success" });
+    }, (cause: unknown) => {
+      const error = cause instanceof Error ? cause.message : "Could not install the model.";
+      if (error.startsWith("Download stopped.")) {
+        toast.add({ title: "Download stopped", description: "Choose Download again to continue." });
+      } else {
+        setFailedPull({ ...model, error });
+      }
     });
   }
 
-  async function installOllama() {
+  function installOllama() {
     const failed = "Ollama could not be installed. Try the download page at ollama.com.";
-    const result = await installCli().catch(() => { throw new Error(failed); });
-    if (result === "installed") toast.add({ title: "Ollama installed", type: "success" });
-    else if (result === "manual") toast.add({ title: "Opened the Ollama download page. Install it, then choose Check again." });
-    else throw new Error(failed);
+    void installCli().then((result) => {
+      if (result === "installed") toast.add({ title: "Ollama installed", type: "success" });
+      else if (result === "manual") toast.add({ title: "Opened the Ollama download page. Install it, then choose Check again." });
+      else toast.add({ title: failed, type: "error" });
+    }, () => toast.add({ title: failed, type: "error" }));
   }
 
   async function uninstallOllama() {
@@ -126,6 +118,7 @@ export function OllamaSettings() {
     setSavingAddress(true);
     try {
       await setServer(address);
+      setFailedPull(null);
       setAddressDraft(null);
       setEditing(false);
       toast.add({ title: address.trim() ? "Ollama server saved" : "Using Ollama on this computer", type: "success" });
@@ -149,7 +142,7 @@ export function OllamaSettings() {
       title="Uninstall Ollama?" actionLabel="Uninstall" pendingLabel="Uninstalling…"
       description={models.length ? `Ollama and your ${models.length === 1 ? "downloaded model" : `${models.length} downloaded models`}${models.some((model) => model.size > 0) ? ` (${localModelSize(models.reduce((sum, model) => sum + model.size, 0))})` : ""} will be deleted from this computer. You can install them again later.` : "Ollama will be stopped and removed from this computer."} onConfirm={uninstallOllama} />
     {confirmingModel && <OllamaDownload model={confirmingModel.id} onClose={() => setConfirmingModel(null)}
-      onDownload={() => download(confirmingModel.id, confirmingModel.custom)} />}
+      onDownload={async () => download(confirmingModel)} />}
 
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
@@ -171,7 +164,7 @@ export function OllamaSettings() {
               {starting ? <LoaderCircleIcon aria-hidden="true" className="motion-safe:animate-spin" /> : <PlayIcon aria-hidden="true" />}
             </Button></Tip>
             : installMethod
-              ? <Tip label={installing ? "Installing…" : installMethod === "winget" ? "Install Ollama" : "Download Ollama"}><Button type="button" variant="ghost" size="icon-sm" disabled={installing} aria-label={installing ? "Installing Ollama" : installMethod === "winget" ? "Install Ollama" : "Download Ollama"} aria-expanded={installMethod === "winget" ? showInstallConfirmation : undefined} onClick={() => installMethod === "winget" ? setConfirmingInstall(true) : void installOllama().catch((error: Error) => toast.add({ title: error.message, type: "error" }))}>
+              ? <Tip label={installing ? "Installing…" : installMethod === "winget" ? "Install Ollama" : "Download Ollama"}><Button type="button" variant="ghost" size="icon-sm" disabled={installing} aria-label={installing ? "Installing Ollama" : installMethod === "winget" ? "Install Ollama" : "Download Ollama"} aria-expanded={installMethod === "winget" ? showInstallConfirmation : undefined} onClick={() => installMethod === "winget" ? setConfirmingInstall(true) : installOllama()}>
                 {installing ? <LoaderCircleIcon aria-hidden="true" className="motion-safe:animate-spin" /> : installMethod === "winget" ? <DownloadIcon aria-hidden="true" /> : <ExternalLinkIcon aria-hidden="true" />}
               </Button></Tip>
               : <Tip label="Check again"><Button type="button" variant="outline" size="icon-sm" aria-label="Check again" onClick={() => void refresh()}><RefreshCwIcon aria-hidden="true" /></Button></Tip>)}
@@ -183,7 +176,7 @@ export function OllamaSettings() {
       </div>
       {showInstallConfirmation && <DownloadDialog title="Download Ollama?"
         description="Size unavailable. Lomra installs Ollama with the Windows package manager. Windows may ask for permission."
-        onClose={() => setConfirmingInstall(false)} onDownload={installOllama} />}
+        onClose={() => setConfirmingInstall(false)} onDownload={async () => installOllama()} />}
       {(installing || uninstalling) && <div className="flex flex-col gap-1.5">
         <Progress value={null} aria-label={uninstalling ? "Uninstalling Ollama" : "Installing Ollama"} />
         <p className="text-xs text-muted-foreground">{uninstalling ? "Uninstalling Ollama…" : "Installing Ollama. This can take a few minutes, and you can keep using Lomra."}</p>
@@ -199,24 +192,36 @@ export function OllamaSettings() {
       </form>}
     </div>
 
+    {(pull || failedPull) && <ul aria-label="Model download">
+      {pull && <li className="pb-2">
+        <LocalModelRow name={pull.model} size={pull.percent === null ? "" : `${pull.percent}%`}
+          description={pull.total > 0 ? `${localModelSize(pull.completed)} of ${localModelSize(pull.total)}` : ""}
+          status={pull.status}
+          action={{
+            label: pull.completed > 0 ? "Pause download" : "Cancel download",
+            icon: pull.completed > 0 ? <PauseIcon aria-hidden="true" /> : <XIcon aria-hidden="true" />,
+            onClick: cancel,
+          }} />
+        <Progress value={pull.percent} aria-label={`Downloading ${pull.model}`} />
+      </li>}
+      {failedPull && <li>
+        <LocalModelRow name={failedPull.id} size="" description="" status="Download failed"
+          action={{ label: "Retry download", icon: <RefreshCwIcon aria-hidden="true" />, disabled: busy || !running, onClick: () => setConfirmingModel(failedPull) }} />
+        <Alert variant="destructive"><AlertDescription>{failedPull.error}</AlertDescription></Alert>
+      </li>}
+    </ul>}
+
     {running === null ? <div role="status" aria-label="Checking Ollama" aria-busy="true" className="flex flex-col gap-2"><Skeleton className="h-3 w-1/2" /><Skeleton className="h-3 w-1/3" /></div>
     : running && <>
       <section aria-label="Installed models" className="flex flex-col gap-1.5">
         <h3 className="text-xs font-medium text-muted-foreground">Installed</h3>
         <ul className="divide-y">
-          {pull && <li className="pb-2">
-            <LocalModelRow name={pull.model} size={pull.percent === null ? "" : `${pull.percent}%`}
-              description={pull.total > 0 ? `${localModelSize(pull.completed)} of ${localModelSize(pull.total)}` : ""}
-              status={pull.status}
-              action={{ label: "Pause download", icon: <PauseIcon aria-hidden="true" />, onClick: cancel }} />
-            <Progress value={pull.percent} aria-label={`Downloading ${pull.model}`} />
-          </li>}
           {models.map((model) => <li key={model.id}>
             <LocalModelRow name={model.id} size={model.size > 0 ? localModelSize(model.size) : ""}
               description={[model.tools ? "Tools" : "No tools · can’t be used in chat", model.vision && "Vision"].filter(Boolean).join(" · ")}
               action={{ label: "Remove", icon: <Trash2Icon aria-hidden="true" />, disabled: busy, onClick: () => setRemoving(model.id) }} />
           </li>)}
-          {!pull && !models.length && <li className="text-xs text-muted-foreground">No models installed yet.</li>}
+          {!models.length && <li className="text-xs text-muted-foreground">No models installed yet.</li>}
         </ul>
       </section>
 

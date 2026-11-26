@@ -4,6 +4,7 @@ import {
   beginTutorialSetup,
   checkIsFirstRun,
   dismissFirstRun,
+  dismissWelcomeForSession,
   FIRST_RUN_STORAGE_KEY,
   verifyTutorialProvider,
 } from "./use-first-run";
@@ -44,6 +45,27 @@ test("checkIsFirstRun returns true for a clean, brand new workspace", async () =
   } finally {
     globalThis.window = originalWindow;
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("dismissing Welcome survives a reload in the same session without completing onboarding", async () => {
+  const originalWindow = globalThis.window;
+  const originalFetch = globalThis.fetch;
+  const originalStorage = globalThis.localStorage;
+  const persistent = createMockStorage();
+
+  try {
+    Object.assign(globalThis, { window: { sessionStorage: createMockStorage() }, localStorage: persistent });
+    globalThis.fetch = (async () => Response.json([])) as typeof fetch;
+
+    dismissWelcomeForSession();
+    assert.equal(await checkIsFirstRun(), false);
+    assert.equal(persistent.getItem(FIRST_RUN_STORAGE_KEY), null);
+
+    Object.assign(globalThis, { window: { sessionStorage: createMockStorage() } });
+    assert.equal(await checkIsFirstRun(), true);
+  } finally {
+    Object.assign(globalThis, { window: originalWindow, fetch: originalFetch, localStorage: originalStorage });
   }
 });
 

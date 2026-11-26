@@ -111,7 +111,7 @@ function CreditUsage({ provider, apiKey }: { provider: Provider; apiKey: string 
         </dl>
       </>}
     </div>
-    <Tip label="Refresh credit usage"><Button type="button" variant="outline" size="icon-sm" className="rounded-lg" disabled={loading} aria-label={`Refresh ${provider === "fal" ? "Fal.AI" : "OpenRouter"} credit usage`} onClick={() => setRefresh((value) => value + 1)}>
+    <Tip label="Refresh credit usage"><Button type="button" variant="outline" size="icon-sm" className="rounded-lg" disabled={loading} aria-label={`Refresh ${provider === "fal" ? "Fal" : "OpenRouter"} credit usage`} onClick={() => setRefresh((value) => value + 1)}>
       <RefreshCwIcon aria-hidden="true" />
     </Button></Tip>
     </div>
@@ -278,7 +278,7 @@ export function ApiKeysPanel({
   return <FieldGroup className="gap-4">
     <ProviderSettings provider="openrouter" name="OpenRouter" href="https://openrouter.ai/settings/keys" targetProvider={targetProvider} onVerified={onVerified} onKeyChange={onKeyChange} />
     <Separator />
-    <ProviderSettings provider="fal" name="Fal.AI" href="https://fal.ai/dashboard/keys" targetProvider={targetProvider} onVerified={onVerified} onKeyChange={onKeyChange} />
+    <ProviderSettings provider="fal" name="Fal" href="https://fal.ai/dashboard/keys" targetProvider={targetProvider} onVerified={onVerified} onKeyChange={onKeyChange} />
     <Separator />
     <ProviderSettings provider="google" name="Google AI" href="https://aistudio.google.com/apikey" targetProvider={targetProvider} onVerified={onVerified} onKeyChange={onKeyChange} />
   </FieldGroup>;

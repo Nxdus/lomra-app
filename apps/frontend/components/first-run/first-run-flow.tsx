@@ -7,7 +7,7 @@ import { toast } from "@/components/ui/toast";
 import { FirstRunDialog } from "./first-run-dialog";
 import { ModelSetupDialog } from "./model-setup-dialog";
 import { loadSampleProject } from "./sample-project";
-import { beginTutorialSetup, dismissFirstRun, useFirstRun, verifyTutorialProvider } from "./use-first-run";
+import { beginTutorialSetup, dismissFirstRun, dismissWelcomeForSession, useFirstRun, verifyTutorialProvider } from "./use-first-run";
 
 export function FirstRunFlow({ canvasRef, canvasReady }: {
   canvasRef: RefObject<CanvasHandle | null>;
@@ -40,7 +40,7 @@ export function FirstRunFlow({ canvasRef, canvasReady }: {
     <>
       <FirstRunDialog
         open={isFirstRun === true && !setupOpen}
-        onDismiss={() => setIsFirstRun(false)}
+        onDismiss={() => { dismissWelcomeForSession(); setIsFirstRun(false); }}
         onStartBlank={finishFirstRun}
         onStartTutorial={() => {
           beginTutorialSetup();
