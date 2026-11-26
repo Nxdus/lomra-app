@@ -58,7 +58,7 @@ function setupBuiltIns() {
   return { dir, sd, calls };
 }
 
-test('built-in models keep their exact defaults, ranges and engine args from e2ac95e for text, image-to-image and inpaint', async () => {
+test('built-in models use the expected defaults, ranges and engine args for text, image-to-image and inpaint', async () => {
   const { dir, sd, calls } = setupBuiltIns();
   try {
     const status = sd.status();
@@ -89,19 +89,20 @@ test('built-in models keep their exact defaults, ranges and engine args from e2a
     ].entries()) {
       const weights = join(dir, 'models', `${model}.safetensors`);
       const base = index * 3;
+      const memoryArgs = model === 'sdxl-turbo' ? ['--max-vram', '-3', '--mmap'] : [];
 
       await sd.generate(runId, { model, prompt: 'fox', seed: 1 });
-      expect(calls[base]).toEqual(['-m', weights, '-p', 'fox', '-o', out, '-W', '512', '-H', '512', '--steps', defaultSteps, '--cfg-scale', defaultCfg, '-s', '1', '--vae-tiling']);
+      expect(calls[base]).toEqual(['-m', weights, '-p', 'fox', '-o', out, '-W', '512', '-H', '512', '--steps', defaultSteps, '--cfg-scale', defaultCfg, '-s', '1', ...memoryArgs, '--vae-tiling']);
 
       await sd.generate(runId, { model, prompt: 'fox', seed: 2, image });
       expect(calls[base + 1]).toEqual([
-        '-m', weights, '-p', 'fox', '-o', out, '-W', '576', '-H', '384', '--steps', defaultSteps, '--cfg-scale', defaultCfg, '-s', '2',
+        '-m', weights, '-p', 'fox', '-o', out, '-W', '576', '-H', '384', '--steps', defaultSteps, '--cfg-scale', defaultCfg, '-s', '2', ...memoryArgs,
         '-i', init, '--image-preprocess', 'target=init,mode=stretch,filter=bicubic,antialias=true', '--strength', '0.75',
       ]);
 
       await sd.generate(runId, { model, prompt: erasePrompt, negativePrompt: eraseNegative, strength: 1, seed: 3, image, mask });
       expect(calls[base + 2]).toEqual([
-        '-m', weights, '-p', erasePrompt, '-o', out, '-W', '576', '-H', '384', '--steps', defaultSteps, '--cfg-scale', maskCfg, '-s', '3', '-n', eraseNegative,
+        '-m', weights, '-p', erasePrompt, '-o', out, '-W', '576', '-H', '384', '--steps', defaultSteps, '--cfg-scale', maskCfg, '-s', '3', ...memoryArgs, '-n', eraseNegative,
         '-i', init, '--image-preprocess', 'target=init,mode=stretch,filter=bicubic,antialias=true',
         '--mask', maskPath, '--image-preprocess', 'target=mask,mode=stretch', '--strength', '1',
       ]);
