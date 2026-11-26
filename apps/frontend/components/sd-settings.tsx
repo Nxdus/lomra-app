@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { DownloadIcon, FolderOpenIcon, PlayIcon, Trash2Icon, XIcon } from "lucide-react";
+import { DownloadIcon, FolderOpenIcon, PauseIcon, PlayIcon, Trash2Icon, XIcon } from "lucide-react";
 import { ConfirmDelete } from "@/components/confirm-delete";
 import { LocalModelRow } from "@/components/local-model-row";
 import { SdHuggingFace } from "@/components/sd-huggingface";
 import { SdLocalDialog } from "@/components/sd-local-dialog";
 import { StabilityIcon } from "@/components/stability-icon";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DownloadDialog } from "@/components/ui/download-dialog";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
@@ -20,6 +20,7 @@ import { desktopSd, type SdDownloadRequest, type SdLocalCandidate, type SdModel 
 export function SdSettings({ search }: { search?: string }) {
   const { status, refresh, download, cancel, remove, setProfile } = useSd();
   const [confirming, setConfirming] = useState<SdModel | null>(null);
+  const [starting, setStarting] = useState(false);
   const [removing, setRemoving] = useState<SdModel | null>(null);
   const [savingProfileId, setSavingProfileId] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
@@ -27,10 +28,10 @@ export function SdSettings({ search }: { search?: string }) {
   const job = status?.downloading ?? null;
   const queued = status?.queued ?? [];
   const models = status?.models.filter((model) => model.id !== job?.id && !queued.some(({ id }) => id === model.id)) ?? [];
-  const percent = job && job.total > 0 ? Math.min(100, Math.round(job.received / job.total * 100)) : 0;
+  const percent = job && job.total > 0 ? Math.min(100, Math.round(job.received / job.total * 100)) : null;
   const ready = !!status?.supported && status.engine && status.models.some((model) => model.installed);
   const statusLabel = status === undefined ? "Checking…" : status === null ? "Desktop app required"
-    : !status.supported ? "Unavailable" : job ? `Downloading…${queued.length ? ` ${queued.length} waiting` : ""}` : ready ? "Ready" : "No models installed";
+    : !status.supported ? "Unavailable" : job ? `Downloading…${queued.length ? ` ${queued.length} queued` : ""}` : ready ? "Ready" : "No models installed";
   const hasLocal = !!status?.models.some((model) => model.local);
   useEffect(() => {
     if (!hasLocal) return;
@@ -49,7 +50,16 @@ export function SdSettings({ search }: { search?: string }) {
   }
 
   async function start(request: SdDownloadRequest) {
-    if (!await download(request)) toast.add({ title: "Could not start the download.", type: "error" });
+    setStarting(true);
+    try {
+      if (!await download(request)) throw new Error("Could not start the download.");
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  function resume(id: string) {
+    void start(id).catch((error) => toast.add({ title: error instanceof Error ? error.message : "Could not resume the download.", type: "error" }));
   }
 
   async function changeProfile(id: string, profileId: string) {
@@ -66,27 +76,16 @@ export function SdSettings({ search }: { search?: string }) {
   return <section aria-labelledby="sd-heading" className="flex flex-col gap-3">
     {local && status && <SdLocalDialog {...local} status={status} onClose={() => setLocal(undefined)} />}
     <ConfirmDelete open={!!removing} onOpenChange={(open) => { if (!open) setRemoving(null); }} title={removing?.local ? "Remove from Lomra?" : removing?.partial ? "Delete unfinished download?" : "Remove image model?"}
-      actionLabel={removing?.local ? "Remove from Lomra" : undefined}
+      actionLabel={removing?.local ? "Remove from Lomra" : removing?.partial ? "Delete" : "Remove"}
       description={removing?.local ? `The checkpoint for “${removing.name}” will stay on this computer.` : removing?.partial ? `The ${localModelSize(removing.partial)} downloaded so far of “${removing.name}” will be deleted from this computer.` : `“${removing?.name}” will be deleted from this computer. You can download it again later.`}
-      onConfirm={async () => { if (removing) try { await remove(removing.id); } catch (error) { toast.add({ title: error instanceof Error ? error.message : "Could not remove the model", type: "error" }); } }} />
+      onConfirm={async () => { if (removing) await remove(removing.id); }} />
 
-    <Dialog open={!!confirming} onOpenChange={(open) => { if (!open) setConfirming(null); }}>
-      <DialogContent showCloseButton={false}>
-        <DialogHeader>
-          <DialogTitle>Download {confirming?.local ? "the image engine" : confirming?.name}?</DialogTitle>
-          <DialogDescription className="flex flex-col gap-2">
-            {confirming && <>
-              <span>{confirming.note}</span>
-              <span className="text-xs">{[!status?.engine && `+${localModelSize(status?.engineBytes ?? 0)} image engine`, job && "Starts after the other downloads"].filter(Boolean).join(" · ")}</span>
-            </>}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setConfirming(null)}>Not now</Button>
-          <Button autoFocus onClick={() => { const model = confirming; setConfirming(null); if (model) void start(model.id); }}>Download {confirming && localModelSize(confirming.local ? status?.engineBytes ?? 0 : confirming.bytes)}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    {confirming && <DownloadDialog
+      title={`Download ${confirming.local ? "the image engine" : confirming.name}?`}
+      description={[confirming.note, localModelSize(confirming.local ? status?.engineBytes ?? 0 : confirming.bytes), !confirming.local && !status?.engine && `Image engine: ${localModelSize(status?.engineBytes ?? 0)}`, job && "Starts after the other downloads."].filter(Boolean).join(" · ")}
+      onClose={() => setConfirming(null)}
+      onDownload={() => start(confirming.id)}
+    />}
 
     <div className="flex items-center gap-3">
       <StabilityIcon className="size-5 shrink-0 text-muted-foreground" />
@@ -110,16 +109,16 @@ export function SdSettings({ search }: { search?: string }) {
     <ul className="divide-y">
       {job && <li className="pb-2">
         <LocalModelRow name={job.name}
-          description={`${job.stage === "engine" ? "Downloading image engine" : "Downloading model"} · ${localModelSize(job.received)} of ${localModelSize(job.total)}`}
-          size={`${percent}%`}
-          action={{ label: "Stop download", icon: <XIcon aria-hidden="true" />, onClick: () => void cancel(job.id) }} />
-        <Progress value={percent} aria-label={`Downloading ${job.name}`} className="[&_[data-slot=progress-track]]:h-1.5" />
+          description={`${job.stage === "engine" ? "Downloading image engine" : "Downloading model"} · ${localModelSize(job.received)}${job.total > 0 ? ` of ${localModelSize(job.total)}` : ""}`}
+          size={percent === null ? "" : `${percent}%`}
+          action={{ label: "Pause download", icon: <PauseIcon aria-hidden="true" />, onClick: () => void cancel(job.id) }} />
+        <Progress value={percent} aria-label={`Downloading ${job.name}`} />
       </li>}
       {queued.map((item) => {
         const model = status.models.find(({ id }) => id === item.id);
         return <li key={item.id}>
           <LocalModelRow name={item.name} description={model?.quality ?? "Hugging Face"} size={model ? localModelSize(model.bytes) : ""}
-            status="Waiting to download"
+            status="Queued"
             action={{ label: "Cancel download", icon: <XIcon aria-hidden="true" />, onClick: () => void cancel(item.id) }} />
         </li>;
       })}
@@ -152,7 +151,7 @@ export function SdSettings({ search }: { search?: string }) {
               : model.local && !status.engine ? { label: "Download image engine", icon: <DownloadIcon aria-hidden="true" />, onClick: () => setConfirming(model) }
               : model.installed ? { label: model.local ? "Remove from Lomra" : "Remove", icon: <Trash2Icon aria-hidden="true" />, onClick: () => setRemoving(model) }
               // The user agreed to this download before; ask again only if it now includes the engine.
-              : model.partial ? { label: "Resume download", icon: <PlayIcon aria-hidden="true" />, onClick: () => status.engine ? void start(model.id) : setConfirming(model) }
+              : model.partial ? { label: "Resume download", disabled: starting, icon: <PlayIcon aria-hidden="true" />, onClick: () => status.engine ? resume(model.id) : setConfirming(model) }
               : { label: "Download", icon: <DownloadIcon aria-hidden="true" />, onClick: () => setConfirming(model) }} />
         </li>;
       })}

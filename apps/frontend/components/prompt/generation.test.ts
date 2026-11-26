@@ -220,7 +220,7 @@ test("local Stable Diffusion runs through the desktop bridge, reports progress a
     assert.deepEqual(kept.sd, used);
     assert.equal(kept.startImage, undefined);
     assert.deepEqual(calls, [[task.id, { model: "sd-turbo", prompt: "a fox", aspectRatio: "16:9" }]]);
-    assert.ok(statuses.includes("Generating locally… 2/4"));
+    assert.ok(statuses.includes("Generating · Step 2 of 4"));
     assert.equal(progress, undefined);
     await assert.rejects(generate(task, async () => ({}), new AbortController().signal, (change) => { kept = change; }, undefined, ["data:image/png;base64,YQ==", "data:image/png;base64,Yg=="]), /one picture at a time/);
     assert.equal(kept.startImage, true);
@@ -306,7 +306,7 @@ test("every kind of local run says how many are ahead on the graphics card, then
     for (const [name, run, images] of runs) {
       const statuses: string[] = [];
       await generate(run, async () => { throw new Error("no provider call"); }, new AbortController().signal, (change) => { if (change.status) statuses.push(change.status); }, images[0], images);
-      assert.deepEqual(statuses, ["Generating locally…", "Waiting for the graphics card… 2 ahead", "Waiting for the graphics card… 1 ahead", "Generating locally…", name === "3D" ? "Making the 3D shape…" : "Generating locally… 1/4"], name);
+      assert.deepEqual(statuses, ["Generating · Locally", "Queued · GPU queue · 2 ahead", "Queued · GPU queue · 1 ahead", "Generating · Locally", name === "3D" ? "Generating · Making the 3D shape" : "Generating · Step 1 of 4"], name);
     }
   } finally {
     browser.restore();
@@ -331,7 +331,7 @@ test("a local 3D model sends one picture through the desktop bridge, returns a G
     const files = await generate(task, async () => { throw new Error("no provider call"); }, new AbortController().signal, (change) => { if (change.status) statuses.push(change.status); }, picture);
     assert.deepEqual(files, [{ url: "data:model/gltf-binary;base64,Z2xi", name: "GLB", kind: "file" }]);
     assert.deepEqual(calls, [[task.id, { model: "hunyuan-2mini", image: picture }]]);
-    assert.ok(statuses.includes("Making the 3D shape…"));
+    assert.ok(statuses.includes("Generating · Making the 3D shape"));
     assert.equal(progress, undefined);
     assert.deepEqual(canvasResults(files, "3d"), files);
     await assert.rejects(generate(task, async () => ({}), new AbortController().signal, () => {}), /PNG, JPEG or WebP/);

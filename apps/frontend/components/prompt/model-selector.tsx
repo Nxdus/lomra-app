@@ -93,9 +93,9 @@ async function falPrices(key: string, ids: string[], signal: AbortSignal) {
 
 function PriceText({ price }: { price?: string }) {
   if (!price) return null;
-  if (price === "Free") return <span className="shrink-0 text-[10px] font-medium leading-none text-muted-foreground">Free</span>;
+  if (price === "Free") return <span className="shrink-0 text-xs font-medium leading-none text-muted-foreground">Free</span>;
   return <Tip label={price}>
-    <span role="img" aria-label={`Price: ${price}`} className="shrink-0 text-[10px] font-medium leading-none text-muted-foreground">$</span>
+    <span role="img" aria-label={`Price: ${price}`} className="shrink-0 text-xs font-medium leading-none text-muted-foreground">$</span>
   </Tip>;
 }
 
@@ -216,8 +216,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
         setHiddenModels(next);
       }
     } catch {
-      toast.add({ title: "Could not save model settings. Please retry.", type: "error" });
-      return;
+      throw new Error("Could not save model settings. Try again.");
     } finally {
       setSettingsSaving(false);
     }
@@ -473,16 +472,13 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
 
   useEffect(() => {
     if (!addingGroup) return;
-    if ((selectedDefault && catalogStatus === "error") || (selectedGoogle && googleStatus === "error")) {
+    if ((selectedDefault && catalogStatus === "error") || (selectedGoogle && googleStatus === "error") || selectedAgent?.error) {
       toast.add({
         id: "model-catalog-error",
-        title: "Could not load models.",
+        title: selectedAgent?.error ? "Could not load agent models." : "Could not load models.",
         type: "error",
         actionProps: { children: "Retry", onClick: () => setCatalogAttempt((attempt) => attempt + 1) },
       });
-    }
-    if (selectedAgent?.error) {
-      toast.add({ id: "agent-models-error", title: "Could not load agent models.", type: "error" });
     }
   }, [addingGroup, selectedDefault, selectedGoogle, selectedAgent, catalogStatus, googleStatus]);
 
@@ -561,11 +557,11 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
           </div>
         </SelectContent>
       </Select>
-      <ConfirmDelete open={!!deletingModel} onOpenChange={(open) => { if (!open) setDeletingModel(null); }} title="Delete model?" description={`“${deletingModel?.name}” will be removed from your model list.`} disabled={disabled || settingsSaving || !canDelete} onConfirm={async () => { if (deletingModel) await removeModel(deletingModel.value); }} />
-      <Dialog open={!!addingGroup} onOpenChange={(open) => { if (!open) setAddingGroup(null); }}>
-        <DialogContent className="gap-4 rounded-2xl p-4 shadow-lg">
+      <ConfirmDelete open={!!deletingModel} onOpenChange={(open) => { if (!open) setDeletingModel(null); }} title="Remove model?" actionLabel="Remove" description={`“${deletingModel?.name}” will be removed from your model list.`} disabled={disabled || settingsSaving || !canDelete} onConfirm={async () => { if (deletingModel) await removeModel(deletingModel.value); }} />
+      <Dialog open={!!addingGroup} onOpenChange={(open) => { if (!open && !settingsSaving) setAddingGroup(null); }}>
+        <DialogContent showCloseButton={!settingsSaving} className="gap-4 rounded-2xl p-4 shadow-lg">
           <DialogHeader className="min-h-8 justify-center pr-8">
-            <DialogTitle>Add {addingGroup?.label} model</DialogTitle>
+            <DialogTitle>Add {addingGroup?.value === "llm" ? "LLM" : addingGroup?.value === "3d" ? "3D" : addingGroup?.label.toLowerCase()} model</DialogTitle>
             <DialogDescription className="sr-only">Choose a provider and add a model to your list.</DialogDescription>
           </DialogHeader>
           <form className="flex flex-col gap-4" onSubmit={async (event) => {
@@ -633,7 +629,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
                   filter={(model, query) => `${model.name} ${model.id}`.toLowerCase().includes(query.trim().toLowerCase())}
                   isItemEqualToValue={(a, b) => a.id === b.id}
                   onValueChange={(model) => setModelId(model?.id ?? "")}>
-                  <ComboboxInput id="custom-model-search" placeholder={loadingModels ? "Loading models…" : "Search by name or ID…"} disabled={modelsUnavailable} showClear />
+                  <ComboboxInput id="custom-model-search" placeholder={loadingModels ? "Loading models…" : "Search by name or ID…"} disabled={modelsUnavailable || settingsSaving} showClear />
                   <ComboboxContent className="shadow-lg">
                     <ComboboxEmpty>No matching models.</ComboboxEmpty>
                     <ComboboxList>
@@ -655,8 +651,8 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
             </FieldGroup> : <p role="status" className="text-xs text-muted-foreground">All available models have been added.</p>}
             {needsDesktopRestart && <p role="status" className="text-xs text-muted-foreground">Restart Lomra to load the agent’s models.</p>}
             <DialogFooter className="flex-row justify-end">
-              <Button type="button" variant="ghost" size="sm" onClick={() => setAddingGroup(null)}>Cancel</Button>
-              <Button type="submit" size="sm" disabled={disabled || settingsSaving || !modelToAdd}>Add model</Button>
+              <Button type="button" variant="ghost" size="sm" disabled={settingsSaving} onClick={() => setAddingGroup(null)}>Cancel</Button>
+              <Button type="submit" size="sm" disabled={disabled || settingsSaving || !modelToAdd}>{settingsSaving ? "Adding…" : "Add model"}</Button>
             </DialogFooter>
           </form>
         </DialogContent>

@@ -1,11 +1,12 @@
 "use client";
 
+import { ConfirmDelete } from "@/components/confirm-delete";
 import { Tip } from "@/components/tip";
 import { useEffect, useId, useImperativeHandle, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, ImagesIcon, Loader2Icon, MessageCircleIcon, MicIcon, PauseIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, Rows3Icon, ScanEyeIcon, TrashIcon } from "lucide-react";
+import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, ImagesIcon, Loader2Icon, MessageCircleIcon, MicIcon, SquareIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, Rows3Icon, ScanEyeIcon, TrashIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { chatStorage, persistentUrl, restoreGenerations, type Chat } from "./chat-storage";
+import { chatStorage, persistentUrl, restoreGenerations, writeChat, type Chat } from "./chat-storage";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent } from "@/components/ui/popover";
@@ -134,6 +135,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   const [storyboard, setStoryboard] = useState<Storyboard>();
   const [boardDialog, setBoardDialog] = useState<"preview" | "export" | "timeline" | "review" | "references" | null>(null);
   const [timelineDownload, setTimelineDownload] = useState<{ plan: StoryboardTimelinePlan; action: "preview" | "export"; bytes: number } | null>(null);
+  const [startingTimeline, setStartingTimeline] = useState(false);
+  const [renderingTimeline, setRenderingTimeline] = useState(false);
   const [timelinePreview, setTimelinePreview] = useState<{ video: string; captions?: string; blob: Blob } | null>(null);
   const renderedTimeline = useRef<{ key: string; blob: Blob } | null>(null);
   useEffect(() => () => {
@@ -184,10 +187,15 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   const [deleting, setDeleting] = useState<Chat | null>(null);
   const [redrafting, setRedrafting] = useState(false);
   const [videoPlan, setVideoPlan] = useState<{ clips: number; resumes: number; stale: number; pictures: number; model: string; toolBytes: number } | null>(null);
+  const videoChecking = useRef(false);
+  const [checkingVideo, setCheckingVideo] = useState(false);
+  const [startingVideo, setStartingVideo] = useState(false);
+  const [startingVideoDownload, setStartingVideoDownload] = useState(false);
   const [takePlan, setTakePlan] = useState<{ shotId: string; model: string } | null>(null);
   const [modelSetupOpen, setModelSetupOpen] = useState(false);
   const [modelSetupTarget, setModelSetupTarget] = useState<{ provider?: KeyedProvider; modelName?: string } | null>(null);
   const [pictureChoice, setPictureChoice] = useState<{ models: PictureAiModel[]; canUseFal: boolean; resolve: (choice: "download" | "fal" | "cancel") => void } | null>(null);
+  const [startingPictureDownload, setStartingPictureDownload] = useState(false);
   const { swipe, bind: bindSwipe } = useSwipeToDelete();
   const [storageError, setStorageError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -374,7 +382,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       if (!cancelled) setSaving(true);
       const saved = await chatStorage(chat, canvasId);
       if (!cancelled) { setChats(saved); setStorageError(""); }
-    }).catch(() => { setStorageError("Could not save chat history to database. Keep this tab open and check the backend connection before retrying."); }).finally(() => { if (!cancelled) setSaving(false); });
+    }).catch(() => { setStorageError("Could not save chat history to the workspace. Keep Lomra open and retry your change."); }).finally(() => { if (!cancelled) setSaving(false); });
     return () => { cancelled = true; };
   }, [chatId, canvasId, history, generations, models, agentSession, chatStoryboard]);
 
@@ -389,19 +397,32 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       if (!imagesChanged && JSON.stringify(owner.storyboard) === JSON.stringify(storyboard)) return;
       const history = imagesChanged ? [{ ...first, images: storyImages }, ...rest] : owner.history;
       setChats(await chatStorage({ ...owner, storyboard, history }, canvasId));
-    }).catch(() => { setStorageError("Could not save the storyboard. Keep this tab open and check the backend connection before retrying."); });
+    }).catch(() => { setStorageError("Could not save the storyboard to the workspace. Keep Lomra open and retry your change."); });
   }, [storyboard, boardOwner, chatId, canvasId, storyImages]);
 
-  async function deleteChat() {
-    if (!deleting || status || saving) return;
-    try {
-      const saved = await chatStorage(deleting.id, canvasId);
-      setChats(saved);
-      if (deleting.id === chatId) openChat();
-      if (deleting.id === boardOwner) { setStoryboard(undefined); setBoardOwner(undefined); setStoryImages([]); }
-      setDeleting(null);
+  async function persistStoryboardChange(change: (current: Storyboard) => Storyboard) {
+    if (!boardOwner) throw new Error("The storyboard chat is unavailable.");
+    const save = saves.current.then(async () => {
+      const chats = await chatStorage(undefined, canvasId);
+      const owner = chats.find(({ id }) => id === boardOwner);
+      if (!owner?.storyboard) throw new Error("The storyboard is missing from its workspace chat.");
+      const next = change(owner.storyboard);
+      const committed = next === owner.storyboard ? owner : await writeChat({ ...owner, storyboard: next });
+      setChats(chats.map((chat) => chat.id === committed.id ? committed : chat));
+      setStoryboard(committed.storyboard);
       setStorageError("");
-    } catch { setStorageError("Could not delete this chat. Please try again."); }
+    });
+    saves.current = save.catch(() => {});
+    await save;
+  }
+
+  async function deleteChat() {
+    if (!deleting || status || saving) throw new Error("Wait for the chat to finish, then try again.");
+    const saved = await chatStorage(deleting.id, canvasId);
+    setChats(saved);
+    if (deleting.id === chatId) openChat();
+    if (deleting.id === boardOwner) { setStoryboard(undefined); setBoardOwner(undefined); setStoryImages([]); }
+    setStorageError("");
   }
 
   async function addToCanvas(file: GeneratedFile, files: GeneratedFile[] = [], signal?: AbortSignal, at?: Parameters<CanvasHandle["addFiles"]>[1], task?: Generation, options?: Parameters<CanvasHandle["addFiles"]>[3]) {
@@ -459,6 +480,12 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     };
   }, []);
 
+  function stopGeneration() {
+    if (!active.current || active.current.signal.aborted) return;
+    active.current.abort();
+    setStatus("Stopping…");
+  }
+
   function updateGeneration(id: string, change: Partial<Generation>) {
     setGenerations((current) => current.map((item) => item.id === id ? { ...item, ...change } : item));
   }
@@ -467,10 +494,10 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     try {
       let summary = "";
       let sd: Generation["sd"];
-      const results = await generate(task, request, signal, (change) => { if (change.summary) summary = change.summary; if (change.sd) sd = change.sd; updateGeneration(task.id, change); }, imageUrl, images, sources);
+      const results = await generate(task, request, signal, (change) => { if (change.summary) summary = change.summary; if (change.sd) sd = change.sd; if (change.status && !signal.aborted) setStatus(change.status); updateGeneration(task.id, signal.aborted ? { ...change, status: "Stopping…" } : change); }, imageUrl, images, sources);
       const files = await Promise.all(results.map(async (file) => ({ ...file, url: await persistentUrl(file.url, file.kind === "file") })));
       results.forEach((file) => { if (file.url.startsWith("blob:")) URL.revokeObjectURL(file.url); });
-      updateGeneration(task.id, { status: "Completed", files, error: undefined });
+      updateGeneration(task.id, { status: "Done", files, error: undefined });
       const candidates = canvasResults(files, task.category);
       let imported = candidates.length > 0;
       if (!imported && !summary) notifyError("No supported 3D model was returned. Download the result files to inspect them.");
@@ -481,8 +508,9 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       return summary || `${task.category} generated with ${task.model}: ${task.prompt}`;
     } catch (cause) {
       const message = signal.aborted ? (cause instanceof Error && cause.name !== "AbortError" ? cause.message : "Request aborted. This provider may still finish submitted work and charge for it.") : cause instanceof Error ? cause.message : "Generation failed";
-      notifyError(message);
-      updateGeneration(task.id, { status: "Interrupted", error: message });
+      if (signal.aborted) toast.add({ title: message });
+      else notifyError(message);
+      updateGeneration(task.id, signal.aborted ? { status: "Stopped", error: undefined } : { status: "Failed", error: message });
       return `${task.category} did not complete: ${message}`;
     }
   }
@@ -590,7 +618,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
 
     const controller = new AbortController();
     active.current = controller;
-    setStatus(again ? "Preparing to generate again…" : "Preparing 4 variations…");
+    setStatus(again ? "Generating · Preparing to generate again" : "Generating · Preparing 4 variations");
     try {
       let sourceImages: string[] | undefined;
       if (sourceItem) {
@@ -623,7 +651,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         prompt: provenance.prompt,
         ...(ratio ? { aspectRatio: ratio } : {}),
         ...(isImg2Img ? { startImage: true, canvasInputs: provenance.selectedInputs } : {}),
-        status: "Waiting",
+        status: "Queued",
         sdSettings: { ...baseSettings, seed },
       }));
       setGenerations((current) => [...current, ...tasks]);
@@ -636,10 +664,10 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       for (let index = 0; index < tasks.length; index++) {
         const task = tasks[index];
         if (controller.signal.aborted) {
-          updateGeneration(task.id, { status: "Not submitted", error: "Stopped before submission" });
+          updateGeneration(task.id, { status: "Stopped", error: undefined });
           continue;
         }
-        setStatus(`${label(index)}…`);
+        setStatus(`Generating · ${label(index)}`);
         try {
           let usedSd: Generation["sd"];
           const results = await generate(
@@ -648,7 +676,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
             controller.signal,
             (change) => {
               if (change.sd) usedSd = change.sd;
-              if (change.status) setStatus(`${label(index)} · ${change.status}`);
+              if (change.status && !controller.signal.aborted) setStatus(`${change.status} · ${label(index)}`);
               updateGeneration(task.id, change);
             },
             sourceImages?.[0],
@@ -656,7 +684,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
           );
           const files = await Promise.all(results.map(async (file) => ({ ...file, url: await persistentUrl(file.url, file.kind === "file") })));
           results.forEach((file) => { if (file.url.startsWith("blob:")) URL.revokeObjectURL(file.url); });
-          updateGeneration(task.id, { status: "Completed", files, error: undefined });
+          updateGeneration(task.id, { status: "Done", files, error: undefined });
           const picture = canvasResults(files, "picture")[0];
           if (picture) {
             const addedId = await addToCanvas(
@@ -682,17 +710,18 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
           }
         } catch (cause) {
           const message = controller.signal.aborted ? "Generation stopped" : cause instanceof Error ? cause.message : "Generation failed";
-          updateGeneration(task.id, { status: "Interrupted", error: message });
+          updateGeneration(task.id, controller.signal.aborted ? { status: "Stopped", error: undefined } : { status: "Failed", error: message });
           for (const rest of tasks.slice(index + 1)) {
-            updateGeneration(rest.id, { status: "Not submitted", error: controller.signal.aborted ? "Stopped before submission" : "Stopped after previous error" });
+            updateGeneration(rest.id, controller.signal.aborted ? { status: "Stopped", error: undefined } : { status: "Failed", error: "Stopped after previous error" });
           }
           if (!controller.signal.aborted) notifyError(message);
-          else notifyError(again ? "Generation stopped" : "Stopped remaining variations");
+          else toast.add({ title: again ? "Generation stopped" : "Stopped remaining variations" });
           break;
         }
       }
     } catch (cause) {
-      notifyError(controller.signal.aborted ? "Request stopped" : cause instanceof Error ? cause.message : "Could not start the generation");
+      if (controller.signal.aborted) toast.add({ title: "Generation stopped." });
+      else notifyError(cause instanceof Error ? cause.message : "Could not start the generation");
     } finally {
       active.current = null;
       setStatus("");
@@ -737,12 +766,12 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     const views = needsViews ? resolveMultiview(model, args.viewIndices, images.map(({ image_url }, index) => ({ url: image_url.url, name: selectedImages[index].file.name }))) : undefined;
     if (category === "3d" && !needsViews && requiresImage(model) && images.length !== 1) throw new Error("This 3D model needs exactly one image selected on the canvas");
     const { task, images: generationImages } = characterGeneration(
-      { category, prompt: text, aspectRatio: typeof args.aspect_ratio === "string" ? args.aspect_ratio.slice(0, 16) : (category === "picture" && aspectRatio ? aspectRatio : undefined), id: crypto.randomUUID(), model, status: "Waiting", messageIndex: agentMessageIndex.current, views, canvasInputs: canvasInputNames(needsViews ? selectedImages : selected) },
+      { category, prompt: text, aspectRatio: typeof args.aspect_ratio === "string" ? args.aspect_ratio.slice(0, 16) : (category === "picture" && aspectRatio ? aspectRatio : undefined), id: crypto.randomUUID(), model, status: "Queued", messageIndex: agentMessageIndex.current, views, canvasInputs: canvasInputNames(needsViews ? selectedImages : selected) },
       images.map((image) => image.image_url.url), agentCharacters.current,
     );
     setGenerations((current) => [...current, task]);
     setExpanded((current) => [...current, task.id]);
-    setStatus(`Generating ${kind} · ${model}`);
+    setStatus(`Generating · ${kind} · ${model}`);
     const outcome = await runTask(task, controller.signal, images.length === 1 ? images[0].image_url.url : undefined, generationImages, selected);
     if (outcome.includes(" did not complete: ")) throw new Error(outcome);
     return { text: outcome };
@@ -788,7 +817,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     const controller = new AbortController();
     active.current = controller;
     agentSelection.current = [...selection];
-    setStatus(`${label} is working…`);
+    setStatus(`Generating · ${label}`);
     setAgentText("");
     let submitted = false;
     const resumed = agentSession?.engine === engine && agentSession.modelId === modelId;
@@ -807,13 +836,14 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         effort: efforts[engine],
         signal: controller.signal,
         onText: setAgentText,
-        onTool: (name) => setStatus(`${label} · ${name}`),
+        onTool: (name) => { if (!controller.signal.aborted) setStatus(`Generating · ${label} · ${name}`); },
         onLimits: (windows) => { if (engine === "claude") void saveAgentLimits(windows).catch(() => {}); },
       });
       if (result.sessionId) setAgentSession({ engine, id: result.sessionId, modelId });
       setHistory((current) => [...current, { role: "assistant", content: (result.text || `${label} finished without a reply.`).slice(0, 8000) }]);
     } catch (cause) {
-      notifyError(controller.signal.aborted ? "Request stopped" : cause instanceof Error ? cause.message : `${label} failed`);
+      if (controller.signal.aborted) toast.add({ title: "Generation stopped." });
+      else notifyError(cause instanceof Error ? cause.message : `${label} failed`);
       if (submitted) setHistory((current) => [...current, { role: "assistant", content: controller.signal.aborted ? "Stopped." : `${label} did not finish.` }]);
     } finally {
       setAgentText("");
@@ -829,7 +859,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     if (!ollama) return;
     const server = await getSetting<string>("ollama-url").catch(() => undefined);
     if (!server || !isRemoteOllama(server)) {
-      setStatus("Starting Ollama…");
+      setStatus("Generating · Starting Ollama");
       await ollama.start();
     }
     signal.throwIfAborted();
@@ -855,7 +885,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     });
   }
 
-  async function runStoryboard(label: string, work: (signal: AbortSignal) => Promise<void>) {
+  async function runStoryboard(label: string, work: (signal: AbortSignal) => Promise<void>, onFailure?: () => void) {
     if (active.current) return;
     const controller = new AbortController();
     active.current = controller;
@@ -863,8 +893,10 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     try {
       await work(controller.signal);
     } catch (cause) {
-      if (!controller.signal.aborted && cause instanceof MissingApiKeyError) notifyMissingApiKey(cause);
-      else notifyError(controller.signal.aborted ? "Request stopped" : cause instanceof Error ? cause.message : "Storyboard request failed");
+      onFailure?.();
+      if (controller.signal.aborted) toast.add({ title: "Generation stopped." });
+      else if (cause instanceof MissingApiKeyError) notifyMissingApiKey(cause);
+      else notifyError(cause instanceof Error ? cause.message : "Storyboard request failed");
     } finally {
       active.current = null;
       setStatus("");
@@ -888,7 +920,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     const provider = providerOf(llm);
     if (provider === "ollama") {
       await startLocalLlm(signal);
-      setStatus(instruction === draftStoryInstruction ? "Refining story…" : "Drafting shots…");
+      setStatus(instruction === draftStoryInstruction ? "Generating · Refining story" : "Generating · Drafting shots");
     }
     return storyboardChat(llm, instruction, text, images, signal, prior);
   }
@@ -917,7 +949,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   }
 
   async function refineStory() {
-    await runStoryboard("Refining story…", async (signal) => {
+    await runStoryboard("Generating · Refining story", async (signal) => {
       const text = prompt.trim();
       const prior = storyboardQueued ? [] : history;
       const references = prior.length ? [] : selection.filter(({ file }) => canvasFileKind(file) === "image");
@@ -952,7 +984,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
 
   async function makeShots(story: Storyboard) {
     if (!story.story.trim()) return;
-    await runStoryboard("Drafting shots…", async (signal) => {
+    await runStoryboard("Generating · Drafting shots", async (signal) => {
       const characters = story.characters ?? [];
       const input = JSON.stringify({ story: story.story, cast: characters.map(({ name, notes, image }, index) => ({ index, name, notes, image })) });
       const shots = draftedShots(await storyboardCompletion(draftShotsInstruction, input, storyImages, signal), storyImages.length, characters);
@@ -994,12 +1026,19 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     } : current);
   }
 
-  function removeCharacter(index: number) {
-    setStoryboard((current) => current ? {
-      ...current, characters: current.characters?.filter((_, position) => position !== index),
-      shots: current.shots?.map((shot) => ({ ...shot, characters: shot.characters?.filter((position) => position !== index)
-        .map((position) => position > index ? position - 1 : position) })),
-    } : current);
+  async function removeCharacter(index: number, expectedCast: StoryCharacter[]) {
+    if (!expectedCast[index]) throw new Error("The character is no longer in the storyboard.");
+    const remaining = expectedCast.filter((_, position) => position !== index);
+    await persistStoryboardChange((current) => {
+      const savedCast = JSON.stringify(current.characters ?? []);
+      if (savedCast === JSON.stringify(remaining)) return current;
+      if (savedCast !== JSON.stringify(expectedCast)) throw new Error("The cast changed. Reopen the confirmation and try again.");
+      return {
+        ...current, characters: remaining,
+        shots: current.shots?.map((shot) => ({ ...shot, characters: shot.characters?.filter((position) => position !== index)
+          .map((position) => position > index ? position - 1 : position) })),
+      };
+    });
   }
 
   // Storyboard pictures and clips live on their cast and shot nodes, not on the canvas, so they are saved as plain workspace files.
@@ -1015,8 +1054,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   async function renderStoryboardImage(name: string, prompt: string, images: string[], signal: AbortSignal) {
     const model = selectedModel(models, "picture");
     if (!model) throw new Error("Select an image model in the prompt toolbar first.");
-    const task: Generation = { id: crypto.randomUUID(), category: "picture", model, status: "Waiting", prompt };
-    const files = await generate(task, request, signal, ({ status }) => { if (status) setStatus(status); }, undefined, images);
+    const task: Generation = { id: crypto.randomUUID(), category: "picture", model, status: "Queued", prompt };
+    const files = await generate(task, request, signal, ({ status }) => { if (status && !signal.aborted) setStatus(status); }, undefined, images);
     try {
       signal.throwIfAborted();
       const file = files.find((file) => file.kind === "image");
@@ -1091,7 +1130,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     return generateShotTake({
       shot, model, aspectRatio, resume, request, signal, loadPicture: shotPicture, updateShot: updateShotById,
       saveFile: (file, signal) => saveStoryboardFile(file, label, signal),
-      onStatus: (next) => setStatus(`${label} · ${next}`),
+      onStatus: (next) => { if (!signal.aborted) setStatus(`${next} · ${label}`); },
     });
   }
 
@@ -1106,21 +1145,37 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   }
 
   // Asks before spending anything: every missing clip is one video generation, and the video tool is a one-time download.
+  async function checkStoryboardVideo(story: Storyboard, model: string, starting = false) {
+    if (videoChecking.current || active.current) return;
+    videoChecking.current = true;
+    setCheckingVideo(true);
+    setStartingVideo(starting);
+    try {
+      const bridge = desktopVideo();
+      const pictureModel = selectedModel(models, "picture") ?? "";
+      return await preflightStoryboardVideo({
+        story,
+        videoModel: model,
+        pictureModel,
+        keys,
+        storyImages,
+        desktopVideo: bridge,
+        desktopAgents: desktopAgents(),
+        desktopSd: desktopSd(),
+        storageFile,
+      });
+    } catch (cause) {
+      notifyError(cause instanceof Error ? cause.message : "Could not check the storyboard. Try again.");
+    } finally {
+      videoChecking.current = false;
+      setCheckingVideo(false);
+      setStartingVideo(false);
+    }
+  }
+
   async function planStoryboardVideo(story: Storyboard) {
-    const bridge = desktopVideo();
-    const pictureModel = selectedModel(models, "picture") ?? "";
-    const preflight = await preflightStoryboardVideo({
-      story,
-      videoModel,
-      pictureModel,
-      keys,
-      storyImages,
-      desktopVideo: bridge,
-      desktopAgents: desktopAgents(),
-      desktopSd: desktopSd(),
-      storageFile,
-    });
-    if (latestStoryboard.current !== story) return;
+    const preflight = await checkStoryboardVideo(story, videoModel);
+    if (!preflight || latestStoryboard.current !== story) return;
     if (!preflight.ok) {
       notifyBlockers(preflight.blockers);
       return;
@@ -1135,9 +1190,16 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     });
   }
 
-  async function ensureVideoTool(bridge: DesktopVideoApi, signal: AbortSignal) {
-    if ((await bridge.status()).installed) return;
-    if (!(await bridge.download())) throw new Error("Could not start downloading the video tool.");
+  async function ensureVideoTool(bridge: DesktopVideoApi, signal: AbortSignal, onStarted?: () => void) {
+    const alreadyInstalled = (await bridge.status()).installed;
+    signal.throwIfAborted();
+    if (!alreadyInstalled && !(await bridge.download())) throw new Error("Could not start downloading the video tool.");
+    onStarted?.();
+    if (alreadyInstalled) return;
+    if (signal.aborted) {
+      void bridge.cancelDownload();
+      signal.throwIfAborted();
+    }
     const stop = () => void bridge.cancelDownload();
     signal.addEventListener("abort", stop, { once: true });
     try {
@@ -1148,7 +1210,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         if (tool.installed) return;
         if (tool.error) throw new Error(tool.error);
         if (!tool.downloading) throw new Error("The video tool did not finish downloading.");
-        setStatus(`Downloading the video tool · ${Math.round((tool.downloading.received / Math.max(1, tool.downloading.total)) * 100)}%`);
+        setStatus(`Generating · Downloading the video tool · ${Math.round((tool.downloading.received / Math.max(1, tool.downloading.total)) * 100)}%`);
       }
     } finally {
       signal.removeEventListener("abort", stop);
@@ -1158,13 +1220,13 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   async function renderStoryboardPlan(bridge: DesktopVideoApi, plan: StoryboardTimelinePlan, signal: AbortSignal) {
     const key = JSON.stringify(plan);
     if (renderedTimeline.current?.key === key) return renderedTimeline.current.blob;
-    setStatus("Loading timeline media…");
+    setStatus("Generating · Loading timeline media");
     const input = await storyboardTimelineRenderInput(plan, storageFile);
     signal.throwIfAborted();
-    setStatus("Rendering timeline…");
+    setStatus("Generating · Rendering timeline");
     const runId = crypto.randomUUID();
     const unlisten = bridge.onProgress((event) => {
-      if (event.runId === runId) setStatus(`Rendering timeline · ${Math.round((event.seconds / Math.max(1, event.total)) * 100)}%`);
+      if (event.runId === runId && !signal.aborted) setStatus(`Generating · Rendering timeline · ${Math.round((event.seconds / Math.max(1, event.total)) * 100)}%`);
     });
     const cancel = () => bridge.cancel(runId);
     signal.addEventListener("abort", cancel, { once: true });
@@ -1181,6 +1243,11 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     }
   }
 
+  function returnToTimeline() {
+    setTimelineDownload(null);
+    setTimelinePreview(null);
+  }
+
   async function renderFromTimeline(plan: StoryboardTimelinePlan, action: "preview" | "export") {
     const bridge = desktopVideo();
     if (!bridge) throw new Error("Rendering a timeline needs the Lomra desktop app.");
@@ -1189,47 +1256,57 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       const tool = await bridge.status();
       if (!tool.supported) throw new Error("Timeline rendering is unavailable on this computer.");
       if (!tool.installed) {
-        setBoardDialog(null);
         setTimelineDownload({ plan, action, bytes: tool.bytes });
         return;
       }
     }
-    setBoardDialog(null);
+    if (active.current) throw new Error("Wait for the current generation to finish.");
     await finishTimelineRender(bridge, plan, action, false);
   }
 
   async function finishTimelineRender(bridge: DesktopVideoApi, plan: StoryboardTimelinePlan, action: "preview" | "export", downloadTool: boolean) {
-    await runStoryboard("Preparing timeline…", async (signal) => {
-      if (downloadTool) await ensureVideoTool(bridge, signal);
-      const blob = await renderStoryboardPlan(bridge, plan, signal);
-      signal.throwIfAborted();
-      if (action === "export") downloadStoryboardVideo(blob);
-      else setTimelinePreview({ blob, video: URL.createObjectURL(blob), captions: timelineCaptionsUrl(plan.captions) });
-    });
+    if (active.current) { returnToTimeline(); return; }
+    if (downloadTool) setStartingTimeline(true);
+    setRenderingTimeline(true);
+    try {
+      await runStoryboard("Generating · Preparing timeline", async (signal) => {
+        if (downloadTool) await ensureVideoTool(bridge, signal, () => {
+          setTimelineDownload(null);
+          setStartingTimeline(false);
+        });
+        const blob = await renderStoryboardPlan(bridge, plan, signal);
+        signal.throwIfAborted();
+        if (action === "export") downloadStoryboardVideo(blob);
+        else setTimelinePreview({ blob, video: URL.createObjectURL(blob), captions: timelineCaptionsUrl(plan.captions) });
+      }, returnToTimeline);
+    } finally {
+      setRenderingTimeline(false);
+      setStartingTimeline(false);
+    }
   }
 
   // One clip per shot from its picture, then one video from all the clips. Finished pictures and clips stay on their shots, so a stopped run resumes.
   async function makeStoryboardVideo(story: Storyboard, model: string) {
     const bridge = desktopVideo();
     if (!bridge || !story.shots) return;
-    const pictureModel = selectedModel(models, "picture") ?? "";
-    const preflight = await preflightStoryboardVideo({
-      story,
-      videoModel: model,
-      pictureModel,
-      keys,
-      storyImages,
-      desktopVideo: bridge,
-      desktopAgents: desktopAgents(),
-      desktopSd: desktopSd(),
-      storageFile,
-    });
+    const preflight = await checkStoryboardVideo(story, model, true);
+    if (!preflight || latestStoryboard.current !== story) return;
     if (!preflight.ok) {
+      setVideoPlan(null);
       notifyBlockers(preflight.blockers);
       return;
     }
-    await runStoryboard("Preparing video…", async (signal) => {
-      await ensureVideoTool(bridge, signal);
+    if (preflight.toolBytes > 0 && !videoPlan?.toolBytes) {
+      setVideoPlan({ ...preflight, model });
+      return;
+    }
+    if (preflight.toolBytes > 0) setStartingVideoDownload(true);
+    else setVideoPlan(null);
+    await runStoryboard("Generating · Preparing video", async (signal) => {
+      await ensureVideoTool(bridge, signal, () => {
+        setVideoPlan(null);
+        setStartingVideoDownload(false);
+      });
       const shots = [...story.shots!];
       for (const [index, first] of shots.entries()) {
         signal.throwIfAborted();
@@ -1238,12 +1315,12 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         let shot = first;
         if (shot.image === null && !shot.generatedId) {
           if (!shot.description.trim()) throw new Error(`Shot ${index + 1} needs a description.`);
-          setStatus(`${label} · drawing the picture…`);
+          setStatus(`Generating · ${label} · Drawing the picture`);
           const generatedId = await renderShot(index, { ...story, shots }, signal);
           if (shot.id) updateShotById(shot.id, (current) => ({ ...current, generatedId }));
           shot = { ...shot, generatedId };
         }
-        setStatus(`${label} · making the clip…`);
+        setStatus(`Generating · Clip ${index + 1} of ${shots.length}`);
         const take = await createTake(shot, model, `Storyboard clip ${index + 1}`, signal, story.timeline?.aspectRatio);
         shots[index] = { ...shot, selectedTakeId: take.fileId, videoId: take.fileId };
       }
@@ -1263,6 +1340,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         setStoryboard((current) => current ? { ...current, videoItemId: itemId } : current);
       } finally { URL.revokeObjectURL(url); }
     });
+    setStartingVideoDownload(false);
   }
 
   function focusPromptAt(offset: number) {
@@ -1363,11 +1441,11 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     }
     const controller = new AbortController();
     active.current = controller;
-    setStatus(selection.length ? "Preparing selected media…" : "Thinking…");
+    setStatus(selection.length ? "Generating · Preparing selected media" : "Generating · Chat response");
     try {
       if (llmProvider === "ollama") {
         await startLocalLlm(controller.signal);
-        setStatus(selection.length ? "Preparing selected media…" : "Thinking…");
+        setStatus(selection.length ? "Generating · Preparing selected media" : "Generating · Chat response");
       }
       const characters = await loadCharacterReferences(prompt, controller.signal);
       const routingPrompt = `${prompt.trim()}${characterContext(characters, false)}\n\nSelected 3D model: ${threeDModel || "none"}. ${multiview ? `Multiview: ${multiviewRequirements(threeDModel)}.` : requiresImage(threeDModel) ? "Image-to-3D: requires one image." : "Text-to-3D: no images required."}`;
@@ -1377,7 +1455,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       const imageUrl = images.length === 1 ? images[0].image_url.url : undefined;
       const message = await submitMessage(controller.signal);
       const fullHistory = [...history, message];
-      setStatus("Thinking…");
+      setStatus("Generating · Chat response");
       const input = [...history.slice(-20).map(({ role, content }) => ({ role, content })), { role: "user", content }];
       const plan = await request(llmProvider, { action: "route", model: llm, input, signal: controller.signal }) as { text: string; tasks: GenerationTask[] };
       const pictureBridge = desktopPictureAi();
@@ -1392,12 +1470,13 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
           if (local && !local.installed) needed.set(local.id, local);
         }
         if (needed.size > 0) {
-          setStatus("Waiting for confirmation…");
+          setStatus("Queued · Waiting for download consent");
           const missing = [...needed.values()];
           const choice = await new Promise<"download" | "fal" | "cancel">((resolve) => {
             const settle = (value: "download" | "fal" | "cancel") => {
               controller.signal.removeEventListener("abort", onAbort);
-              setPictureChoice(null);
+              if (value === "download") setStartingPictureDownload(true);
+              else setPictureChoice(null);
               resolve(value);
             };
             const onAbort = () => settle("cancel");
@@ -1409,7 +1488,16 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
             return;
           }
           if (choice === "download") {
-            for (const item of missing) await downloadPictureAiModel(pictureBridge, item.id, item.name, controller.signal, setStatus);
+            try {
+              for (const item of missing) await downloadPictureAiModel(pictureBridge, item.id, item.name, controller.signal, (detail) => {
+                setStartingPictureDownload(false);
+                setPictureChoice(null);
+                if (!controller.signal.aborted) setStatus(detail.startsWith("Waiting") ? `Queued · ${detail}` : `Generating · ${detail}`);
+              });
+            } finally {
+              setStartingPictureDownload(false);
+              setPictureChoice(null);
+            }
           } else {
             useFalForPictureTools = true;
           }
@@ -1427,7 +1515,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
           ? resolveMultiview(model, task.viewIndices, images.map(({ image_url }, index) => ({ url: image_url.url, name: `Selected image ${index + 1}` })))
           : undefined;
         return characterGeneration(
-          { ...task, ...(task.category === "picture" && aspectRatio && !task.aspectRatio ? { aspectRatio } : {}), views, id: crypto.randomUUID(), model, status: "Waiting", messageIndex: fullHistory.length, canvasInputs: canvasInputNames(selection) },
+          { ...task, ...(task.category === "picture" && aspectRatio && !task.aspectRatio ? { aspectRatio } : {}), views, id: crypto.randomUUID(), model, status: "Queued", messageIndex: fullHistory.length, canvasInputs: canvasInputNames(selection) },
           images.map((image) => image.image_url.url), characters, sd.status,
         );
       });
@@ -1439,15 +1527,16 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       const outcomes: string[] = [];
       for (const { task, images: generationImages } of prepared) {
         if (controller.signal.aborted) {
-          updateGeneration(task.id, { status: "Not submitted", error: "Stopped before submission" });
+          updateGeneration(task.id, { status: "Stopped", error: undefined });
           continue;
         }
-        setStatus(`Generating ${task.category === "picture" ? "image" : task.category} · ${task.model}`);
+        setStatus(`Generating · ${task.category === "picture" ? "image" : task.category} · ${task.model}`);
         outcomes.push(await runTask(task, controller.signal, imageUrl, generationImages, selection));
       }
       if (outcomes.length) setHistory([...nextHistory, { role: "assistant", content: outcomes.join("\n").slice(0, 8000) }] as ConversationMessage[]);
     } catch (cause) {
-      notifyError(controller.signal.aborted ? "Request stopped" : cause instanceof Error ? cause.message : "Could not send prompt");
+      if (controller.signal.aborted) toast.add({ title: "Generation stopped." });
+      else notifyError(cause instanceof Error ? cause.message : "Could not send prompt");
     } finally {
       active.current = null;
       setStatus("");
@@ -1458,8 +1547,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     if (active.current) return;
     const controller = new AbortController();
     active.current = controller;
-    setStatus("Checking existing job…");
-    updateGeneration(task.id, { error: undefined, status: "Checking" });
+    setStatus("Generating · Checking existing job");
+    updateGeneration(task.id, { error: undefined, status: "Generating · Checking existing job" });
     try {
       // A local edit starts over, so it needs its picture again; hosted jobs only check what was submitted.
       const needsSelection = (isSdModel(task.model) && task.startImage)
@@ -1470,9 +1559,10 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       const outcome = await runTask(task, controller.signal, undefined, images, selection);
       setHistory((current) => [...current, { role: "assistant" as const, content: outcome.slice(0, 8000) }]);
     } catch (cause) {
-      const message = controller.signal.aborted ? "Request stopped" : cause instanceof Error ? cause.message : "Could not try again";
-      notifyError(message);
-      updateGeneration(task.id, { status: "Interrupted", error: message });
+      const message = controller.signal.aborted ? "Generation stopped." : cause instanceof Error ? cause.message : "Could not try again";
+      if (controller.signal.aborted) toast.add({ title: message });
+      else notifyError(message);
+      updateGeneration(task.id, controller.signal.aborted ? { status: "Stopped", error: undefined } : { status: "Failed", error: message });
     }
     finally { active.current = null; setStatus(""); }
   }
@@ -1584,8 +1674,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         </Combobox>
         <Tip label="New chat"><Button variant="ghost" size="icon-sm" aria-label="New chat" disabled={!chatId || !!status || saving || !!adding || voiceMode || !!storageError} onClick={() => openChat()}><PlusIcon /></Button></Tip>
       </div>
-      <Dialog open={!!videoPlan} onOpenChange={(open) => { if (!open) setVideoPlan(null); }}>
-        {videoPlan && <DialogContent>
+      <Dialog open={!!videoPlan} onOpenChange={(open) => { if (!open && !startingVideo && !startingVideoDownload) setVideoPlan(null); }}>
+        {videoPlan && <DialogContent showCloseButton={!startingVideo && !startingVideoDownload}>
           <DialogHeader>
             <DialogTitle>Make video?</DialogTitle>
             <DialogDescription>
@@ -1600,28 +1690,41 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setVideoPlan(null)}>Cancel</Button>
-            <Button onClick={() => { setVideoPlan(null); if (storyboard) void makeStoryboardVideo(storyboard, videoPlan.model); }}>Make video</Button>
+            <Button variant="outline" autoFocus disabled={startingVideo || startingVideoDownload} onClick={() => setVideoPlan(null)}>Not now</Button>
+            <Button disabled={startingVideo || startingVideoDownload} onClick={() => { if (storyboard) void makeStoryboardVideo(storyboard, videoPlan.model); }}>{startingVideo ? "Checking storyboard…" : startingVideoDownload ? "Starting…" : videoPlan.toolBytes > 0 ? "Download and make video" : "Make video"}</Button>
           </DialogFooter>
         </DialogContent>}
       </Dialog>
-      <Dialog open={!!timelineDownload} onOpenChange={(open) => { if (!open) setTimelineDownload(null); }}>
-        {timelineDownload && <DialogContent>
+      <Dialog open={!!timelineDownload} onOpenChange={(open) => { if (!open && !startingTimeline) returnToTimeline(); }}>
+        {timelineDownload && <DialogContent showCloseButton={!startingTimeline}>
           <DialogHeader>
             <DialogTitle>Download video tool?</DialogTitle>
             <DialogDescription>Rendering needs a one-time download of about {Math.round(timelineDownload.bytes / 1_000_000)} MB.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setTimelineDownload(null); setBoardDialog("timeline"); }}>Cancel</Button>
-            <Button onClick={() => {
+            <Button variant="outline" autoFocus disabled={startingTimeline} onClick={returnToTimeline}>Not now</Button>
+            <Button disabled={startingTimeline} onClick={() => {
               const bridge = desktopVideo();
-              setTimelineDownload(null);
               if (bridge) void finishTimelineRender(bridge, timelineDownload.plan, timelineDownload.action, true);
-            }}>Download and render</Button>
+              else returnToTimeline();
+            }}>{startingTimeline ? "Starting…" : "Download"}</Button>
           </DialogFooter>
         </DialogContent>}
       </Dialog>
-      <Dialog open={!!timelinePreview} onOpenChange={(open) => { if (!open) setTimelinePreview(null); }}>
+      <Dialog open={renderingTimeline && !timelineDownload && !timelinePreview}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Rendering timeline</DialogTitle>
+            <DialogDescription role="status">{status || "Preparing timeline…"}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={status === "Stopping…"} onClick={stopGeneration}>
+              <SquareIcon data-icon="inline-start" />Stop
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!timelinePreview} onOpenChange={(open) => { if (!open) returnToTimeline(); }}>
         {timelinePreview && <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Timeline preview</DialogTitle>
@@ -1631,8 +1734,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
             {timelinePreview.captions && <track kind="subtitles" label="Storyboard subtitles" src={timelinePreview.captions} default />}
           </video>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setTimelinePreview(null); setBoardDialog("timeline"); }}>Back to timeline</Button>
-            <Button onClick={() => downloadStoryboardVideo(timelinePreview.blob)}>Export MP4</Button>
+            <Button variant="outline" onClick={returnToTimeline}>Back to timeline</Button>
+            <Button onClick={() => downloadStoryboardVideo(timelinePreview.blob)}>Download MP4</Button>
           </DialogFooter>
         </DialogContent>}
       </Dialog>
@@ -1669,24 +1772,22 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
           <DialogFooter><Button variant="outline" onClick={() => setRedrafting(false)}>Cancel</Button><Button onClick={() => { setRedrafting(false); if (storyboard) void makeShots(storyboard); }}>Redraft shots</Button></DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog open={!!deleting} onOpenChange={(open) => { if (!open) setDeleting(null); }}>
-        <DialogContent><DialogHeader><DialogTitle>Delete chat?</DialogTitle><DialogDescription>“{deleting?.title}” will be permanently deleted. Files already on the canvas will stay.</DialogDescription></DialogHeader>
-          <DialogFooter><Button variant="outline" onClick={() => setDeleting(null)}>Cancel</Button><Button variant="destructive" onClick={() => void deleteChat()}>Delete chat</Button></DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <Dialog open={!!pictureChoice} onOpenChange={(open) => { if (!open && pictureChoice) pictureChoice.resolve("cancel"); }}>
+      <ConfirmDelete open={!!deleting} onOpenChange={(open) => { if (!open) setDeleting(null); }}
+        title="Delete chat?" description={`“${deleting?.title}” will be permanently deleted. Files already on the canvas will stay.`}
+        disabled={!!status || saving} onConfirm={deleteChat} />
+      <Dialog open={!!pictureChoice} onOpenChange={(open) => { if (!open && pictureChoice && !startingPictureDownload) pictureChoice.resolve("cancel"); }}>
         {pictureChoice && <DialogContent showCloseButton={false}>
           <DialogHeader>
             <DialogTitle>Download {pictureChoice.models.map((m) => m.name).join(" and ")}?</DialogTitle>
             <DialogDescription className="flex flex-col gap-2">
               <span>Run background removal and upscaling locally on your computer without an API key.</span>
-              <span className="text-xs">{pictureChoice.models.map((m) => `${m.name} (${localModelSize(m.bytes)}, ${m.license})`).join(" · ")}</span>
+              <span className="text-xs">{pictureChoice.models.map((m) => `${m.name} (${m.bytes > 0 ? localModelSize(m.bytes) : "Size unavailable"}, ${m.license})`).join(" · ")}</span>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => pictureChoice.resolve("cancel")}>Not now</Button>
-            {pictureChoice.canUseFal && <Button variant="secondary" onClick={() => pictureChoice.resolve("fal")}>Use Fal.AI</Button>}
-            <Button autoFocus onClick={() => pictureChoice.resolve("download")}>Download {localModelSize(pictureChoice.models.reduce((sum, m) => sum + m.bytes, 0))}</Button>
+            <Button variant="outline" autoFocus disabled={startingPictureDownload} onClick={() => pictureChoice.resolve("cancel")}>Not now</Button>
+            {pictureChoice.canUseFal && <Button variant="secondary" disabled={startingPictureDownload} onClick={() => pictureChoice.resolve("fal")}>Use Fal</Button>}
+            <Button disabled={startingPictureDownload} onClick={() => pictureChoice.resolve("download")}>{startingPictureDownload ? "Starting…" : "Download"}</Button>
           </DialogFooter>
         </DialogContent>}
       </Dialog>
@@ -1705,7 +1806,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         </div>}
         {tasks.length > 0 && <Accordion value={expanded} onValueChange={setExpanded} multiple className="rounded-none border-0">
         {tasks.map((task) => <AccordionItem key={task.id} value={task.id} className="relative data-open:bg-transparent">
-          <AccordionTrigger className="items-center px-3 py-2">{task.category === "picture" ? "Image" : task.category === "3d" ? "3D" : "Video"} · {canvasResults(task.files ?? [], task.category).some((file) => canvasFiles[file.url]) ? "Added to canvas" : task.status}</AccordionTrigger>
+          <AccordionTrigger className="items-center px-3 py-2">{task.category === "picture" ? "Image" : task.category === "3d" ? "3D" : "Video"} · {canvasResults(task.files ?? [], task.category).some((file) => canvasFiles[file.url]) ? "Added to canvas" : task.status === "Completed" ? "Done" : task.status === "Interrupted" || task.error ? "Failed" : task.status}</AccordionTrigger>
           <div className="absolute top-1 right-9 flex">
             {task.files?.filter((file) => canvasFiles[file.url]).map((file) => <Button key={file.url} variant="ghost" size="icon-sm" aria-label={`View ${file.name} on canvas`} title={`View ${file.name} on canvas`} onClick={() => {
               try { onFocusFile?.(canvasFiles[file.url]); }
@@ -1728,6 +1829,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
             <span role="alert" className="text-destructive">{task.error}</span>
             <Tip label={task.requestId ? "Check job" : "Try again"}><Button variant="ghost" size="icon-xs" className="ml-1 inline-flex align-middle text-destructive hover:text-destructive" aria-label={task.requestId ? "Check job" : "Try again"} disabled={!!status} onClick={() => void checkJob(task)}><RefreshCwIcon /></Button></Tip>
           </div>}
+          {task.status === "Stopped" && task.requestId && <Button variant="outline" size="sm" disabled={!!status} onClick={() => void checkJob(task)}>Check job</Button>}
           {task.files?.map((file) => <div key={file.url} className="flex items-center gap-2 rounded-xl border bg-background p-1">
             <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-muted-foreground">
               {file.kind === "image"
@@ -1738,7 +1840,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
                   : <BoxIcon className="size-5" />}
             </div>
             <span className="min-w-0 flex-1 truncate text-sm" title={file.name}>{file.name}</span>
-            {!canvasFiles[file.url] && onAddToCanvas && canvasResults(task.files ?? [], task.category).includes(file) && <Tip label="Retry adding to canvas"><Button variant="ghost" size="icon-sm" aria-label="Retry adding to canvas" disabled={!!adding || !!status} onClick={() => void addToCanvas(file, task.files, undefined, undefined, task)}>{adding === file.url ? <Loader2Icon className="animate-spin" /> : <PlusIcon />}</Button></Tip>}
+            {!canvasFiles[file.url] && onAddToCanvas && canvasResults(task.files ?? [], task.category).includes(file) && <Tip label="Retry adding to canvas"><Button variant="ghost" size="icon-sm" aria-label="Retry adding to canvas" disabled={!!adding || !!status} onClick={() => void addToCanvas(file, task.files, undefined, undefined, task)}>{adding === file.url ? <Loader2Icon aria-hidden="true" className="motion-safe:animate-spin" /> : <PlusIcon />}</Button></Tip>}
             <Tip label={`Download ${file.name}`}><Button variant="ghost" size="icon-sm" aria-label={`Download ${file.name}`} render={<a href={file.url} target="_blank" rel="noopener noreferrer" download={file.url.startsWith("/api/storage/files/") ? `${file.name}.glb` : file.url.startsWith("data:") || file.url.startsWith("blob:") ? file.name : undefined} />} nativeButton={false}><DownloadIcon /></Button></Tip>
           </div>)}
           </AccordionContent>
@@ -1781,11 +1883,11 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       {storyboard && storyboardHost && createPortal(<>
         {storyboard.shots && <div className="absolute top-0 left-0" style={{ transform: `translate(${origin.x}px, ${origin.y}px)` }}>
         <StoryboardShots shots={storyboard.shots} images={storyImages} characters={storyboard.characters ?? []}
-          busy={!!status} status={status} onEdit={editShot} onReorder={reorderShots} onGenerate={(index) => void generateShot(index, storyboard)} onStop={() => active.current?.abort()}
+          busy={!!status} status={checkingVideo ? "Checking storyboard…" : status} onEdit={editShot} onReorder={reorderShots} onGenerate={(index) => void generateShot(index, storyboard)} onStop={stopGeneration}
           renderCharacterReference={(index, close) => <StoryboardCharacters characters={storyboard.characters ?? []} index={index} images={storyImages} status={status}
-            onEdit={editCharacter} onRemove={() => { removeCharacter(index); close(); }}
+            onEdit={editCharacter} onRemove={async () => { await removeCharacter(index, storyboard.characters ?? []); close(); }}
             onGenerate={() => void generateCharacter(index, storyboard.characters![index], storyboard.story)}
-            onStop={() => active.current?.abort()} />}
+            onStop={stopGeneration} />}
           renderTakeControls={(shot, close) => shot.id && <StoryboardTakes shot={shot} model={videoStartImage(videoModel) ? videoModel : ""} aspectRatio={storyboard.timeline?.aspectRatio} disabled={!!status} price={videoPrice}
             onSelect={(id) => updateShotById(shot.id!, (current) => selectShotTake(current, id))}
             onGenerate={(action) => {
@@ -1818,8 +1920,15 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         <StoryboardPreview storyboard={storyboard} images={storyImages} open={boardDialog === "preview"} onOpenChange={(open) => setBoardDialog(open ? "preview" : null)} />
         <StoryboardExport storyboard={storyboard} images={storyImages} open={boardDialog === "export"} onOpenChange={(open) => setBoardDialog(open ? "export" : null)} />
         <StoryboardTimeline storyboard={storyboard} images={storyImages} open={boardDialog === "timeline"} onOpenChange={(open) => setBoardDialog(open ? "timeline" : null)}
-          onSelectTake={(shotId, fileId) => updateShotById(shotId, (shot) => selectShotTake(shot, fileId))}
-          onSave={(timeline) => setStoryboard((current) => current ? { ...current, timeline } : current)}
+          suspended={!!timelineDownload || !!timelinePreview || renderingTimeline}
+          onSave={(timeline, takes) => persistStoryboardChange((current) => ({
+            ...current,
+            timeline,
+            shots: current.shots?.map((shot) => {
+              const fileId = shot.id && takes.get(shot.id);
+              return fileId ? selectShotTake(shot, fileId) : shot;
+            }),
+          }))}
           onPreview={(plan) => renderFromTimeline(plan, "preview")} onExport={(plan) => renderFromTimeline(plan, "export")} />
         <StoryboardReview storyboard={storyboard} images={storyImages} open={boardDialog === "review"} onOpenChange={(open) => setBoardDialog(open ? "review" : null)}
           contextKey={JSON.stringify([canvasId, boardOwner, llm])} unavailableReason={reviewUnavailable} complete={completeStoryboardReview} onUpdate={setStoryboard} />
@@ -1975,17 +2084,17 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
             }}
             disabled={!!status}
           />
-          <SpeechMenu><Button variant="ghost" size="icon-sm" aria-label="Record audio" title="Record audio · right-click for speech models" disabled={!!status} onClick={() => setVoiceMode(true)}>
+          <Tooltip><SpeechMenu><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Record audio" disabled={!!status} onClick={() => setVoiceMode(true)} />}>
             <MicIcon />
-          </Button></SpeechMenu>
+          </TooltipTrigger></SpeechMenu><TooltipContent>Record audio · right-click for speech models</TooltipContent></Tooltip>
           <span role="status" className="sr-only">{status}</span>
           <Tip label={status ? `${status} · Stop generation` : "Send prompt"}><Button
             size="icon-sm"
-            disabled={!chatId || (!status && !prompt.trim())}
+            disabled={!chatId || status === "Stopping…" || (!status && !prompt.trim())}
             aria-label={status ? "Stop generation" : "Send prompt"}
-            onClick={() => status ? active.current?.abort() : void send()}
+            onClick={() => status ? stopGeneration() : void send()}
           >
-            {status ? <PauseIcon /> : <ArrowUpIcon />}
+            {status ? <SquareIcon /> : <ArrowUpIcon />}
           </Button></Tip>
           </div>
       </div>

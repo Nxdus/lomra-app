@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { AudioLinesIcon, CaptionsIcon, DownloadIcon, FilmIcon, PlayIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -11,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/toast";
 import { storageFile } from "@/lib/storage";
 import type { Storyboard } from "./storyboard-data";
+import { selectedShotTake, selectShotTake } from "./storyboard-takes";
 import { StoryboardVideoTrack } from "./storyboard-video-track";
 import { StoryboardTimedTrack } from "./storyboard-timed-track";
 import {
@@ -23,9 +25,9 @@ export type StoryboardTimelineProps = {
   storyboard: Storyboard;
   images: readonly { url: string }[];
   open: boolean;
+  suspended?: boolean;
   onOpenChange: (open: boolean) => void;
-  onSelectTake?: (shotId: string, fileId: string) => void;
-  onSave: (edit: StoryboardTimelineEdit) => void;
+  onSave: (edit: StoryboardTimelineEdit, selectedTakes: ReadonlyMap<string, string>) => Promise<void>;
   onPreview: (plan: StoryboardTimelinePlan) => void | Promise<void>;
   onExport: (plan: StoryboardTimelinePlan) => void | Promise<void>;
 };
@@ -42,32 +44,30 @@ function notifyTimelineError(title: string) {
   toast.add({ id: feedbackToast, title, type: "error", priority: "high" });
 }
 
-export function StoryboardTimeline({ open, onOpenChange, ...props }: StoryboardTimelineProps) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85dvh] flex-col gap-4 overflow-hidden rounded-3xl p-4 sm:max-w-4xl sm:p-6">
-        <DialogHeader className="shrink-0 gap-1 pr-8">
-          <DialogTitle>Storyboard timeline</DialogTitle>
-          <DialogDescription className="sr-only">Edit video, audio, and subtitles for this storyboard.</DialogDescription>
-        </DialogHeader>
-        {open && <TimelineEditor {...props} />}
-      </DialogContent>
-    </Dialog>
-  );
+export function StoryboardTimeline({ open, ...props }: StoryboardTimelineProps) {
+  return open && <TimelineEditor {...props} />;
 }
 
-function TimelineEditor({ storyboard, images, onSelectTake, onSave, onPreview, onExport }: Omit<StoryboardTimelineProps, "open" | "onOpenChange">) {
+function TimelineEditor({ storyboard, images, suspended, onOpenChange, onSave, onPreview, onExport }: Omit<StoryboardTimelineProps, "open">) {
   const [edit, setEdit] = useState(storyboard.timeline ?? defaultTimeline);
-  const [busy, setBusy] = useState(false);
+  const [savedEdit, setSavedEdit] = useState(edit);
+  const [selectedTakes, setSelectedTakes] = useState(new Map<string, string>());
+  const [discard, setDiscard] = useState(false);
+  const [operation, setOperation] = useState<"import" | "save" | "render">();
+  const busy = !!operation;
   const [audioId, setAudioId] = useState<string>();
   const [captionIndex, setCaptionIndex] = useState(0);
   const audioInput = useRef<HTMLInputElement>(null);
   const subtitleInput = useRef<HTMLTextAreaElement>(null);
-  const shots = storyboard.shots ?? [];
-  const duration = storyboardTimelineDuration(storyboard, edit);
+  const shots = (storyboard.shots ?? []).map((shot) => {
+    const fileId = shot.id && selectedTakes.get(shot.id);
+    return fileId ? selectShotTake(shot, fileId) : shot;
+  });
+  const draft = { ...storyboard, shots };
+  const duration = storyboardTimelineDuration(draft, edit);
   const timingError = edit.captions.some(({ text }) => !text.trim())
     ? "Enter text for each subtitle."
-    : storyboardTimelineEditError(storyboard, edit);
+    : storyboardTimelineEditError(draft, edit);
   const audioIndex = Math.max(0, edit.audio.findIndex(({ fileId }) => fileId === audioId));
   const audio = edit.audio[audioIndex];
   const activeCaption = Math.min(captionIndex, edit.captions.length - 1);
@@ -76,6 +76,17 @@ function TimelineEditor({ storyboard, images, onSelectTake, onSave, onPreview, o
   const captionItems = edit.captions.map(({ text }, index) => ({
     value: String(index), label: `Subtitle ${index + 1}${text.trim() ? ` · ${text.trim()}` : ""}`,
   }));
+
+  function stageTake(shotId: string, fileId: string) {
+    const shot = storyboard.shots?.find(({ id }) => id === shotId);
+    if (!shot) return;
+    setSelectedTakes((current) => {
+      const next = new Map(current);
+      if (selectedShotTake(shot)?.fileId === fileId) next.delete(shotId);
+      else next.set(shotId, fileId);
+      return next;
+    });
+  }
 
   function updateTrim(trim: TimelineTrim) {
     setEdit((current) => {
@@ -95,7 +106,7 @@ function TimelineEditor({ storyboard, images, onSelectTake, onSave, onPreview, o
   }
 
   async function addAudio(file: File) {
-    setBusy(true);
+    setOperation("import");
     try {
       if (!file.size || file.size > 100 * 1024 * 1024) throw new Error("Choose an audio file up to 100 MB.");
       const seconds = await audioDuration(file);
@@ -109,7 +120,7 @@ function TimelineEditor({ storyboard, images, onSelectTake, onSave, onPreview, o
     } catch (failure) {
       notifyTimelineError(failure instanceof Error ? failure.message : "Could not import the audio file.");
     } finally {
-      setBusy(false);
+      setOperation(undefined);
     }
   }
 
@@ -120,34 +131,49 @@ function TimelineEditor({ storyboard, images, onSelectTake, onSave, onPreview, o
     requestAnimationFrame(() => subtitleInput.current?.focus());
   }
 
-  function saveEdits() {
+  async function saveEdits() {
     if (timingError) return notifyTimelineError(timingError);
-    onSave(edit);
-    toast.add({ id: feedbackToast, title: "Timeline saved.", type: "success", priority: "low" });
+    setOperation("save");
+    try {
+      await onSave(edit, selectedTakes);
+      setSavedEdit(edit);
+      setSelectedTakes(new Map());
+      toast.add({ id: feedbackToast, title: "Timeline saved.", type: "success", priority: "low" });
+    } catch (failure) {
+      notifyTimelineError(failure instanceof Error ? failure.message : "Could not save the timeline.");
+    } finally {
+      setOperation(undefined);
+    }
   }
 
   async function render(callback: StoryboardTimelineProps["onPreview"]) {
     if (timingError) return notifyTimelineError(timingError);
-    setBusy(true);
+    setOperation("render");
     try {
-      const plan = resolveStoryboardTimeline(storyboard, edit);
-      onSave(edit);
-      await callback(plan);
+      await callback(resolveStoryboardTimeline(draft, edit));
     } catch (failure) {
       notifyTimelineError(failure instanceof Error ? failure.message : "Could not render the timeline.");
     } finally {
-      setBusy(false);
+      setOperation(undefined);
     }
   }
 
-  return (
-    <>
+  return <Dialog open={!suspended} onOpenChange={(open) => {
+    if (open || busy) return;
+    if (selectedTakes.size || JSON.stringify(edit) !== JSON.stringify(savedEdit)) setDiscard(true);
+    else onOpenChange(false);
+  }}>
+    <DialogContent showCloseButton={!busy} className="flex max-h-[85dvh] flex-col gap-4 overflow-hidden rounded-3xl p-4 sm:max-w-4xl sm:p-6">
+      <DialogHeader className="shrink-0 gap-1 pr-8">
+        <DialogTitle>Storyboard timeline</DialogTitle>
+        <DialogDescription className="sr-only">Edit video, audio, and subtitles for this storyboard.</DialogDescription>
+      </DialogHeader>
       <Tabs defaultValue="video" className="min-h-0 gap-3">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b pb-2">
           <TabsList aria-label="Timeline sections">
-            <TabsTrigger value="video"><FilmIcon data-icon="inline-start" />Video</TabsTrigger>
-            <TabsTrigger value="audio"><AudioLinesIcon data-icon="inline-start" />Audio</TabsTrigger>
-            <TabsTrigger value="subtitles"><CaptionsIcon data-icon="inline-start" />Subtitles</TabsTrigger>
+            <TabsTrigger value="video" disabled={busy}><FilmIcon data-icon="inline-start" />Video</TabsTrigger>
+            <TabsTrigger value="audio" disabled={busy}><AudioLinesIcon data-icon="inline-start" />Audio</TabsTrigger>
+            <TabsTrigger value="subtitles" disabled={busy}><CaptionsIcon data-icon="inline-start" />Subtitles</TabsTrigger>
           </TabsList>
           <div className="ml-auto flex items-center gap-2">
             <span className="text-xs tabular-nums text-muted-foreground">{Number.isFinite(duration) && duration >= 0 ? `${duration.toFixed(2)} s` : "—"}</span>
@@ -161,7 +187,7 @@ function TimelineEditor({ storyboard, images, onSelectTake, onSave, onPreview, o
         </div>
 
         <TabsContent value="video" keepMounted className="min-h-0 overflow-y-auto p-0.5">
-          <StoryboardVideoTrack shots={shots} images={images} edit={edit} busy={busy} onSelectTake={onSelectTake} onTrim={updateTrim} />
+          <StoryboardVideoTrack shots={shots} images={images} edit={edit} busy={busy} onSelectTake={stageTake} onTrim={updateTrim} />
         </TabsContent>
 
         <TabsContent value="audio" className="min-h-0 space-y-3 overflow-y-auto p-0.5">
@@ -174,9 +200,10 @@ function TimelineEditor({ storyboard, images, onSelectTake, onSave, onPreview, o
           <StoryboardTimedTrack kind="audio" duration={duration} selected={audio?.fileId} disabled={busy} onSelect={setAudioId}
             items={edit.audio.map((track) => ({ id: track.fileId, label: track.name, start: track.start, end: track.start + track.seconds }))}
             action={<Button type="button" variant="secondary" size="sm" disabled={busy || edit.audio.length >= maxTimelineAudio}
-              className="bg-zinc-800 text-white hover:bg-zinc-700 hover:text-white" onClick={() => audioInput.current?.click()}>
-              <PlusIcon data-icon="inline-start" />Add audio
+              onClick={() => audioInput.current?.click()}>
+              <PlusIcon data-icon="inline-start" />{operation === "import" ? "Importing audio…" : "Add audio"}
             </Button>} />
+          {operation === "import" && <p role="status" className="sr-only">Importing audio…</p>}
           {audio && <fieldset disabled={busy} className="min-w-0 rounded-xl border px-3 pt-2 pb-3 sm:px-4">
             <legend className="max-w-full truncate px-1.5 text-sm font-medium">{audio.name}</legend>
             <div className="flex flex-wrap items-end gap-2.5">
@@ -190,14 +217,14 @@ function TimelineEditor({ storyboard, images, onSelectTake, onSave, onPreview, o
               <NumberInput label="Position (s)" value={audio.start} onChange={(start) => updateAudio(audioIndex, { start })} />
               <NumberInput label="Gain" max={2} value={audio.gain} onChange={(gain) => updateAudio(audioIndex, { gain })} />
               <div className="order-last flex w-full min-w-0 items-center gap-2 md:order-none md:ml-auto md:w-auto md:flex-1 md:justify-end">
-                <audio key={audio.fileId} controls preload="none" aria-label="Preview source audio" className="h-9 w-full min-w-0 max-w-xs"
+                <audio key={audio.fileId} controls preload="none" aria-label="Preview source audio" className="h-9 w-full min-w-0 max-w-xs rounded-full focus-visible:ring-2 focus-visible:ring-ring"
                   src={`/api/storage/files/${encodeURIComponent(audio.fileId)}`} />
                 <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{audio.seconds.toFixed(2)} s</span>
               </div>
-              <Button type="button" variant="ghost" size="icon-sm" className="ml-auto text-muted-foreground hover:text-destructive md:ml-0"
-                aria-label="Remove audio" title="Remove audio" onClick={() => setEdit((current) => ({ ...current, audio: current.audio.filter(({ fileId }) => fileId !== audio.fileId) }))}>
+              <Tip label="Remove audio"><Button type="button" variant="ghost" size="icon-sm" className="ml-auto text-muted-foreground hover:text-destructive md:ml-0"
+                aria-label="Remove audio" onClick={() => setEdit((current) => ({ ...current, audio: current.audio.filter(({ fileId }) => fileId !== audio.fileId) }))}>
                 <Trash2Icon />
-              </Button>
+              </Button></Tip>
             </div>
           </fieldset>}
         </TabsContent>
@@ -207,7 +234,7 @@ function TimelineEditor({ storyboard, images, onSelectTake, onSave, onPreview, o
             onSelect={(id) => setCaptionIndex(Number(id))}
             items={edit.captions.map((cue, index) => ({ id: String(index), label: cue.text.trim() || `Subtitle ${index + 1}`, start: cue.start, end: cue.end }))}
             action={<Button type="button" variant="secondary" size="sm" disabled={busy || !captionRange || edit.captions.length >= maxTimelineCaptions}
-              className="bg-zinc-800 text-white hover:bg-zinc-700 hover:text-white" onClick={addCaption}>
+              onClick={addCaption}>
               <PlusIcon data-icon="inline-start" />Add subtitle
             </Button>} />
           {caption && <fieldset disabled={busy} className="min-w-0 space-y-2 rounded-xl border px-3 pt-2 pb-3 sm:px-4">
@@ -220,13 +247,13 @@ function TimelineEditor({ storyboard, images, onSelectTake, onSave, onPreview, o
                 <SelectTrigger aria-label="Selected subtitle" className="max-w-48"><SelectValue /></SelectTrigger>
                 <SelectContent>{captionItems.map(({ value, label }) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent>
               </Select>}
-              <Button type="button" variant="ghost" size="icon-sm" className="ml-auto text-muted-foreground hover:text-destructive"
-                aria-label="Remove subtitle" title="Remove subtitle" onClick={() => {
+              <Tip label="Remove subtitle"><Button type="button" variant="ghost" size="icon-sm" className="ml-auto text-muted-foreground hover:text-destructive"
+                aria-label="Remove subtitle" onClick={() => {
                   setCaptionIndex(activeCaption);
                   setEdit((current) => ({ ...current, captions: current.captions.filter((_, index) => index !== activeCaption) }));
                 }}>
                 <Trash2Icon />
-              </Button>
+              </Button></Tip>
             </div>
             <Textarea ref={subtitleInput} aria-label="Subtitle text" placeholder="Enter subtitle text" value={caption.text}
               maxLength={maxTimelineCaptionLength} rows={2} className="min-h-0 field-sizing-fixed resize-y py-2"
@@ -235,12 +262,25 @@ function TimelineEditor({ storyboard, images, onSelectTake, onSave, onPreview, o
         </TabsContent>
       </Tabs>
       <DialogFooter className="shrink-0 flex-row flex-wrap justify-end border-t pt-3">
-        <Button variant="ghost" size="sm" disabled={busy} onClick={saveEdits}>Save edits</Button>
+        {operation === "render" && <span role="status" className="mr-auto self-center text-xs text-muted-foreground">Generating</span>}
+        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void saveEdits()}>{operation === "save" ? "Saving…" : "Save edits"}</Button>
         <Button variant="outline" size="sm" disabled={busy} onClick={() => void render(onPreview)}><PlayIcon data-icon="inline-start" />Preview</Button>
         <Button size="sm" disabled={busy} onClick={() => void render(onExport)}><DownloadIcon data-icon="inline-start" />Export MP4</Button>
       </DialogFooter>
-    </>
-  );
+      <Dialog open={discard} onOpenChange={setDiscard}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Discard changes?</DialogTitle>
+            <DialogDescription>Your changes won’t be saved.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" autoFocus onClick={() => setDiscard(false)}>Keep editing</Button>
+            <Button variant="destructive" onClick={() => onOpenChange(false)}>Discard changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </DialogContent>
+  </Dialog>;
 }
 
 function NumberInput({ label, value, onChange, max }: { label: string; value: number; onChange: (value: number) => void; max?: number }) {

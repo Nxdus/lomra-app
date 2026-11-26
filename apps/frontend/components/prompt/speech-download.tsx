@@ -1,13 +1,12 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DownloadDialog } from "@/components/ui/download-dialog";
 import { desktopSpeech, type SpeechModel } from "@/lib/desktop";
 
-export const speechSize = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+export const speechSize = (bytes: number) => bytes <= 0 ? "Size unavailable" : bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
 
-type Request = { resolve: (started: boolean) => void; reject: (cause: unknown) => void };
+type Request = (started: boolean) => void;
 
 /**
  * Asks in an app modal before a speech model is downloaded. `ask(id)` resolves true once the
@@ -16,56 +15,33 @@ type Request = { resolve: (started: boolean) => void; reject: (cause: unknown) =
 export function useSpeechDownload() {
   const request = useRef<Request | null>(null);
   const [model, setModel] = useState<SpeechModel | null>(null);
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
 
   const ask = useCallback(async (id?: string | null) => {
     const bridge = desktopSpeech();
     const catalog = await bridge?.models();
     const found = catalog?.models.find((candidate) => id ? candidate.id === id : candidate.recommended);
-    if (!found) return false;
-    request.current?.resolve(false);
-    return new Promise<boolean>((resolve, reject) => {
-      request.current = { resolve, reject };
+    if (!found) throw new Error("Speech model unavailable.");
+    if (request.current) throw new Error("A speech model download confirmation is already open.");
+    return new Promise<boolean>((resolve) => {
+      request.current = resolve;
       setModel(found);
-      setOpen(true);
     });
   }, []);
 
   function close(started: boolean) {
-    request.current?.resolve(started);
+    request.current?.(started);
     request.current = null;
-    setOpen(false);
+    setModel(null);
   }
 
-  async function confirm() {
-    if (!model || busy) return;
-    setBusy(true);
-    try {
-      close(Boolean(await desktopSpeech()?.downloadModel(model.id)));
-    } catch (cause) {
-      request.current?.reject(cause);
-      request.current = null;
-      setOpen(false);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const dialog = <Dialog open={open} onOpenChange={(next) => { if (!next && !busy) close(false); }}>
-    <DialogContent showCloseButton={false}>
-      <DialogHeader>
-        <DialogTitle>Download {model?.name} for voice input?</DialogTitle>
-        <DialogDescription>
-          Voice input transcribes on this computer. It needs a one-time download of about {model ? speechSize(model.bytes) : ""}. Your audio never leaves your device.
-        </DialogDescription>
-      </DialogHeader>
-      <DialogFooter>
-        <Button variant="outline" disabled={busy} onClick={() => close(false)}>Not now</Button>
-        <Button autoFocus disabled={busy} onClick={() => void confirm()}>{busy ? "Starting…" : "Download"}</Button>
-      </DialogFooter>
-    </DialogContent>
-  </Dialog>;
+  const dialog = model && <DownloadDialog
+    title={`Download ${model.name} for voice input?`}
+    description={`Download size: ${speechSize(model.bytes)}. Voice input transcribes on this computer. Your audio never leaves your device.`}
+    onClose={close}
+    onDownload={async () => {
+      if (!await desktopSpeech()?.downloadModel(model.id)) throw new Error("Could not start the speech model download.");
+    }}
+  />;
 
   return { ask, dialog };
 }

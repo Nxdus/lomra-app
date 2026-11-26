@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { DownloadIcon } from "lucide-react";
 import { localModelSize } from "@/components/ollama-settings";
 import { SdDownloadDialog, type SdRepo } from "@/components/sd-download-dialog";
+import { Tip } from "@/components/tip";
 import { Badge } from "@/components/ui/badge";
 import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList } from "@/components/ui/combobox";
 import { InputGroupAddon, InputGroupButton } from "@/components/ui/input-group";
@@ -79,7 +80,7 @@ export function SdHuggingFace({ status, onDownload, initialQuery = "" }: {
     const ready = text.trim().length >= minQuery;
     setLoading(ready);
     if (ready) timer.current = setTimeout(() => void search(text.trim()), typingPause);
-    else setFound([]);
+    setFound([]);
   }
 
   useEffect(() => {
@@ -94,18 +95,18 @@ export function SdHuggingFace({ status, onDownload, initialQuery = "" }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only once, when the field appears
   }, []);
 
-  const pick = (id: string) => { const item = found.find((entry) => entry.id === id); if (item) { setOpen(false); setPicked(item); } };
+  const pick = (id: string) => { if (loading) return; const item = found.find((entry) => entry.id === id); if (item) { setOpen(false); setPicked(item); } };
   const message = error || (query.trim().length < minQuery ? "Type at least 3 characters." : loading ? "Searching Hugging Face…" : "No usable models found.");
 
   return <section aria-label="Add a model from Hugging Face" className="flex flex-col gap-3">
-    {picked && <SdDownloadDialog repo={picked} status={status} onClose={() => { setPicked(null); input.current?.focus(); }} onDownload={(request) => void onDownload(request)} />}
+    {picked && <SdDownloadDialog repo={picked} status={status} onClose={() => { setPicked(null); input.current?.focus(); }} onDownload={onDownload} />}
     <form ref={searchBar} onSubmit={(event) => { event.preventDefault(); if (!loading && found.length) pick(found[0].id); }}>
       <Combobox items={found.map((item) => item.id)} filter={null} value={null} open={open} onOpenChange={setOpen} inputValue={query}
         onInputValueChange={(text, { reason }) => { if (reason === "input-change") change(text); }}
         onValueChange={(value) => { if (typeof value === "string") pick(value); }}>
         <ComboboxInput ref={input} className="h-11" showTrigger={false} placeholder="Search Hugging Face or paste a link" aria-label="Hugging Face model to download" autoComplete="off" spellCheck={false} maxLength={1800}>
           <InputGroupAddon align="inline-end">
-            <InputGroupButton type="submit" size="icon-sm" aria-label="Choose a version to download" disabled={loading || !found.length}><DownloadIcon aria-hidden="true" /></InputGroupButton>
+            <Tip label="Choose a version to download"><InputGroupButton type="submit" size="icon-sm" aria-label="Choose a version to download" disabled={loading || !found.length}><DownloadIcon aria-hidden="true" /></InputGroupButton></Tip>
           </InputGroupAddon>
         </ComboboxInput>
         <ComboboxContent anchor={searchBar} side="top">

@@ -2,7 +2,7 @@
 
 import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
 
 const label = (level: string) => level === "default" ? "Default" : level === "xhigh" ? "Extra high" : level[0].toUpperCase() + level.slice(1);
@@ -29,7 +29,7 @@ export function EffortPicker({ levels, value, onChange, disabled }: {
       <GaugeNeedle position={index / (steps.length - 1)} />
     </PopoverTrigger></Tip>
     <PopoverContent side="top" align="end" className="w-52 gap-3">
-      <div className="text-center text-sm font-medium">{label(steps[index])}</div>
+      <div className="flex items-baseline justify-between gap-2"><PopoverTitle>Thinking effort</PopoverTitle><span className="text-xs text-muted-foreground">{label(steps[index])}</span></div>
       <Slider aria-label="Thinking effort" min={0} max={steps.length - 1} step={1} value={[index]}
         onValueChange={(next) => onChange(steps[Array.isArray(next) ? next[0] : next] ?? "default")} />
     </PopoverContent>

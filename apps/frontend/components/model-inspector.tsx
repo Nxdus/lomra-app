@@ -3,7 +3,7 @@
 import { Tip } from "@/components/tip";
 import { useEffect, useRef, useState } from "react";
 import type { AnimationAction } from "three";
-import { BoneIcon, DownloadIcon, InfoIcon, PauseIcon, PlayIcon, RotateCcwIcon, SunIcon } from "lucide-react";
+import { BoneIcon, DownloadIcon, LoaderCircleIcon, InfoIcon, PauseIcon, PlayIcon, RotateCcwIcon, SunIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -33,6 +33,7 @@ export function ModelInspector({ src, file }: { src: string; file: File }) {
   const [exposure, setExposure] = useState(1);
   const [intensity, setIntensity] = useState(3);
   const [angle, setAngle] = useState(45);
+  const [attempt, setAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -187,7 +188,7 @@ export function ModelInspector({ src, file }: { src: string; file: File }) {
       if (!cancelled) setError(reason instanceof Error ? reason.message : "Could not inspect this model.");
     });
     return () => { cancelled = true; cleanup(); };
-  }, [src]);
+  }, [src, attempt]);
 
   useEffect(() => { if (clips.length) controls.current?.animation(Number(clip)); }, [clip, clips]);
   useEffect(() => { controls.current?.playback(playing, Number(speed)); }, [playing, speed, clip, clips]);
@@ -216,7 +217,7 @@ export function ModelInspector({ src, file }: { src: string; file: File }) {
       <div ref={host} className="h-[58vh] min-h-64 sm:h-[62vh]" style={{ background: background === "dark" ? "#171717" : background === "gray" ? "#808080" : "#ffffff" }} />
       {!info && !error && <p role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">Loading model…</p>}
     </div>
-    {error && <Alert variant="destructive"><AlertTitle>Could not inspect model</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
+    {error && <Alert variant="destructive"><AlertTitle>Could not inspect model</AlertTitle><AlertDescription>{error}</AlertDescription><Button variant="outline" size="sm" className="w-fit" onClick={() => { setError(""); setAttempt(value => value + 1); }}>Retry</Button></Alert>}
     <div className="flex flex-wrap items-center justify-center gap-2">
       <div role="toolbar" aria-label="Model inspection tools" className="flex max-w-full flex-wrap items-center justify-center gap-1 rounded-3xl border bg-popover p-1.5 shadow-sm">
         <Tip label="Reset view"><Button variant="ghost" size="icon-sm" aria-label="Reset view" disabled={!info} onClick={() => controls.current?.reset()}><RotateCcwIcon /></Button></Tip>
@@ -250,6 +251,7 @@ export function ModelInspector({ src, file }: { src: string; file: File }) {
             </>}
           </PopoverContent>
         </Popover>
+        {saving && <span role="status" className="flex items-center gap-2 text-xs text-muted-foreground"><LoaderCircleIcon aria-hidden="true" className="size-4 motion-safe:animate-spin" />Saving…</span>}
         <Tip label="Save PNG · 2048 px"><Button variant="ghost" size="icon-sm" aria-label="Save PNG" disabled={!info || saving} onClick={() => void saveRender()}><DownloadIcon /></Button></Tip>
       </div>
       {!!clips.length && <div className="flex max-w-full items-center gap-1 rounded-3xl border bg-popover p-1.5 shadow-sm">

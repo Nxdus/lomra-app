@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { MinusIcon } from "lucide-react";
+import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { ToastDescription, ToastTitle, toast } from "@/components/ui/toast";
@@ -18,7 +19,7 @@ function ReleaseNotesLink({ url, onOpen }: { url: string; onOpen: (url: string) 
         event.preventDefault();
         onOpen(url);
       }}
-      className="w-fit text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+      className="w-fit text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       Release notes
     </a>
@@ -56,8 +57,8 @@ function UpdateToastBody({
     return (
       <div className="flex min-w-0 flex-1 flex-col gap-2.5">
         <div className="flex items-start justify-between gap-2">
-          <ToastTitle className="font-semibold">Downloading Update</ToastTitle>
-          <Button
+          <ToastTitle className="font-semibold">Downloading update</ToastTitle>
+          <Tip label="Minimize update notification"><Button
             type="button"
             variant="ghost"
             size="icon-xs"
@@ -66,21 +67,21 @@ function UpdateToastBody({
             onClick={onMinimize}
           >
             <MinusIcon aria-hidden="true" />
-          </Button>
+          </Button></Tip>
         </div>
         <ToastDescription>Lomra v{latest} is downloading.</ToastDescription>
         {info.url && <ReleaseNotesLink url={info.url} onOpen={onOpenRelease} />}
         <Progress
           value={percent}
           aria-label={`Downloading Lomra v${latest}`}
-          className="pt-0.5 [&_[data-slot=progress-track]]:h-1.5"
+          className="pt-0.5"
         />
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs tabular-nums text-muted-foreground">
-            {percent !== null ? `Downloading... ${percent}%` : "Downloading..."}
+            {percent !== null ? `Downloading… ${percent}%` : "Downloading…"}
           </span>
           <Button type="button" variant="ghost" size="xs" onClick={onCancel}>
-            Cancel
+            Cancel download
           </Button>
         </div>
       </div>
@@ -177,7 +178,7 @@ export function UpdateToast() {
     };
 
     const title =
-      status === "downloading" ? "Downloading Update"
+      status === "downloading" ? "Downloading update"
       : status === "installing" ? "Installing update"
       : status === "error" ? "Update failed"
       : "Update available";

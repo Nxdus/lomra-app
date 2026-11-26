@@ -15,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 const panelClassName = "-mx-3 min-h-0 max-h-[min(38rem,calc(100vh-14rem))] overflow-y-auto overscroll-contain px-3 pb-4";
 
 function providerLabel(provider?: KeyedProvider | null) {
-  if (provider === "fal") return "Fal.AI";
+  if (provider === "fal") return "Fal";
   if (provider === "google") return "Google AI";
   if (provider === "openrouter") return "OpenRouter";
   return "";
@@ -76,12 +76,12 @@ export function ModelSetupDialog({
             {imageSearch
               ? "Find an image model on Hugging Face and download it."
               : onContinue
-              ? "Save an API key or install a local model. Lomra checks that at least one provider is ready before starting the tutorial."
+              ? "Save an API key or install a local chat, image generation, or 3D model. Lomra checks that at least one provider is ready before starting the tutorial."
               : targetProvider && modelName
                 ? `Add your ${providerLabel(targetProvider)} API key to start using ${modelName}.`
                 : targetProvider
                   ? `Configure ${providerLabel(targetProvider)} to start generating.`
-                  : "Configure your cloud API keys (Google AI, OpenRouter, Fal.ai) or local models (Ollama, Stable Diffusion, Hunyuan 3D) to start generating."}
+                  : "Configure your cloud API keys (Google AI, OpenRouter, Fal) or local models (Ollama, Stable Diffusion, Hunyuan 3D) to start generating."}
           </DialogDescription>
         </DialogHeader>
 

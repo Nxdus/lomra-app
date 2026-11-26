@@ -1,12 +1,14 @@
 "use client";
 
 import { Tip } from "@/components/tip";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { RotateCcwIcon, SquareTerminalIcon, XIcon } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { Button } from "@/components/ui/button";
 import { useDisabledAgents } from "@/hooks/use-disabled-agents";
 import { desktopAgents, type AgentInfo } from "@/lib/desktop";
+
+const terminalBackground = "#0a0a0a";
 
 type Session = { status: "starting" | "running" | "exited"; error?: string };
 
@@ -14,7 +16,7 @@ type Session = { status: "starting" | "running" | "exited"; error?: string };
 export function AgentPanel() {
   const [allAgents, setAgents] = useState<AgentInfo[]>([]);
   const { disabled } = useDisabledAgents();
-  const agents = allAgents.filter((agent) => !disabled.includes(agent.id));
+  const agents = useMemo(() => allAgents.filter((agent) => !disabled.includes(agent.id)), [allAgents, disabled]);
   const [open, setOpen] = useState(false);
   const [started, setStarted] = useState(false);
   const [chosen, setActive] = useState<string>();
@@ -22,10 +24,13 @@ export function AgentPanel() {
   const [restart, setRestart] = useState(0);
   const [session, setSession] = useState<Session>({ status: "starting" });
   const container = useRef<HTMLDivElement>(null);
+  const launcher = useRef<HTMLButtonElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
   const openRef = useRef(open);
 
   useEffect(() => {
     openRef.current = open;
+    if (open) closeButton.current?.focus();
   }, [open]);
 
   useEffect(() => {
@@ -46,7 +51,7 @@ export function AgentPanel() {
     void (async () => {
       const [{ Terminal }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
       if (disposed) return;
-      const terminal = new Terminal({ fontFamily: "ui-monospace, Consolas, monospace", fontSize: 13, cursorBlink: true, scrollback: 5000, overviewRuler: { width: 6 }, theme: { background: "#0a0a0a" } });
+      const terminal = new Terminal({ fontFamily: "ui-monospace, Consolas, monospace", fontSize: 13, cursorBlink: true, scrollback: 5000, overviewRuler: { width: 6 }, theme: { background: terminalBackground } });
       const fit = new FitAddon();
       terminal.loadAddon(fit);
       terminal.open(host);
@@ -85,19 +90,23 @@ export function AgentPanel() {
     };
   }, [active, agents, restart, started]);
 
+  function close() { setOpen(false); launcher.current?.focus(); }
+
   if (!agents.length) return null;
   const current = agents.find((agent) => agent.id === active);
   return (
     <>
-      <Tip label="Agent terminal"><Button variant="outline" size="icon-sm" className="fixed top-4 right-4 z-20" aria-label="Open agent terminal" onClick={() => { setOpen(true); setStarted(true); }}>
+      <Tip label="Agent terminal"><Button ref={launcher} variant="outline" size="icon-sm" className="fixed top-4 right-4 z-20" aria-label="Open agent terminal" onClick={() => { setOpen(true); setStarted(true); }}>
         <SquareTerminalIcon aria-hidden="true" />
       </Button></Tip>
-      <aside aria-label="Agent terminal" hidden={!open} className="fixed inset-y-0 right-0 z-30 flex w-[min(640px,100vw)] flex-col border-l bg-background shadow-xl">
+      <aside aria-label="Agent terminal" hidden={!open} onKeyDown={(event) => {
+        if (event.key === "Escape" && !container.current?.contains(event.target as Node)) { event.stopPropagation(); close(); }
+      }} className="fixed inset-y-0 right-0 z-30 flex w-[min(640px,100vw)] flex-col border-l bg-background shadow-xl">
         <header className="flex items-center gap-1 border-b p-2">
           {agents.map((agent) => (
-            <Button key={agent.id} size="sm" variant={agent.id === active ? "secondary" : "ghost"} disabled={!agent.available}
+            <Button key={agent.id} size="sm" variant={agent.id === active ? "secondary" : "ghost"} disabled={!agent.available} aria-pressed={agent.id === active}
               title={agent.available ? undefined : `${agent.label} is not installed`}
-              onClick={() => { setSession({ status: "starting" }); setActive(agent.id); }}>
+              onClick={() => { if (agent.id === active) return; setSession({ status: "starting" }); setActive(agent.id); }}>
               {agent.label}
             </Button>
           ))}
@@ -107,12 +116,13 @@ export function AgentPanel() {
                 <RotateCcwIcon data-icon="inline-start" /> Restart
               </Button>
             )}
-            <Button size="icon-sm" variant="ghost" aria-label="Close agent terminal" onClick={() => setOpen(false)}><XIcon aria-hidden="true" /></Button>
+            <Tip label="Close agent terminal"><Button ref={closeButton} size="icon-sm" variant="ghost" aria-label="Close agent terminal" onClick={close}><XIcon aria-hidden="true" /></Button></Tip>
           </div>
         </header>
+        {current?.available && session.status === "starting" && <p role="status" className="border-b px-3 py-2 text-sm text-muted-foreground">Starting…</p>}
         {session.error && <p role="alert" className="border-b px-3 py-2 text-sm text-destructive">{session.error}</p>}
         {!current?.available && <p className="px-3 py-2 text-sm text-muted-foreground">No supported agent CLI was found on your PATH. Install Claude Code or Codex.</p>}
-        <div ref={container} className="min-h-0 flex-1 bg-[#0a0a0a] p-2" />
+        <div ref={container} className="min-h-0 flex-1 p-2" style={{ backgroundColor: terminalBackground }} />
       </aside>
     </>
   );
