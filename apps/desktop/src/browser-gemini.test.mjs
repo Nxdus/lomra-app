@@ -9,7 +9,7 @@ const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypmp42'), 
 const node = (name, role = 'button') => ({ backendDOMNodeId: 1, name: { value: name }, role: { value: role } });
 
 // A page whose controls appear as the flow progresses: sending a prompt moves it into a conversation with the result.
-function run(kind, present, bytes, noMenu = false, picker = 'Open mode picker, currently Flash-Lite', auto = 'Auto', share = false) {
+function run(kind, present, bytes, noMenu = false, picker = 'Open mode picker, currently Flash-Lite', auto = 'Auto', share = false, mediaOnly = false) {
   if (picker) present.push([picker]);
   const images = share ? [`data:image/png;base64,${png}`] : [];
   const calls = [];
@@ -24,6 +24,7 @@ function run(kind, present, bytes, noMenu = false, picker = 'Open mode picker, c
       return { url: current, nodes: present.map(([name, role]) => node(name, role)) };
     },
     async responseText() { return ''; },
+    async fetchMedia() { return mediaOnly ? bytes.toString('base64') : undefined; },
     async click(control) {
       const name = control.name.value;
       calls.push(name);
@@ -36,7 +37,8 @@ function run(kind, present, bytes, noMenu = false, picker = 'Open mode picker, c
       if (name === 'Send message' || name === 'Submit') {
         current = url;
         waitingForImage = kind === 'image' && name === 'Submit';
-        present.push([share ? 'Share video' : kind === 'video' ? 'Download video' : 'Download full size image'], ['Open menu for conversation actions']);
+        if (!mediaOnly) present.push([share ? 'Share video' : kind === 'video' ? 'Download video' : 'Download full size image']);
+        present.push(['Open menu for conversation actions']);
       }
       if (name === picker) present.push([auto, 'menuitemradio']);
       if (name === 'Open menu for conversation actions' && !noMenu) present.push(['Delete', 'menuitem']);
@@ -76,6 +78,12 @@ test('Gemini opens Create video from the sidebar and downloads from Share', asyn
   expect(await result).toEqual({ video: `data:video/mp4;base64,${mp4.toString('base64')}` });
   expect(calls.slice(0, 6)).toEqual(['Open sidebar', 'Create video', 'Add image', 'Plain', 'Submit', 'Share video']);
 }, 10_000);
+
+test('Gemini saves a playable video even without download or share controls', async () => {
+  const { result, calls } = run('video', [['Ask Gemini', 'textbox'], ['Upload & tools'], ['Create video', 'menuitem'], ['Send message']], mp4, false, 'Open model picker, currently Gemini Auto', 'Auto', false, true);
+  expect(await result).toEqual({ video: `data:video/mp4;base64,${mp4.toString('base64')}` });
+  expect(calls).toContain('Send message');
+});
 
 test('Gemini creates an image with the tool chip and downloads it', async () => {
   const { result, calls } = run('image', [['Ask Gemini', 'textbox'], ['Upload & tools'], ['Create image', 'menuitemcheckbox'], ['Send message']], Buffer.from(png, 'base64'));

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronDownIcon, ClapperboardIcon, DownloadIcon, EllipsisIcon, FilmIcon, GripVerticalIcon, ImageIcon, ListIcon, PencilIcon, RotateCcwIcon, SlidersHorizontalIcon, SquareIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
 import { Tip } from "@/components/tip";
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CharacterDialog } from "@/components/character-dialog";
@@ -77,12 +78,13 @@ function ShotClip({ id }: { id: string }) {
 
 // Renders every shot as a draggable picture node on the canvas, joined in order by arrows; the settings icon opens a dialog.
 // Must be rendered inside the canvas layer.
-export function StoryboardShots({ shots, images, characters, busy, status, onEdit, onReorder, onGenerate, onStop, onMakeVideo, onEditStory, onRedraft, onMoveStart, toolbarActions, renderCharacterReference, renderTakeControls, video }: {
+export function StoryboardShots({ shots, images, characters, busy, status, videoError, onEdit, onReorder, onGenerate, onStop, onMakeVideo, onEditStory, onRedraft, onMoveStart, toolbarActions, renderCharacterReference, renderTakeControls, video }: {
   shots: Shot[];
   images: { name: string; url: string }[];
   characters: StoryCharacter[];
   busy: boolean;
   status: string;
+  videoError?: string;
   onEdit: (index: number, change: Partial<Shot>) => void;
   onReorder: (from: number, to: number) => void;
   onGenerate: (index: number) => void;
@@ -198,6 +200,9 @@ export function StoryboardShots({ shots, images, characters, busy, status, onEdi
   const shotCharacters = shot?.characters ?? [];
   const checkingVideo = status === "Checking storyboard…";
   return <>
+    {videoError && <div className="absolute max-w-lg" style={{ left: frame.left, top: frame.top - 64, width: frame.width, transform: "translateY(-100%)" }}>
+      <Alert variant="destructive" className="wrap-break-word whitespace-pre-line">{videoError}</Alert>
+    </div>}
     {/* The section follows the shots and finished video, with its name and actions on top. */}
     <div aria-hidden="true" className="pointer-events-none absolute rounded-3xl border bg-muted/30" style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height }} />
     <svg aria-hidden="true" className="pointer-events-none absolute top-0 left-0 overflow-visible text-muted-foreground/60" width="1" height="1">
