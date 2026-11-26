@@ -32,6 +32,7 @@ const failure = (cause) => /ENOSPC/.test(String(cause?.code ?? cause)) ? 'There 
 export function workerError(output) {
   const last = output.split(/\r?\n/).reverse().map((line) => { try { return JSON.parse(line); } catch { return null; } }).find((item) => item?.stage === 'error');
   if (last?.reason === 'memory') return 'Not enough graphics memory for this picture. Close other apps that use the graphics card, or try a smaller model.';
+  if (last?.reason === 'no-surface') return 'The model could not find a 3D surface. Try a picture with one clearly visible object.';
   if (last?.reason === 'no-cuda') return 'The 3D engine could not use the NVIDIA graphics card. Update its driver and try again.';
   const detail = typeof last?.detail === 'string' ? last.detail.split('\n').filter(Boolean).pop()?.slice(0, 160) : '';
   return detail ? `The 3D model could not be made: ${detail}` : 'The 3D model could not be made.';

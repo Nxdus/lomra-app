@@ -37,7 +37,11 @@ def hunyuan(image_path, out_path, repo, subfolder):
 
     say("model")
     pipeline = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(repo, subfolder=subfolder, use_safetensors=True, device="cuda")
+    latent_shape = pipeline.vae.latent_shape
     pipeline.enable_flashvdm(mc_algo="mc")
+    if repo == "tencent/Hunyuan3D-2mini":
+        # FlashVDM swaps in a VAE configured for 512 tokens. Sample the Mini DiT's full latent grid.
+        pipeline.vae.latent_shape = latent_shape
 
     say("shape")
     with torch.inference_mode():
@@ -52,6 +56,8 @@ def hunyuan(image_path, out_path, repo, subfolder):
         )[0]
 
     say("mesh")
+    if mesh is None or mesh.is_empty:
+        raise RuntimeError("no-surface")
     mesh = FloaterRemover()(mesh)
     mesh = DegenerateFaceRemover()(mesh)
     mesh = FaceReducer()(mesh, max_facenum=40000)
@@ -111,6 +117,8 @@ if __name__ == "__main__":
         main(*sys.argv[1:])
     except Exception as error:  # reported to the app as a short, readable reason
         text = str(error)
-        reason = "memory" if "out of memory" in text.lower() else "no-cuda" if text == "no-cuda" else "failed"
+        reason = text if text in ("no-cuda", "no-surface") else "failed"
+        if "out of memory" in text.lower():
+            reason = "memory"
         print(json.dumps({"stage": "error", "reason": reason, "detail": text[-300:]}), flush=True)
         sys.exit(1)
