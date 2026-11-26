@@ -7,7 +7,10 @@ export function CanvasModelViewer({ src, name, onLoad, onError }: { src: string;
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState("Loading 3D model…");
   const notifyLoaded = useEffectEvent(() => onLoad?.());
-  const notifyError = useEffectEvent(() => onError?.());
+  const notifyError = useEffectEvent(() => {
+    if (onError) onError();
+    else toast.add({ id: `model-preview-error:${src}`, title: `Could not display ${name}. Check the file and WebGL support.`, type: "error" });
+  });
 
   useEffect(() => {
     const container = host.current!;
@@ -17,7 +20,6 @@ export function CanvasModelViewer({ src, name, onLoad, onError }: { src: string;
     const failed = () => {
       setStatus("");
       notifyError();
-      toast.add({ id: `model-preview-error:${src}`, title: `Could not display ${name}. Check the file and WebGL support.`, type: "error" });
     };
     import("@google/model-viewer").then(({ ModelViewerElement }) => {
       if (disposed) return;
@@ -47,6 +49,6 @@ export function CanvasModelViewer({ src, name, onLoad, onError }: { src: string;
 
   return <div className="relative size-full" data-canvas-interactive>
     <div ref={host} className="size-full" />
-    {status && <p role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center p-4 text-center text-sm text-muted-foreground">{status}</p>}
+    {!onLoad && status && <p role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center p-4 text-center text-sm text-muted-foreground">{status}</p>}
   </div>;
 }

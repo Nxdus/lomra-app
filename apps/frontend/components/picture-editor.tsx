@@ -5,6 +5,7 @@ import { BackgroundCleanup } from "@/components/background-cleanup";
 import { useCallback, useEffect, useImperativeHandle, useReducer, useRef, useState, type PointerEvent, type Ref } from "react";
 import { ArrowRightIcon, CheckIcon, CircleIcon, EraserIcon, LoaderCircleIcon, Maximize2Icon, MinusIcon, MousePointer2Icon, PenLineIcon, PictureInPicture2Icon, Redo2Icon, ScanIcon, ShapesIcon, SquareIcon, TypeIcon, Undo2Icon, XIcon } from "lucide-react";
 import { PictureTools, type PictureTool } from "@/components/picture-tools";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
@@ -53,7 +54,7 @@ function surface(width: number, height: number) {
   return result;
 }
 
-export type PictureEditorHandle = { requestClose: () => boolean };
+export type PictureEditorHandle = { requestClose: (escape?: boolean) => boolean };
 
 export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<PictureEditorHandle>; url: string; name: string; onSave: (file: File, provenance?: CanvasProvenance) => Promise<void>; onClose: () => void }) {
   const overlay = useRef<HTMLCanvasElement>(null);
@@ -68,6 +69,10 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
   const [textDraft, setTextDraft] = useState<(Point & { value: string; left: number; top: number }) | null>(null);
   const [editPrompt, setEditPrompt] = useState("");
   const [discard, setDiscard] = useState<"mode" | "viewer" | null>(null);
+  const [loadFailure, setLoadFailure] = useState<{ message: string; retryable: boolean }>();
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [startingDownload, setStartingDownload] = useState(false);
+  const notNow = useRef<HTMLButtonElement>(null);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState("");
   const [cleanup, setCleanup] = useState<{ original: HTMLCanvasElement; cutout: HTMLCanvasElement; provenance?: CanvasProvenance } | null>(null);
@@ -94,7 +99,16 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
   const dirty = history.items.length > 0 || !!textDraft?.value.trim() || !!editPrompt.trim();
   const painting = tool === "Markup" || tool === "Erase";
 
-  useImperativeHandle(ref, () => ({ requestClose() {
+  useImperativeHandle(ref, () => ({ requestClose(escape) {
+    if (escape) {
+      if (colorOpen) { setColorOpen(false); return false; }
+      if (shapeOpen) { setShapeOpen(false); return false; }
+      if (resizeOpen) { setResizeOpen(false); return false; }
+      if (upscaleOpen) { setUpscaleOpen(false); return false; }
+      if (textDraft) { cancelText(); return false; }
+      if (!job.current && cleanup) { setDiscard("mode"); return false; }
+      if (!job.current && tool) { cancel(); return false; }
+    }
     if (cleanup && job.current) return false;
     if (dirty || cleanup || job.current) { setDiscard("viewer"); return false; }
     return true;
@@ -112,15 +126,20 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
       const bitmap = await createImageBitmap(await response.blob());
       try {
         if (controller.signal.aborted) return;
-        if (bitmap.width * bitmap.height > 16_000_000) throw new Error("Editing supports pictures up to 16 megapixels.");
+        if (bitmap.width * bitmap.height > 16_000_000) {
+          setLoadFailure({ message: "Editing supports pictures up to 16 megapixels.", retryable: false });
+          return;
+        }
         source.current = surface(bitmap.width, bitmap.height);
         source.current.getContext("2d")!.drawImage(bitmap, 0, 0);
         overlay.current!.width = bitmap.width; overlay.current!.height = bitmap.height;
         setReady(true);
       } finally { bitmap.close(); }
-    })().catch(cause => { if (!controller.signal.aborted) error(cause); });
+    })().catch(cause => {
+      if (!controller.signal.aborted) setLoadFailure({ message: cause instanceof Error && cause.message ? cause.message : "Could not load picture.", retryable: true });
+    });
     return () => { controller.abort(); job.current?.abort(); };
-  }, [url]);
+  }, [url, loadAttempt]);
 
   function paint(items: Markup[], selection = selected) {
     const ctx = overlay.current?.getContext("2d");
@@ -198,6 +217,11 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
     gesture.current = null;
   }
 
+  function cancelText() {
+    setTextDraft(null);
+    overlay.current?.focus();
+  }
+
   function addText() {
     if (!textDraft?.value.trim()) { setTextDraft(null); return; }
     dispatch({ type: "commit", items: [...history.items, { id: crypto.randomUUID(), kind: "text", points: [{ x: textDraft.x, y: textDraft.y }], color, width: size, text: textDraft.value.trim() }] });
@@ -253,7 +277,7 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
   async function run(action: PictureTool, aspectRatio?: string, edit = "", scale?: 2 | 4, localPictureModel?: string, downloadBefore?: PictureAiModel) {
     if (!ready || job.current) return;
     const controller = new AbortController(); job.current = controller;
-    setBusy(action === "Markup" ? "Adding markup…" : "Editing image…");
+    setBusy(downloadBefore ? "Starting…" : action === "Markup" ? "Adding markup…" : "Generating");
     try {
       const original = source.current!;
       if (action === "Markup") {
@@ -270,16 +294,22 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
           const bridge = desktopPictureAi();
           if (!bridge) throw new Error("Local picture tools require the Lomra desktop app.");
           await downloadPictureAiModel(bridge, downloadBefore.id, downloadBefore.name, controller.signal, status => {
-            if (!controller.signal.aborted) setBusy(status);
+            if (controller.signal.aborted) return;
+            setStartingDownload(false);
+            setPictureChoice(null);
+            setBusy(status);
           });
           controller.signal.throwIfAborted();
+          setStartingDownload(false);
+          setPictureChoice(null);
+          setBusy("Generating");
         }
         if (action === "Erase" && !history.items.length) throw new Error("Brush over the area you want to change first.");
         const model = localPictureModel ?? (background ? "fal-ai/birefnet/v2" : upscale ? "fal-ai/esrgan" : selectedModel(await getSetting<string[]>("selected-models") ?? [], "picture"));
         controller.signal.throwIfAborted();
         if (!model) throw new Error("Select an Image model in the prompt toolbar first.");
         const keyProvider = background || upscale ? "fal" : modelProvider(model ?? "");
-        if (!isBrowserModel(model ?? "") && !isSdModel(model ?? "") && !isLocalPictureModel(model ?? "") && !keys[keyProvider]) throw new Error(`Enter your ${{ fal: "Fal", google: "Google", openrouter: "OpenRouter" }[keyProvider]} API key in Settings first.`);
+        if (!isBrowserModel(model ?? "") && !isSdModel(model ?? "") && !isLocalPictureModel(model ?? "") && !keys[keyProvider]) throw new Error(`Enter your ${{ fal: "Fal.AI", google: "Google", openrouter: "OpenRouter" }[keyProvider]} API key in Settings first.`);
         const local = !background && !upscale && isSdModel(model);
         const runCaps = !background && !upscale ? pictureCapabilities(model, sdStatus) : undefined;
         if (runCaps && action === "Resize" && !runCaps.outpaint) {
@@ -344,7 +374,13 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
       }
       if (!controller.signal.aborted) { reset(); setTool(null); }
     } catch (cause) { if (!controller.signal.aborted) error(cause); }
-    finally { if (!controller.signal.aborted) { setBusy(""); job.current = null; } }
+    finally {
+      if (!controller.signal.aborted) {
+        if (downloadBefore) { setStartingDownload(false); setPictureChoice(null); }
+        setBusy("");
+        job.current = null;
+      }
+    }
   }
 
   const historyControls = <>
@@ -354,11 +390,18 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
 
   return <>
     {cleanup && <BackgroundCleanup {...cleanup} saving={!!busy} onSave={saveCutout} onCancel={() => setDiscard("mode")} />}
-    <div className={cn("relative mx-auto w-fit max-w-full", cleanup && "hidden")}>
+    <div className={cn("relative mx-auto w-fit max-w-full", !ready && "min-h-32", cleanup && "hidden")}>
       {/* Local blob URLs need no Next.js image optimization. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={url} alt={name || "Image preview"} className="block max-h-[min(80dvh,calc(var(--app-content-height)-5rem))] max-w-full rounded-4xl object-contain" />
-      <canvas ref={overlay} tabIndex={painting ? 0 : -1} aria-label={tool === "Markup" ? "Draw on image" : tool === "Erase" ? "Brush over the area to edit" : undefined} aria-hidden={!painting} className={cn("absolute inset-0 size-full outline-none", painting && !busy ? "touch-none cursor-crosshair" : "pointer-events-none", tool === "Markup" && drawingTool === "select" && "cursor-default", tool === "Erase" && "opacity-50")}
+      {!ready && (loadFailure ? (
+        <Alert variant="destructive" className="absolute top-4 left-1/2 w-[min(22rem,calc(100vw-5rem))] -translate-x-1/2 bg-background">
+          <AlertTitle>Could not prepare picture</AlertTitle>
+          <AlertDescription>{loadFailure.message}</AlertDescription>
+          {loadFailure.retryable && <Button variant="outline" size="sm" className="w-fit" onClick={() => { setLoadFailure(undefined); setLoadAttempt(value => value + 1); }}>Retry</Button>}
+        </Alert>
+      ) : <p role="status" className="absolute top-4 left-1/2 w-max -translate-x-1/2 rounded-xl bg-popover px-3 py-2 text-sm text-muted-foreground">Preparing picture…</p>)}
+      <canvas ref={overlay} tabIndex={painting ? 0 : -1} aria-label={tool === "Markup" ? "Draw on image" : tool === "Erase" ? "Brush over the area to edit" : undefined} aria-hidden={!painting} className={cn("absolute inset-0 size-full outline-none focus-visible:ring-2 focus-visible:ring-ring", painting && !busy ? "touch-none cursor-crosshair" : "pointer-events-none", tool === "Markup" && drawingTool === "select" && "cursor-default", tool === "Erase" && "opacity-50")}
         onPointerDown={event => {
           if (!ready || busy || !painting || !event.isPrimary || event.button !== 0 || textDraft) return;
           event.preventDefault(); event.currentTarget.focus();
@@ -406,16 +449,16 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
       />
       {brushCursor && painting && !busy && (tool === "Erase" || ["pen", "eraser"].includes(drawingTool)) && <div aria-hidden="true" className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-primary ring-1 ring-background" style={{ left: `${brushCursor.x}%`, top: `${brushCursor.y}%`, width: brushCursor.diameter, height: brushCursor.diameter }} />}
       {textDraft && <form className="absolute flex w-64 max-w-[calc(100vw-4rem)] items-center gap-1 rounded-xl border bg-popover p-1 shadow-md" style={{ left: `${textDraft.left}%`, top: `${textDraft.top}%` }} onSubmit={event => { event.preventDefault(); addText(); }}>
-        <Input autoFocus aria-label="Markup text" placeholder="Add text" value={textDraft.value} maxLength={200} className="min-w-0 flex-1" onChange={event => setTextDraft({ ...textDraft, value: event.target.value })} onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setTextDraft(null); } }} />
-        <Button type="submit" size="icon-sm" variant="ghost" aria-label="Add text" disabled={!textDraft.value.trim()}><CheckIcon /></Button>
-        <Button type="button" size="icon-sm" variant="ghost" aria-label="Cancel text" onClick={() => setTextDraft(null)}><XIcon /></Button>
+        <Input autoFocus aria-label="Markup text" placeholder="Add text" value={textDraft.value} maxLength={200} className="min-w-0 flex-1" onChange={event => setTextDraft({ ...textDraft, value: event.target.value })} onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); cancelText(); } }} />
+        <Tip label="Add text"><Button type="submit" size="icon-sm" variant="ghost" aria-label="Add text" disabled={!textDraft.value.trim()}><CheckIcon /></Button></Tip>
+        <Tip label="Cancel text"><Button type="button" size="icon-sm" variant="ghost" aria-label="Cancel text" onClick={cancelText}><XIcon /></Button></Tip>
       </form>}
       {painting && (tool === "Erase" || !["select", "text"].includes(drawingTool)) && <div className="absolute -left-3 top-1/2 flex h-44 max-h-[max(5rem,100%)] -translate-y-1/2 flex-col items-center rounded-4xl border bg-popover p-3 text-popover-foreground shadow-md">
         <Slider className="[&_[data-slot=slider-control]]:min-h-0" orientation="vertical" aria-label={tool === "Erase" ? "Brush size" : "Stroke width"} min={1} max={tool === "Erase" ? 200 : 40} step={1} value={[size]} onValueChange={value => setSize(Array.isArray(value) ? value[0] : value)} disabled={!!busy} />
       </div>}
     </div>
     {!cleanup && <PictureTools>
-      {busy ? <><LoaderCircleIcon className="mx-2 size-4 shrink-0 animate-spin" /><span role="status" className="truncate text-sm text-muted-foreground">{busy}</span><Button variant="ghost" size="icon-sm" aria-label="Cancel processing" onClick={() => setDiscard("viewer")}><XIcon /></Button></>
+      {busy ? <><LoaderCircleIcon aria-hidden="true" className="mx-2 size-4 shrink-0 motion-safe:animate-spin" /><span role="status" className="truncate text-sm text-muted-foreground">{busy}</span><Tip label="Stop editing"><Button variant="ghost" size="icon-sm" aria-label="Stop editing" onClick={() => setDiscard("mode")}><SquareIcon /></Button></Tip></>
       : tool === "Markup" ? <>
         <ToggleGroup value={[drawingTool]} onValueChange={value => { if (value[0]) { setDrawingTool(value[0] as typeof drawingTool); setSelected(null); } }} size="sm" aria-label="Drawing tools" spacing={0}>
           {[{ value: "select", label: "Select", icon: MousePointer2Icon }, { value: "pen", label: "Pen", icon: PenLineIcon }, { value: "text", label: "Text", icon: TypeIcon }].map(({ value, label, icon: Icon }) => <Tip key={value} label={label}><ToggleGroupItem value={value} aria-label={label}><Icon /></ToggleGroupItem></Tip>)}
@@ -470,33 +513,33 @@ export function PictureEditor({ ref, url, name, onSave, onClose }: { ref?: Ref<P
     </PictureTools>}
     {/* Nested, so the brushed area and the words stay as they are. */}
     <ModelSetupDialog open={findingModel} onOpenChange={open => { setFindingModel(open); if (!open) void checkModel(); }} imageSearch="stable-diffusion inpainting" />
-    <Dialog open={!!pictureChoice} onOpenChange={open => { if (!open) setPictureChoice(null); }}>
-      {pictureChoice && <DialogContent showCloseButton={false}>
+    <Dialog open={!!pictureChoice} onOpenChange={open => { if (!open && !startingDownload) setPictureChoice(null); }}>
+      {pictureChoice && <DialogContent showCloseButton={false} initialFocus={notNow}>
         <DialogHeader>
           <DialogTitle>Download {pictureChoice.model.name}?</DialogTitle>
           <DialogDescription className="flex flex-col gap-2">
             <span>{pictureChoice.model.note}</span>
-            <span className="text-xs">Size: {localModelSize(pictureChoice.model.bytes)} · License: {pictureChoice.model.license}. Runs locally on your computer without an API key.</span>
+            <span className="text-xs">{pictureChoice.model.bytes ? `Size: ${localModelSize(pictureChoice.model.bytes)}` : "Size unavailable"} · License: {pictureChoice.model.license}. Runs locally on your computer without an API key.</span>
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={() => setPictureChoice(null)}>Not now</Button>
-          {keys.fal && <Button variant="secondary" onClick={() => {
+          {keys.fal && <Button variant="secondary" disabled={startingDownload} className="sm:mr-auto" onClick={() => {
             const { action, scale } = pictureChoice;
             setPictureChoice(null);
             void run(action, undefined, "", scale);
           }}>Use Fal.AI</Button>}
-          <Button autoFocus onClick={() => {
+          <Button ref={notNow} variant="outline" disabled={startingDownload} onClick={() => setPictureChoice(null)}>Not now</Button>
+          <Button disabled={startingDownload} onClick={() => {
             const { action, scale, model } = pictureChoice;
-            setPictureChoice(null);
+            setStartingDownload(true);
             void run(action, undefined, "", scale, `${pictureAiPrefix}${model.id}`, model);
-          }}>Download {localModelSize(pictureChoice.model.bytes)}</Button>
+          }}>{startingDownload ? "Starting…" : "Download"}</Button>
         </DialogFooter>
       </DialogContent>}
     </Dialog>
     <Dialog open={!!discard} onOpenChange={open => { if (!open) setDiscard(null); }}>
       <DialogContent showCloseButton={false}><DialogHeader><DialogTitle>{busy ? "Stop editing?" : "Discard changes?"}</DialogTitle><DialogDescription>{busy ? "The request will be cancelled where supported. The provider may still finish work already submitted." : "Your changes won’t be saved."}</DialogDescription></DialogHeader>
-        <DialogFooter><Button variant="outline" autoFocus onClick={() => setDiscard(null)}>Keep editing</Button><Button variant="destructive" onClick={() => { const closeViewer = discard === "viewer"; job.current?.abort(); reset(); setTool(null); setCleanup(null); setDiscard(null); if (closeViewer) onClose(); }}>Discard changes</Button></DialogFooter>
+        <DialogFooter><Button variant="outline" autoFocus onClick={() => setDiscard(null)}>Keep editing</Button><Button variant="destructive" onClick={() => { const closeViewer = discard === "viewer"; job.current?.abort(); job.current = null; setBusy(""); if (busy) toast.add({ title: "Editing stopped" }); reset(); setTool(null); setCleanup(null); setDiscard(null); if (closeViewer) onClose(); }}>{busy ? "Stop editing" : "Discard changes"}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   </>;

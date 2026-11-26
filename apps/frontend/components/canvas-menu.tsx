@@ -2,8 +2,9 @@
 
 import { Tip } from "@/components/tip";
 import { useEffect, useRef, useState } from "react";
-import { DownloadIcon, HistoryIcon, FilePlusIcon, LayoutGridIcon, MenuIcon, MinusIcon, PlusIcon, SearchIcon, Trash2Icon, UploadIcon, XIcon } from "lucide-react";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DownloadIcon, EllipsisIcon, HistoryIcon, FilePlusIcon, LayoutGridIcon, MenuIcon, MinusIcon, PlusIcon, SearchIcon, Trash2Icon, UploadIcon, XIcon } from "lucide-react";
+import { ConfirmDelete } from "@/components/confirm-delete";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +38,8 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [renameError, setRenameError] = useState("");
+  const renaming = useRef(false);
   const editId = useRef<string | null>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -99,7 +102,9 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
   }
 
   function startRename(item: CanvasHistoryItem) {
+    if (renaming.current) return;
     clearTimeout(openTimer.current);
+    setRenameError("");
     editId.current = item.id;
     setEditing(item.id);
     setDraft(item.name || (item.id === 'default' ? 'Original canvas' : 'Canvas'));
@@ -107,25 +112,27 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
   function cancelRename() { editId.current = null; setEditing(null); }
   async function saveRename() {
     const id = editId.current;
-    if (!id) return;
+    if (!id || renaming.current || !ready) return;
     if (!draft.trim()) { cancelRename(); return; }
-    cancelRename();
+    renaming.current = true;
+    setRenameError("");
     setBusy(true);
-    try { await renameCanvas(id, draft); onHistory(); }
-    catch (error) { toast.add({ title: 'Could not rename canvas', description: error instanceof Error ? error.message : 'Please retry.', type: 'error' }); }
-    finally { setBusy(false); }
+    try {
+      await renameCanvas(id, draft);
+      cancelRename();
+      onHistory();
+    } catch (error) {
+      setRenameError(error instanceof Error && error.message ? error.message : "Could not rename canvas. Try again.");
+    } finally {
+      renaming.current = false;
+      setBusy(false);
+    }
   }
 
   return (
-    <><Dialog open={deleting !== null} onOpenChange={(next) => { if (!next && !busy) setDeleting(null); }}>
-      <DialogContent><DialogHeader><DialogTitle>Delete canvas?</DialogTitle><DialogDescription>{deleting && nameOf(deleting)} and its chats, images and other files will be permanently deleted. Files used by other canvases will stay.</DialogDescription></DialogHeader>
-        <DialogFooter><Button variant="outline" disabled={busy} onClick={() => setDeleting(null)}>Cancel</Button><Button variant="destructive" disabled={busy || !ready} onClick={async () => {
-          if (!deleting) return;
-          setBusy(true);
-          try { await onDelete(deleting); setDeleting(null); } catch { /* The canvas displays the storage error. */ } finally { setBusy(false); }
-        }}>{busy ? "Deleting…" : "Delete canvas"}</Button></DialogFooter>
-      </DialogContent>
-    </Dialog><Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setZoomOpen(false); }}>
+    <><ConfirmDelete open={deleting !== null} onOpenChange={(next) => { if (!next) setDeleting(null); }}
+      title="Delete canvas?" description={`${deleting ? nameOf(deleting) : "This canvas"} and its chats, images and other files will be permanently deleted. Files used by other canvases will stay.`}
+      disabled={!ready || busy} onConfirm={async () => { if (deleting) await onDelete(deleting); }} /><Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setZoomOpen(false); }}>
       <PopoverTrigger render={<Button size="icon-lg" className="fixed bottom-24 left-4 z-20 size-12 shadow-lg min-[900px]:bottom-6" />} aria-label={open ? "Close canvas menu" : "Open canvas menu"}>
         <span className={cn("transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none", open && "rotate-90")}>
           {open ? <XIcon /> : <MenuIcon />}
@@ -144,17 +151,17 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
             <InputGroup>
               <InputGroupInput aria-label="Search canvases" placeholder="Search canvases…" value={historySearch} onChange={(event) => setHistorySearch(event.target.value)} />
               <InputGroupAddon><SearchIcon /></InputGroupAddon>
-              {historySearch && <InputGroupAddon align="inline-end"><InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setHistorySearch("")}><XIcon /></InputGroupButton></InputGroupAddon>}
+              {historySearch && <InputGroupAddon align="inline-end"><Tip label="Clear search"><InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setHistorySearch("")}><XIcon /></InputGroupButton></Tip></InputGroupAddon>}
             </InputGroup>
             <div className="-m-1 flex max-h-64 flex-col gap-1 overflow-y-auto p-1" aria-label="Saved canvases">
               {filteredHistory.map((item) => {
                 const offset = swipe?.id === item.id ? swipe.offset : undefined;
                 const swipeHandlers = bindSwipe(item.id, ready && !busy, () => setDeleting(item.id));
                 return (
-                <div key={item.id}>{editing === item.id ? <Input autoFocus aria-label="Canvas name" maxLength={200} value={draft} onFocus={event => event.target.select()} onChange={event => setDraft(event.target.value)} onBlur={() => void saveRename()} onKeyDown={event => {
+                <div key={item.id}>{editing === item.id ? <div className="flex flex-col gap-1"><Input autoFocus readOnly={busy} aria-invalid={!!renameError} aria-label="Canvas name" maxLength={200} value={draft} onFocus={event => event.target.select()} onChange={event => { setDraft(event.target.value); setRenameError(""); }} onBlur={() => void saveRename()} onKeyDown={event => {
                   if (event.key === 'Enter') { event.preventDefault(); void saveRename(); }
-                  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelRename(); }
-                }} /> : <div className="relative overflow-hidden rounded-xl">
+                  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (!renaming.current) cancelRename(); }
+                }} />{renameError && <div className="flex items-center gap-2"><p role="alert" className="text-xs text-destructive">{renameError}</p><Button size="xs" variant="outline" disabled={busy} onClick={() => void saveRename()}>Retry</Button></div>}</div> : <div className="relative overflow-hidden rounded-xl">
                 {offset !== undefined && <div aria-hidden="true" className={cn("pointer-events-none absolute inset-0 flex items-center justify-end pr-2 text-destructive motion-safe:transition-colors", offset <= swipeDeleteThreshold ? "bg-destructive/20" : "bg-destructive/10")}><Trash2Icon className="size-4" /></div>}
                 <Button variant={item.id === canvasId ? "secondary" : "ghost"} className={cn("relative h-auto w-full touch-pan-y justify-start gap-3 rounded-xl px-3 py-2.5 pr-10 text-left disabled:opacity-100", offset !== undefined && "rounded-none bg-popover bg-clip-border transition-none hover:bg-popover active:not-aria-[haspopup]:translate-y-0 dark:hover:bg-popover")} disabled={!ready || busy} aria-current={item.id === canvasId ? "true" : undefined}
                 title="Drag left to delete, or press Delete"
@@ -179,22 +186,20 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
                   </span>
                 </Button>
                 <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
-                  <Tip label={`Export ${nameOf(item.id)}`}>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      className="size-7 rounded-lg text-muted-foreground hover:text-foreground"
-                      disabled={!ready || busy}
-                      aria-label={`Export ${nameOf(item.id)}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        clearTimeout(openTimer.current);
-                        void handleExport(item.id);
-                      }}
-                    >
-                      <DownloadIcon className="size-3.5" />
-                    </Button>
-                  </Tip>
+                  <DropdownMenu onOpenChange={(next) => { if (next) clearTimeout(openTimer.current); }}>
+                    <Tip label={`Actions for ${nameOf(item.id)}`}>
+                      <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" className="size-7 rounded-lg" disabled={!ready || busy} aria-label={`Actions for ${nameOf(item.id)}`} />}>
+                        <EllipsisIcon />
+                      </DropdownMenuTrigger>
+                    </Tip>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuGroup>
+                        <DropdownMenuItem onClick={() => startRename(item)}>Rename</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => void handleExport(item.id)}><DownloadIcon />Export</DropdownMenuItem>
+                        <DropdownMenuItem variant="destructive" onClick={() => setDeleting(item.id)}><Trash2Icon />Delete</DropdownMenuItem>
+                      </DropdownMenuGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div></div>}</div>
                 );
               })}
@@ -213,9 +218,9 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
             <PopoverContent side="right" align="center" sideOffset={12} className="w-auto p-1">
               <PopoverTitle className="sr-only">Canvas zoom</PopoverTitle>
               <div role="group" aria-label="Canvas zoom" className="flex items-center gap-1">
-                <Button variant="ghost" size="icon-sm" aria-label="Zoom out" disabled={!ready || scale <= 0.2} onClick={() => onZoom(1 / 1.25)}><MinusIcon /></Button>
+                <Tip label="Zoom out"><Button variant="ghost" size="icon-sm" aria-label="Zoom out" disabled={!ready || scale <= 0.2} onClick={() => onZoom(1 / 1.25)}><MinusIcon /></Button></Tip>
                 <Tip label="Reset view to 100%"><Button variant="ghost" size="sm" className="min-w-16 tabular-nums" aria-label="Reset canvas view" disabled={!ready} onClick={onReset}>{Math.round(scale * 100)}%</Button></Tip>
-                <Button variant="ghost" size="icon-sm" aria-label="Zoom in" disabled={!ready || scale >= 4} onClick={() => onZoom(1.25)}><PlusIcon /></Button>
+                <Tip label="Zoom in"><Button variant="ghost" size="icon-sm" aria-label="Zoom in" disabled={!ready || scale >= 4} onClick={() => onZoom(1.25)}><PlusIcon /></Button></Tip>
               </div>
             </PopoverContent>
           </Popover>

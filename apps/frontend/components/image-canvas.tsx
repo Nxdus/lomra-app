@@ -1,5 +1,7 @@
 "use client";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Tip } from "@/components/tip";
 import { ConfirmDelete } from "@/components/confirm-delete";
 import { CharacterDialog } from "@/components/character-dialog";
 import { CanvasCardDialog, CanvasHandoffDialog, CanvasLinks } from "@/components/canvas-harness";
@@ -35,7 +37,6 @@ import {
   cloneCanvasItems,
   collectReferencedUrls,
   emptyCanvasHistory,
-  isNativeTextEditingTarget,
   isRedoKeyboardShortcut,
   isUndoKeyboardShortcut,
   pushCanvasHistory,
@@ -63,16 +64,14 @@ function ImageResizeHandles({ name, onPointerDown, onKeyDown }: {
     ["bottom-left", "-bottom-1 -left-1 rounded-bl-2xl border-b-2 border-l-2 cursor-nesw-resize"],
     ["bottom-right", "-bottom-1 -right-1 rounded-br-2xl border-b-2 border-r-2 cursor-nwse-resize"],
   ] as const).map(([corner, className]) => (
-    <Button
-      key={corner}
+    <Tip key={corner} label="Drag to resize or use arrow keys"><Button
       variant="ghost"
       size="icon-xs"
       className={cn("absolute size-5 rounded-none border-0 border-ring p-0 transition-none hover:bg-transparent! active:translate-y-0", className)}
       aria-label={`Resize ${name} from ${corner}`}
-      title="Drag to resize · Arrow keys to resize"
       onPointerDown={(event) => onPointerDown(event, corner)}
       onKeyDown={(event) => onKeyDown(event, corner)}
-    />
+    /></Tip>
   ));
 }
 
@@ -133,6 +132,8 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   const switching = useRef(false);
   const [history, setHistory] = useState<CanvasHistoryItem[]>([]);
   const cameraKey = () => activeCanvas.current === 'default' ? 'camera' : `camera-${activeCanvas.current}`;
+  const [loadError, setLoadError] = useState("");
+  const [retrying, setRetrying] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   useEffect(() => { onReadyChange?.(ready); }, [ready, onReadyChange]);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -260,21 +261,19 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       setCamera(saved);
       cameraLoaded.current = true;
       storageAvailable.current = true;
+      setLoadError("");
       toast.close("canvas-save-error");
     }).catch((error: unknown) => {
       if (cancelled) return;
       // Do not overwrite a saved canvas that could not be read.
       storageAvailable.current = false;
-      toast.add({
-        id: "canvas-save-error", title: "Could not load saved canvas. Changes will not be saved until loading succeeds.",
-        description: error instanceof Error ? error.message : "Please retry.", type: "error",
-        actionProps: { children: "Retry", onClick: () => { setReady(false); cameraLoaded.current = false; setLoadAttempt((attempt) => attempt + 1); } },
-      });
+      setLoadError(error instanceof Error && error.message ? error.message : "Please retry.");
     }).finally(() => {
       if (cancelled) return;
       setCanvasId(id);
       onCanvasChange?.(id);
-      setReady(true);
+      setReady(storageAvailable.current);
+      setRetrying(false);
     });
     const activeUrls = urls.current;
     return () => {
@@ -341,7 +340,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     });
   }
 
-  async function openCanvas(id?: string) {
+  async function openCanvas(id?: string, throwOnError = false) {
     if (!ready || switching.current || !storageAvailable.current) return;
     switching.current = true;
     setReady(false);
@@ -369,8 +368,9 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       cameraLoaded.current = false;
       setLoadAttempt((attempt) => attempt + 1);
     } catch (error) {
-      toast.add({ title: 'Could not switch canvas', description: error instanceof Error ? error.message : 'Please retry.', type: 'error' });
       setReady(true);
+      if (throwOnError) throw error;
+      toast.add({ title: 'Could not switch canvas', description: error instanceof Error ? error.message : 'Please retry.', type: 'error' });
     } finally {
       switching.current = false;
     }
@@ -382,21 +382,13 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   }
 
   async function deleteCanvas(id: string) {
-    if (!ready || switching.current || !storageAvailable.current) return;
+    if (!ready || switching.current || !storageAvailable.current) throw new Error("Wait for the canvas to finish loading.");
     // Switch first so queued saves and imports cannot recreate the deleted canvas.
-    if (id === activeCanvas.current) {
-      await openCanvas();
-      if (id === activeCanvas.current) throw new Error('Could not switch away from the canvas');
-    }
-    try {
-      await deleteCanvasStorage(id);
-      canvasHistories.current.delete(id);
-      cleanupUnreferencedUrls();
-      await refreshHistory();
-    } catch (error) {
-      toast.add({ title: 'Could not delete canvas', description: error instanceof Error ? error.message : 'Please retry.', type: 'error' });
-      throw error;
-    }
+    if (id === activeCanvas.current) await openCanvas(undefined, true);
+    await deleteCanvasStorage(id);
+    canvasHistories.current.delete(id);
+    cleanupUnreferencedUrls();
+    await refreshHistory();
   }
 
   function ensureRestoredUrl(item: VisibleImage): VisibleImage {
@@ -571,21 +563,60 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     }
   }
 
-  function remove(ids: string[]) {
-    const removed = current.current.filter((item) => ids.includes(item.id));
-    if (!removed.length) return;
-    const previous = current.current;
-    const next = previous.filter((item) => !ids.includes(item.id)).map(item => {
+  function withoutItems(previous: VisibleImage[], ids: string[]) {
+    return previous.filter((item) => !ids.includes(item.id)).map(item => {
       const links = item.harness?.links;
       return links?.some(link => ids.includes(link.to))
         ? { ...item, harness: { ...item.harness, links: links.filter(link => !ids.includes(link.to)) } }
         : item;
     });
-    update(next);
+  }
+
+  function finishRemoval(previous: VisibleImage[], next: VisibleImage[], ids: string[], save: boolean) {
+    update(next, save);
     recordCanvasHistory({ items: previous, type: 'delete' });
     cleanupUnreferencedUrls();
     setSelected((previous) => previous.filter((id) => !ids.includes(id)));
     viewport.current?.focus({ preventScroll: true });
+  }
+
+  function remove(ids: string[]) {
+    const previous = current.current;
+    if (previous.some((item) => ids.includes(item.id))) finishRemoval(previous, withoutItems(previous, ids), ids, true);
+  }
+
+  async function removeConfirmed(ids: string[]) {
+    if (!ready || switching.current || !storageAvailable.current) throw new Error("Wait for the canvas to finish loading.");
+    switching.current = true;
+    setReady(false);
+    try {
+      await imports.current;
+      await saves.current;
+      const previous = current.current;
+      const next = withoutItems(previous, ids);
+      await canvasStorage(next, activeCanvas.current);
+      finishRemoval(previous, next, ids, false);
+      toast.close("canvas-save-error");
+    } finally {
+      switching.current = false;
+      setReady(true);
+    }
+  }
+
+  function nudgeItems(event: KeyboardEvent, ids: string[]) {
+    if (!ready) return;
+    const direction = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+    if (!direction) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 40 : 10;
+    const previous = current.current;
+    const next = previous.map((image) => ids.includes(image.id) ? {
+      ...image, x: image.x + direction[0] * step, y: image.y + direction[1] * step,
+    } : image);
+    if (!areCanvasItemsEqual(previous, next)) {
+      recordCanvasHistory({ items: previous, type: "move" });
+      update(next);
+    }
   }
 
   function point(clientX: number, clientY: number) {
@@ -670,7 +701,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     changeView(camera);
     element.focus({ preventScroll: true });
   }, removeItems(ids) {
-    remove(ids);
+    if (ready && !switching.current) remove(ids);
   }, async addFiles(files, at, harness, options) {
     const element = viewport.current;
     if (!ready || switching.current || !element) throw new Error("Canvas is still loading. Try again.");
@@ -721,7 +752,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
         ref={viewport}
         role="region"
         aria-label="Media canvas"
-        aria-busy={!ready}
+        aria-busy={!ready && !loadError && images.length > 0}
         tabIndex={0}
         className={cn("absolute inset-0 touch-none overflow-hidden bg-background bg-[radial-gradient(var(--border)_1px,transparent_1px)] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring", dragOver && "ring-2 ring-inset ring-primary", panning && "cursor-grabbing")}
         style={{ backgroundSize: `${24 * camera.scale}px ${24 * camera.scale}px`, backgroundPosition: `${camera.x + 12 * camera.scale}px ${camera.y + 12 * camera.scale}px` }}
@@ -798,10 +829,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           importFiles(Array.from(event.dataTransfer.files), point(event.clientX, event.clientY));
         }}
         onKeyDown={(event) => {
-          if (!ready) return;
-          const target = event.target as HTMLElement | null;
-          if (!target || isNativeTextEditingTarget(target)) return;
-          if (target !== viewport.current && !viewport.current?.contains(target)) return;
+          if (!ready || event.defaultPrevented || event.target !== event.currentTarget) return;
 
           if (isUndoKeyboardShortcut(event)) {
             event.preventDefault();
@@ -833,33 +861,57 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
             if (!event.repeat) setDeletingFiles([...selected]);
             return;
           }
-          const direction = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
-          if (!direction) return;
-          event.preventDefault();
-          const step = event.shiftKey ? 40 : 10;
-          const previous = current.current;
-          const next = previous.map((image) => selected.includes(image.id) ? {
-            ...image, x: image.x + direction[0] * step, y: image.y + direction[1] * step,
-          } : image);
-          if (!areCanvasItemsEqual(previous, next)) {
-            recordCanvasHistory({ items: previous, type: "move" });
-            update(next);
-          }
+          nudgeItems(event, selected);
         }}
       >
+        {loadError ? (
+          <Alert variant="destructive" className="absolute left-1/2 top-20 z-10 w-[min(28rem,calc(100%-2rem))] -translate-x-1/2 bg-background" data-canvas-interactive>
+            <AlertTitle>Could not load saved canvas</AlertTitle>
+            <AlertDescription>{loadError}</AlertDescription>
+            <Button variant="outline" size="sm" className="mt-1 w-fit" disabled={retrying} onClick={() => {
+              setRetrying(true);
+              cameraLoaded.current = false;
+              setLoadAttempt((attempt) => attempt + 1);
+            }}>{retrying ? "Retrying…" : "Retry"}</Button>
+          </Alert>
+        ) : !ready && images.length === 0 ? (
+          <p role="status" className="absolute inset-0 grid place-items-center text-sm text-muted-foreground">Loading canvas…</p>
+        ) : ready && images.length === 0 && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground pointer-events-none">
+            <p>Drop images, videos or 3D models here.</p>
+            <Button data-canvas-interactive className="pointer-events-auto" variant="outline" onClick={() => fileInput.current?.click()}>Add files</Button>
+          </div>
+        )}
         <div
           className="absolute inset-0 isolate origin-top-left"
           style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})` }}
         >
-          <div ref={storyboardRef} data-canvas-interactive="" className="absolute top-0 left-0 size-0 cursor-auto overflow-visible select-text" />
+          <div ref={storyboardRef} inert={!!loadError} data-canvas-interactive="" className="absolute top-0 left-0 size-0 cursor-auto overflow-visible select-text" />
           <CanvasLinks items={images} />
           {images.map((image) => (
-            <ContextMenu key={`${canvasId}:${image.id}`} open={contextMenuId === image.id} onOpenChange={(open) => setContextMenuId((id) => open ? image.id : id === image.id ? null : id)}>
+            <ContextMenu key={`${canvasId}:${image.id}`} disabled={!!loadError} open={contextMenuId === image.id} onOpenChange={(open) => setContextMenuId((id) => open ? image.id : id === image.id ? null : id)}>
             <ContextMenuTrigger
               render={<div />}
               data-canvas-image={image.id}
+              role="group"
+              aria-label={image.harness?.title || image.file.name || "Canvas item"}
+              tabIndex={ready ? 0 : -1}
+              onKeyDown={(event) => {
+                if (!ready || event.target !== event.currentTarget) return;
+                if (event.key === " " || event.key === "Enter") {
+                  event.preventDefault();
+                  if (!event.repeat) select(image.id, event.shiftKey);
+                } else if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                  event.preventDefault();
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  event.currentTarget.dispatchEvent(new MouseEvent("contextmenu", {
+                    bubbles: true, cancelable: true, clientX: bounds.left + bounds.width / 2, clientY: bounds.top + bounds.height / 2,
+                  }));
+                }
+              }}
               onContextMenu={(event) => { event.stopPropagation(); if (!selected.includes(image.id)) select(image.id); }}
               onDoubleClick={(event) => {
+                if (!ready) return;
                 if (image.file.type === canvasCardType) {
                   event.stopPropagation();
                   setEditingCard(image.id);
@@ -869,13 +921,13 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                 event.stopPropagation();
                 setPreviewId(image.id);
               }}
-              className={cn("absolute touch-none cursor-grab select-none active:cursor-grabbing", panning && "cursor-grabbing")}
+              className={cn("absolute touch-none cursor-grab select-none outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing", panning && "cursor-grabbing")}
               style={{ left: image.x, top: image.y, width: image.width, height: image.height }}
               onPointerDownCapture={(event) => {
                 if (event.button === 0 && (event.target as HTMLElement).closest("[data-canvas-interactive]")) select(image.id, event.shiftKey);
               }}
               onPointerDown={(event) => {
-                if (!event.isPrimary || event.button !== 0 || (event.target as HTMLElement).closest("[data-canvas-interactive]") || ((event.target as HTMLElement).closest("button") && !(event.target as HTMLElement).closest("[data-canvas-drag-handle]"))) return;
+                if (!ready || !event.isPrimary || event.button !== 0 || (event.target as HTMLElement).closest("[data-canvas-interactive]") || ((event.target as HTMLElement).closest("button") && !(event.target as HTMLElement).closest("[data-canvas-drag-handle]"))) return;
                 event.preventDefault();
                 viewport.current?.focus({ preventScroll: true });
                 if (event.shiftKey) { select(image.id, true); return; }
@@ -912,7 +964,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                 <p className="truncate font-medium">{image.harness?.title}</p>
                 <p className="overflow-hidden whitespace-pre-wrap break-words text-sm text-muted-foreground">{image.harness?.notes}</p>
               </div> : canvasFileKind(image.file) === "image" ? (activeMedia.has(image.id) && <CanvasMedia key={image.url} image={image} onLoaded={mediaLoaded} />) : <div className="flex size-full flex-col overflow-hidden rounded-xl border bg-card">
-                <Button variant="secondary" size="sm" data-canvas-drag-handle className="h-7 w-full shrink-0 justify-start rounded-none border-0 pr-10 active:translate-y-0" aria-label={`Move ${image.file.name}`}>
+                <Button variant="secondary" size="sm" disabled={!ready} data-canvas-drag-handle className="h-7 w-full shrink-0 justify-start rounded-none border-0 pr-10 active:translate-y-0" aria-label={`Move ${image.file.name}`} onKeyDown={(event) => nudgeItems(event, selected.includes(image.id) ? selected : [image.id])}>
                   <GripVerticalIcon /><span className="truncate">{image.file.name}</span>
                 </Button>
                 <div className="min-h-0 flex-1" data-canvas-interactive>
@@ -926,7 +978,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                 </div>
               </div>}
               {image.file.type !== canvasCardType && image.harness?.role && <Badge variant="secondary" className="pointer-events-none absolute bottom-1 left-1">{image.harness.role}</Badge>}
-              {selected.includes(image.id) && (
+              {ready && selected.includes(image.id) && (
                 <ImageResizeHandles
                   name={image.harness?.title ?? (image.file.name || "image")}
                   onPointerDown={(event, corner) => startResize(event, image, corner)}
@@ -949,12 +1001,12 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                   <Grid2x2Icon /> Make 4 variations
                 </ContextMenuItem>}
                 <ContextMenuItem onClick={() => setHandoffIds(contextMenuFiles.map(item => item.id))}>
-                  <ArrowDownToLineIcon /> Export handoff
+                  <ArrowDownToLineIcon /> Export canvas selection
                 </ContextMenuItem>
                 {contextMenuFiles.length > 0 && contextMenuFiles.every(({ file, url }) => url && canvasFileKind(file) === "image") && (
                   <>
                     <ContextMenuItem onClick={() => setCharacterSource(contextMenuFiles)}>
-                      <UserRoundPlusIcon /> Save as Character{contextMenuFiles.length > 1 && ` (${contextMenuFiles.length})`}
+                      <UserRoundPlusIcon /> Save character{contextMenuFiles.length > 1 && ` (${contextMenuFiles.length})`}
                     </ContextMenuItem>
                     <ContextMenuItem onClick={() => setReferenceSetFiles(contextMenuFiles.map(({ file }) => file))}>
                       <ImagesIcon /> Save reference set
@@ -968,7 +1020,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                 )}
                 {contextMenuFiles.length === 1 && contextMenuFiles[0].url && canvasFileKind(contextMenuFiles[0].file) === "image" && (
                   <ContextMenuItem onClick={() => setPreviewId(contextMenuFiles[0].id)}>
-                    <PencilIcon /> Open / Edit
+                    <PencilIcon /> Edit picture
                   </ContextMenuItem>
                 )}
                 <ContextMenuItem disabled={contextMenuFiles.some(image => !image.url && image.file.type !== canvasCardType)} onClick={duplicateSelection}>
@@ -1026,7 +1078,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           {inspected && <ModelInspector key={inspected.id} src={inspected.url} file={inspected.file} />}
         </DialogContent>
       </Dialog>
-      <Dialog open={!!preview} onOpenChange={(open) => { if (!open && (pictureEditor.current?.requestClose() ?? true)) setPreviewId(null); }}>
+      <Dialog open={!!preview} onOpenChange={(open, details) => { if (!open && (pictureEditor.current?.requestClose(details.reason === "escape-key") ?? true)) setPreviewId(null); }}>
         <DialogContent className="w-fit max-w-[calc(100vw-2rem)] overflow-visible bg-transparent ring-0 sm:max-w-[calc(100vw-4rem)] [&>[data-slot=dialog-close]]:-top-3 [&>[data-slot=dialog-close]]:-right-3 [&>[data-slot=dialog-close]]:bg-popover [&>[data-slot=dialog-close]]:shadow-md" aria-describedby={undefined}>
           <DialogTitle className="sr-only">{preview?.file.name || "Image preview"}</DialogTitle>
           {preview && <PictureEditor ref={pictureEditor} key={preview.id} url={preview.url} name={preview.file.name} onClose={() => setPreviewId(null)} onSave={async (file, provenance) => {
@@ -1042,7 +1094,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       </Dialog>
       {characterSource && <CharacterDialog images={characterSource} onClose={() => setCharacterSource(null)} />}
       {referenceSetFiles && <ReferenceSetDialog files={referenceSetFiles} onClose={() => setReferenceSetFiles(null)} />}
-      <ConfirmDelete open={deletingFiles.length > 0} onOpenChange={(open) => { if (!open) setDeletingFiles([]); }} title="Delete canvas files?" description={`${deletingFiles.length} selected file(s) will be removed from this canvas.`} disabled={!ready} onConfirm={() => remove(deletingFiles)} />
+      <ConfirmDelete open={deletingFiles.length > 0} onOpenChange={(open) => { if (!open) setDeletingFiles([]); }} title="Delete canvas files?" description={`${deletingFiles.length} selected file(s) will be removed from this canvas.`} disabled={!ready} onConfirm={() => removeConfirmed(deletingFiles)} />
       <CanvasMenu canvasId={canvasId} history={history} onHistory={refreshHistory} onNew={() => void openCanvas()} onOpen={(id) => void openCanvas(id)} onDelete={deleteCanvas} title={canvasId ? canvasTitle(canvasId) : 'Canvas'} scale={camera.scale} ready={ready} onZoom={zoom} onReset={() => changeView({ x: 0, y: 0, scale: 1 })} canReorganize={images.length > 0} onReorganize={reorganize} />
       <div className="absolute left-4 top-4 flex items-center gap-2 text-muted-foreground">
         <input ref={fileInput} type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,.glb" className="hidden" aria-label="Add canvas files" onChange={(event) => {
@@ -1051,10 +1103,10 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           const element = viewport.current!;
           importFiles(files, canvasPoint(view.current, element.clientWidth / 2, element.clientHeight / 2), true);
         }} />
-        <Button variant="ghost" size="icon-sm" aria-label="Add images, videos or 3D models" disabled={!ready} onClick={() => fileInput.current?.click()}><PlusIcon /></Button>
-        <Button variant="ghost" size="icon-sm" aria-label="Add canvas card" disabled={!ready} onClick={() => setEditingCard("")}><StickyNoteIcon /></Button>
-        {canCompareSelection && <Button variant="ghost" size="icon-sm" aria-label="Compare selected pictures" title="Compare selected pictures" onClick={() => setCompareIds(selectedCompare.map((item) => item.id))}><Columns2Icon /></Button>}
-        {selected.length > 0 && <Button variant="ghost" size="icon-sm" aria-label="Export canvas selection" onClick={() => setHandoffIds(selected)}><ArrowDownToLineIcon /></Button>}
+        <Tip label="Add images, videos or 3D models"><Button variant="ghost" size="icon-sm" aria-label="Add images, videos or 3D models" disabled={!ready} onClick={() => fileInput.current?.click()}><PlusIcon /></Button></Tip>
+        <Tip label="Add canvas card"><Button variant="ghost" size="icon-sm" aria-label="Add canvas card" disabled={!ready} onClick={() => setEditingCard("")}><StickyNoteIcon /></Button></Tip>
+        {canCompareSelection && <Tip label="Compare selected pictures"><Button variant="ghost" size="icon-sm" aria-label="Compare selected pictures" onClick={() => setCompareIds(selectedCompare.map((item) => item.id))}><Columns2Icon /></Button></Tip>}
+        {selected.length > 0 && <Tip label="Export canvas selection"><Button variant="ghost" size="icon-sm" aria-label="Export canvas selection" onClick={() => setHandoffIds(selected)}><ArrowDownToLineIcon /></Button></Tip>}
         <TooltipProvider>
           <Tooltip open={helpOpen} onOpenChange={setHelpOpen}>
             <TooltipTrigger

@@ -68,7 +68,7 @@ export function CharacterDialog({ images, onClose }: { images: (CanvasImage & { 
     <Dialog open onOpenChange={(open) => { if (!open && !pending.current) onClose(); }}>
       <DialogContent showCloseButton={!saving}>
         <DialogHeader>
-          <DialogTitle>Save as Character</DialogTitle>
+          <DialogTitle>Save character</DialogTitle>
           <DialogDescription>Use @{name.trim() || "name"} in chat to reference {images.length === 1 ? "this image" : `these ${images.length} images`}.</DialogDescription>
         </DialogHeader>
         <form onSubmit={save} className="flex flex-col gap-4">
@@ -101,7 +101,7 @@ export function CharacterDialog({ images, onClose }: { images: (CanvasImage & { 
           </FieldGroup>
           <DialogFooter>
             <Button type="button" variant="outline" disabled={saving} onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save Character"}</Button>
+            <Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save character"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

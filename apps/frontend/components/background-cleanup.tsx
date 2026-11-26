@@ -134,7 +134,7 @@ export function BackgroundCleanup({ original, cutout, saving, onSave, onCancel }
       <Tip label="Undo · Ctrl/⌘ Z"><Button variant="ghost" size="icon-sm" aria-label="Undo" disabled={!history.past.length || saving || drawing} onClick={() => changeHistory("undo")}><Undo2Icon /></Button></Tip>
       <Tip label="Redo · Ctrl/⌘ Shift Z"><Button variant="ghost" size="icon-sm" aria-label="Redo" disabled={!history.future.length || saving || drawing} onClick={() => changeHistory("redo")}><Redo2Icon /></Button></Tip>
       <Button variant="ghost" size="sm" disabled={saving || drawing} onClick={onCancel}>Cancel</Button>
-      <Button size="sm" disabled={saving || drawing} onClick={() => onSave(canvas.current!)}>{saving && <LoaderCircleIcon data-icon="inline-start" className="animate-spin" />}{saving ? "Saving…" : "Save PNG"}</Button>
+      <Button size="sm" disabled={saving || drawing} onClick={() => onSave(canvas.current!)}>{saving && <LoaderCircleIcon aria-hidden="true" data-icon="inline-start" className="motion-safe:animate-spin" />}{saving ? "Saving…" : "Save PNG"}</Button>
     </PictureTools>
   </>;
 }
