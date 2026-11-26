@@ -33,7 +33,7 @@ export default function Home() {
       </div>
       <main ref={setContentBoundary} className="relative min-h-0 flex-1 overflow-hidden">
         <PopupBoundaryContext value={contentBoundary ?? undefined}>
-          <ImageCanvas ref={canvas} onSelectionChange={setSelection} onReadyChange={setCanvasReady} onCanvasChange={setCanvasId} onStoryboardHost={setStoryboardHost} onStoryboardOrigin={setStoryboardOrigin} watchItem={videoItem} onWatchedBounds={setVideoBounds} promptBusy={promptBusy} onUseSetup={(item, items) => void prompt.current?.useSetup(item, items)} onMakeVariations={(item, items) => void prompt.current?.makeVariations(item, items)} />
+          <ImageCanvas ref={canvas} onSelectionChange={setSelection} onReadyChange={setCanvasReady} onCanvasChange={setCanvasId} onStoryboardHost={setStoryboardHost} onStoryboardOrigin={setStoryboardOrigin} watchItem={videoItem} onWatchedBounds={setVideoBounds} promptBusy={promptBusy} onUseSetup={(item, items) => void prompt.current?.useSetup(item, items)} onMakeVariations={(item, items) => void prompt.current?.makeVariations(item, items)} onGenerateAgain={(item, items) => void prompt.current?.generateAgain(item, items)} />
           <FirstRunFlow canvasRef={canvas} canvasReady={canvasReady} />
           <div className="relative z-10">
             <FloatingPrompt ref={prompt} key={canvasId} canvasId={canvasId} storyboardHost={storyboardHost} storyboardOrigin={storyboardOrigin} videoBounds={videoBounds} onVideoItem={setVideoItem} onRemoveFromCanvas={(ids) => canvas.current?.removeItems(ids)} onSelectItems={(ids) => canvas.current?.selectItems?.(ids)} onBusyChange={setPromptBusy} loading={!canvasReady} selection={selection} onDeselect={(ids) => canvas.current?.deselect(ids)} onModelPreview={(id) => {

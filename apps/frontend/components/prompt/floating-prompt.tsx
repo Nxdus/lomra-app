@@ -95,6 +95,7 @@ function canvasInputNames(items: VisibleImage[]) {
 export type PromptHandle = {
   useSetup: (item: VisibleImage, canvasItems: VisibleImage[]) => Promise<void>;
   makeVariations: (item: VisibleImage, canvasItems: VisibleImage[]) => Promise<void>;
+  generateAgain: (item: VisibleImage, canvasItems: VisibleImage[]) => Promise<void>;
 };
 
 export function FloatingPrompt({ ref, canvasId = "default", loading = false, onAddToCanvas, onFocusFile, selection = [], onModelPreview, onDeselect, onSelectItems, onBusyChange, storyboardHost, storyboardOrigin = { x: 0, y: 0 }, videoBounds, onVideoItem, onRemoveFromCanvas }: { ref?: Ref<PromptHandle>; videoBounds?: { x: number; y: number; width: number; height: number } | null; onVideoItem?: (id: string | undefined) => void; onRemoveFromCanvas?: (ids: string[]) => void; storyboardHost?: HTMLElement | null; storyboardOrigin?: { x: number; y: number }; canvasId?: string; loading?: boolean; onAddToCanvas?: CanvasHandle["addFiles"]; onFocusFile?: (file: File) => void; selection?: VisibleImage[]; onModelPreview?: (id: string) => string; onDeselect?: (ids: string[]) => void; onSelectItems?: (ids: string[]) => void; onBusyChange?: (busy: boolean) => void }) {
@@ -555,7 +556,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     });
   }
 
-  async function makeVariations(original: VisibleImage, canvasItems: VisibleImage[]) {
+  // Reruns a recorded local picture directly, without the chat: 4 new seeds, or the recorded seed once.
+  async function runRecorded(original: VisibleImage, canvasItems: VisibleImage[], again: boolean) {
     if (active.current || !chatId) {
       notifyError("Wait for the current generation to finish, or stop it first.");
       return;
@@ -581,14 +583,14 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       const sourceId = provenance.selectedInputs?.[0]?.id;
       sourceItem = sourceId ? canvasItems.find((entry) => entry.id === sourceId && canvasFileKind(entry.file) === "image") : undefined;
       if (!sourceItem) {
-        notifyError("The source picture for this variation is no longer on the canvas.");
+        notifyError("The source picture of this result is no longer on the canvas.");
         return;
       }
     }
 
     const controller = new AbortController();
     active.current = controller;
-    setStatus("Preparing 4 variations…");
+    setStatus(again ? "Preparing to generate again…" : "Preparing 4 variations…");
     try {
       let sourceImages: string[] | undefined;
       if (sourceItem) {
@@ -598,7 +600,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         if (!sourceImages.length) throw new Error("Could not read the source picture.");
       }
 
-      const seeds = variationSeeds(provenance.sd.seed, 4);
+      const seeds = again ? [provenance.sd.seed] : variationSeeds(provenance.sd.seed, 4);
+      const label = (index: number) => (again ? "Generating again" : `Variation ${index + 1} of ${seeds.length}`);
       const recordedSettings: SdSettings = {
         negativePrompt: provenance.sd.negativePrompt ?? "",
         steps: provenance.sd.steps,
@@ -636,7 +639,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
           updateGeneration(task.id, { status: "Not submitted", error: "Stopped before submission" });
           continue;
         }
-        setStatus(`Variation ${index + 1} of 4…`);
+        setStatus(`${label(index)}…`);
         try {
           let usedSd: Generation["sd"];
           const results = await generate(
@@ -645,7 +648,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
             controller.signal,
             (change) => {
               if (change.sd) usedSd = change.sd;
-              if (change.status) setStatus(`Variation ${index + 1} of 4 · ${change.status}`);
+              if (change.status) setStatus(`${label(index)} · ${change.status}`);
               updateGeneration(task.id, change);
             },
             sourceImages?.[0],
@@ -673,30 +676,34 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
                 },
               },
             );
-            if (!addedId) throw new Error("Could not place variation on the canvas.");
+            if (!addedId) throw new Error("Could not place the picture on the canvas.");
             placedIds.push(addedId);
             onSelectItems?.([...placedIds]);
           }
         } catch (cause) {
-          const message = controller.signal.aborted ? "Variation stopped" : cause instanceof Error ? cause.message : "Variation failed";
+          const message = controller.signal.aborted ? "Generation stopped" : cause instanceof Error ? cause.message : "Generation failed";
           updateGeneration(task.id, { status: "Interrupted", error: message });
           for (const rest of tasks.slice(index + 1)) {
             updateGeneration(rest.id, { status: "Not submitted", error: controller.signal.aborted ? "Stopped before submission" : "Stopped after previous error" });
           }
           if (!controller.signal.aborted) notifyError(message);
-          else notifyError("Stopped remaining variations");
+          else notifyError(again ? "Generation stopped" : "Stopped remaining variations");
           break;
         }
       }
     } catch (cause) {
-      notifyError(controller.signal.aborted ? "Request stopped" : cause instanceof Error ? cause.message : "Could not start variations");
+      notifyError(controller.signal.aborted ? "Request stopped" : cause instanceof Error ? cause.message : "Could not start the generation");
     } finally {
       active.current = null;
       setStatus("");
     }
   }
 
-  useImperativeHandle(ref, () => ({ useSetup, makeVariations }));
+  useImperativeHandle(ref, () => ({
+    useSetup,
+    makeVariations: (item, canvasItems) => runRecorded(item, canvasItems, false),
+    generateAgain: (item, canvasItems) => runRecorded(item, canvasItems, true),
+  }));
 
   /** Tools a local agent can call (through the desktop MCP bridge): generate media and read the canvas selection. */
   async function runAgentTool(name: string, args: Record<string, unknown>): Promise<AgentToolResult> {

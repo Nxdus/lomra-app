@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { BoxIcon, CheckIcon, CopyIcon, FileTextIcon, Grid2x2Icon, ImageIcon, SparklesIcon, VideoIcon } from "lucide-react";
+import { BoxIcon, CheckIcon, CopyIcon, FileTextIcon, Grid2x2Icon, ImageIcon, RotateCcwIcon, SparklesIcon, VideoIcon } from "lucide-react";
 import { CanvasMedia } from "@/components/canvas-media";
 import type { VisibleImage } from "@/components/image-canvas";
 import { isLocal3dModel, isLocalPictureModel, isSdModel, local3dPrefix, pictureAiPrefix, sdPrefix } from "@/components/prompt/generation";
@@ -95,12 +95,13 @@ function Generation({ provenance, items }: { provenance: CanvasProvenance; items
 }
 
 /** The left side of Canvas details: the item itself, and how it was made or else what file it is. */
-export function CanvasItemSummary({ item, items, onLoaded, onUseSetup, onMakeVariations, busy }: {
+export function CanvasItemSummary({ item, items, onLoaded, onUseSetup, onMakeVariations, onGenerateAgain, busy }: {
   item: VisibleImage;
   items: VisibleImage[];
   onLoaded: (id: string, file: File) => void;
   onUseSetup?: (item: VisibleImage) => void;
   onMakeVariations?: (item: VisibleImage) => void;
+  onGenerateAgain?: (item: VisibleImage) => void;
   busy?: boolean;
 }) {
   const [size, setSize] = useState<{ width: number; height: number }>();
@@ -117,11 +118,16 @@ export function CanvasItemSummary({ item, items, onLoaded, onUseSetup, onMakeVar
   return <div className="flex min-w-0 flex-col gap-4">
     <div className="max-h-96 w-full overflow-hidden rounded-3xl bg-muted/60" style={{ aspectRatio: `${item.width} / ${item.height}` }}>{preview}</div>
     {provenance ? <>
-      {kind === "image" && (canReuse || (canVary && onMakeVariations)) && (
+      {kind === "image" && (canReuse || (canVary && (onMakeVariations || onGenerateAgain))) && (
         <div className="flex flex-wrap gap-2">
           {canReuse && <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => canReuse(item)}>
             <SparklesIcon data-icon="inline-start" />Use this setup
           </Button>}
+          {canVary && onGenerateAgain && <Tip label="Generate this picture again with the same seed and settings">
+            <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => onGenerateAgain(item)}>
+              <RotateCcwIcon data-icon="inline-start" />Generate again
+            </Button>
+          </Tip>}
           {canVary && onMakeVariations && <Tip label="Generate 4 variations with different seeds">
             <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => onMakeVariations(item)}>
               <Grid2x2Icon data-icon="inline-start" />Make 4 variations

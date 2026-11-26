@@ -73,7 +73,8 @@ prompt; prompt-driven media tools need a tool-capable chat model.
   you want. **Image settings** next to the model picker sets seed, steps, and
   (where the model profile supports them) negative prompt, CFG scale and edit
   strength. **Canvas details** shows what was used and lets you reuse
-  the setup or make 4 local variations. Select 2 to 4 pictures to compare them
+  the setup in the prompt, generate a local picture again with the same seed
+  and settings (without the chat), or make 4 local variations. Select 2 to 4 pictures to compare them
   side by side, or use the slider to compare 2.
 - **Video:** text to video with a supported hosted model.
 - **3D:** turn one image into a GLB with local Hunyuan3D or TripoSR, or use

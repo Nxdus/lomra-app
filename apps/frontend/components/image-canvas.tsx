@@ -6,7 +6,7 @@ import { CanvasCardDialog, CanvasHandoffDialog, CanvasLinks } from "@/components
 import { ReferenceSetDialog } from "@/components/reference-set-dialog";
 
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref } from "react";
-import { ArrowDownToLineIcon, ArrowUpToLineIcon, Columns2Icon, CopyIcon, DownloadIcon, Grid2x2Icon, GripVerticalIcon, ImagesIcon, InfoIcon, PencilIcon, PlusIcon, ScanIcon, StickyNoteIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
+import { ArrowDownToLineIcon, ArrowUpToLineIcon, Columns2Icon, CopyIcon, DownloadIcon, Grid2x2Icon, GripVerticalIcon, ImagesIcon, InfoIcon, PencilIcon, PlusIcon, RotateCcwIcon, ScanIcon, StickyNoteIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
 import { CanvasCompareDialog } from "@/components/canvas-compare-dialog";
 import { CanvasMedia } from "@/components/canvas-media";
 import dynamic from "next/dynamic";
@@ -87,7 +87,7 @@ export type CanvasHandle = {
   selectItems?: (ids: string[]) => void;
 };
 
-export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasChange, onStoryboardHost, onStoryboardOrigin, watchItem, onWatchedBounds, onUseSetup, onMakeVariations, promptBusy }: { watchItem?: string; onWatchedBounds?: (bounds: ImageBounds | null) => void; onStoryboardHost?: (host: HTMLDivElement | null) => void; onStoryboardOrigin?: (origin: { x: number; y: number }) => void; ref?: Ref<CanvasHandle>; onSelectionChange?: (images: VisibleImage[]) => void; onReadyChange?: (ready: boolean) => void; onCanvasChange?: (id: string) => void; onUseSetup?: (item: VisibleImage, items: VisibleImage[]) => void; onMakeVariations?: (item: VisibleImage, items: VisibleImage[]) => void; promptBusy?: boolean }) {
+export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasChange, onStoryboardHost, onStoryboardOrigin, watchItem, onWatchedBounds, onUseSetup, onMakeVariations, onGenerateAgain, promptBusy }: { watchItem?: string; onWatchedBounds?: (bounds: ImageBounds | null) => void; onStoryboardHost?: (host: HTMLDivElement | null) => void; onStoryboardOrigin?: (origin: { x: number; y: number }) => void; ref?: Ref<CanvasHandle>; onSelectionChange?: (images: VisibleImage[]) => void; onReadyChange?: (ready: boolean) => void; onCanvasChange?: (id: string) => void; onUseSetup?: (item: VisibleImage, items: VisibleImage[]) => void; onMakeVariations?: (item: VisibleImage, items: VisibleImage[]) => void; onGenerateAgain?: (item: VisibleImage, items: VisibleImage[]) => void; promptBusy?: boolean }) {
   const viewport = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const current = useRef<VisibleImage[]>([]);
@@ -942,6 +942,9 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                 {canCompareContext && <ContextMenuItem onClick={() => setCompareIds(contextMenuFiles.map((item) => item.id))}>
                   <Columns2Icon /> Compare ({contextMenuFiles.length})
                 </ContextMenuItem>}
+                {canVaryContext && onGenerateAgain && <ContextMenuItem disabled={promptBusy} onClick={() => onGenerateAgain(contextMenuFiles[0], current.current)}>
+                  <RotateCcwIcon /> Generate again
+                </ContextMenuItem>}
                 {canVaryContext && onMakeVariations && <ContextMenuItem disabled={promptBusy} onClick={() => onMakeVariations(contextMenuFiles[0], current.current)}>
                   <Grid2x2Icon /> Make 4 variations
                 </ContextMenuItem>}
@@ -1012,7 +1015,8 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       </ContextMenu>
       {editingCard !== null && <CanvasCardDialog item={images.find(item => item.id === editingCard)} items={images} onLoaded={mediaLoaded} onClose={() => setEditingCard(null)} onSave={saveCard} busy={promptBusy}
         onUseSetup={onUseSetup ? (chosen) => onUseSetup(chosen, current.current) : undefined}
-        onMakeVariations={onMakeVariations ? (chosen) => onMakeVariations(chosen, current.current) : undefined} />}
+        onMakeVariations={onMakeVariations ? (chosen) => onMakeVariations(chosen, current.current) : undefined}
+        onGenerateAgain={onGenerateAgain ? (chosen) => onGenerateAgain(chosen, current.current) : undefined} />}
       {compareItems.length >= 2 && compareItems.length <= 4 && <CanvasCompareDialog items={compareItems} onClose={() => setCompareIds([])} busy={promptBusy}
         onUseSetup={onUseSetup ? (chosen) => onUseSetup(chosen, current.current) : undefined} />}
       {handoffIds.length > 0 && <CanvasHandoffDialog items={images} ids={handoffIds} onClose={() => setHandoffIds([])} />}
