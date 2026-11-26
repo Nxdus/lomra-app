@@ -1960,7 +1960,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         aria-description="Use Backspace or Delete to remove a badge."
         onEdit={editPrompt}
         onCaretChange={setPromptCaret}
-        className="min-h-9 max-h-[min(8.5rem,calc(100dvh-5rem))] w-full min-w-0 overflow-y-auto px-3 py-2 text-base leading-5 wrap-break-word whitespace-pre-wrap rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-disabled:opacity-50 md:text-sm"
+        className="min-h-9 max-h-[min(8.5rem,calc(100dvh-5rem))] w-full min-w-0 overflow-y-auto px-3 py-2 text-base leading-5 wrap-break-word whitespace-pre-wrap outline-none aria-disabled:opacity-50 md:text-sm"
       /> : <Textarea
         {...promptAttributes}
         ref={promptInput}
@@ -1974,7 +1974,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         maxLength={8000}
         placeholder={promptPlaceholder}
         rows={1}
-        className="min-h-9 max-h-[min(8.5rem,calc(100dvh-5rem))] w-full min-w-0 resize-none overflow-y-auto rounded-xl border-0 bg-transparent px-3 py-2 leading-5 shadow-none field-sizing-content focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="min-h-9 max-h-[min(8.5rem,calc(100dvh-5rem))] w-full min-w-0 resize-none overflow-y-auto rounded-none border-0 bg-transparent px-3 py-2 leading-5 shadow-none field-sizing-content focus-visible:border-transparent focus-visible:ring-0"
       />}
       <Popover open={commandsOpen || characterMenuOpen} onOpenChange={(open) => { if (!open) setSuggestionsDismissed(true); }}>
         <PopoverContent anchor={promptAnchor} side="top" align="start" initialFocus={false} finalFocus={false}

@@ -27,7 +27,6 @@ import falIcon from "./provider-icons/fal.png";
 import { GeminiIcon } from "@/components/gemini-icon";
 import googleAiIcon from "./provider-icons/google-ai.png";
 import openRouterIcon from "./provider-icons/openrouter.png";
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/tip";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -183,7 +182,6 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
   const canDelete = items.length > 1;
   const [attempt, setAttempt] = useState(0);
   const [open, setOpen] = useState(false);
-  const [modelActionsOpen, setModelActionsOpen] = useState(false);
   const [addingGroup, setAddingGroup] = useState<Group | null>(null);
   const [addProvider, setAddProvider] = useState<string | null>(null);
   const refreshSd = sd.refresh;
@@ -491,7 +489,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
   );
 
   return (
-    <div className="flex min-w-0 max-w-[min(15rem,calc(100vw-8rem))] shrink-0 items-center gap-1">
+    <div className="flex min-w-0 max-w-[min(15rem,calc(100vw-8rem))] shrink-0 flex-col items-end gap-1">
       <Select multiple items={items} open={open} onOpenChange={(nextOpen) => {
         setOpen(nextOpen);
         if (nextOpen) void Promise.all([refreshOllama(), refreshSd(), refreshLocal3d()]);
@@ -508,7 +506,13 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
         </SelectTrigger>
         <SelectContent side="top" align="end" alignItemWithTrigger={false} className="w-80 max-w-[calc(100vw-2rem)]">
           {groups.map((group) => <SelectGroup key={group.value}>
-            <SelectLabel>{group.label}</SelectLabel>
+            <div className="flex items-center justify-between pr-1">
+              <SelectLabel>{group.label}</SelectLabel>
+              <Button type="button" variant="ghost" size="icon-xs" aria-label={`Add ${group.label} model`}
+                onClick={() => { setOpen(false); if (group.value === "llm") void refreshOllama(); if (group.value === "picture") void refreshSd(); if (group.value === "3d") void refreshLocal3d(); setAddProvider(null); setModelId(null); setLocalCatalog([]); setBrowserAvailable(false); setCatalog([]); setCatalogStatus("loading"); setGoogleCatalog([]); setGoogleStatus("loading"); setAddingGroup(group); }}>
+                <PlusIcon />
+              </Button>
+            </div>
             {group.models.length ? group.models.map((item) => <div key={item.value} className="relative overflow-hidden rounded-xl">
               {swipe?.id === item.value && <div aria-hidden="true" className={`absolute inset-0 flex items-center justify-end rounded-xl pr-2 text-destructive motion-safe:transition-colors ${swipe.offset <= swipeDeleteThreshold ? "bg-destructive/20" : "bg-destructive/10"}`}>
                 <Trash2Icon className="size-4 shrink-0" />
@@ -536,21 +540,23 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
               {group.error ? "Models unavailable" : "No models available"}
             </SelectItem>}
           </SelectGroup>)}
+          <div className="border-t border-border p-1.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start gap-2 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => {
+                setOpen(false);
+                onOpenModelSetup();
+              }}
+            >
+              <KeyIcon className="size-3.5" />
+              <span>Configure API keys & local models…</span>
+            </Button>
+          </div>
         </SelectContent>
       </Select>
-      <Popover open={modelActionsOpen} onOpenChange={setModelActionsOpen}>
-        <Tip label="Manage models"><PopoverTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Manage models" disabled={disabled || settingsSaving} />}><PlusIcon /></PopoverTrigger></Tip>
-        <PopoverContent side="top" align="end" className="w-64 max-w-[calc(100vw-2rem)] gap-1">
-          <PopoverTitle>Manage models</PopoverTitle>
-          {groups.map((group) => <Button key={group.value} type="button" variant="ghost" size="sm" className="justify-start"
-            onClick={() => { setModelActionsOpen(false); if (group.value === "llm") void refreshOllama(); if (group.value === "picture") void refreshSd(); if (group.value === "3d") void refreshLocal3d(); setAddProvider(null); setModelId(null); setLocalCatalog([]); setBrowserAvailable(false); setCatalog([]); setCatalogStatus("loading"); setGoogleCatalog([]); setGoogleStatus("loading"); setAddingGroup(group); }}>
-            <PlusIcon data-icon="inline-start" />Add {group.value === "llm" ? "LLM" : group.value === "3d" ? "3D" : group.label.toLowerCase()} model
-          </Button>)}
-          <Button type="button" variant="ghost" size="sm" className="h-auto justify-start py-1.5 text-left whitespace-normal" onClick={() => { setModelActionsOpen(false); onOpenModelSetup(); }}>
-            <KeyIcon data-icon="inline-start" />Configure API keys &amp; local models…
-          </Button>
-        </PopoverContent>
-      </Popover>
       <ConfirmDelete open={!!deletingModel} onOpenChange={(open) => { if (!open) setDeletingModel(null); }} title="Remove model?" actionLabel="Remove" description={`“${deletingModel?.name}” will be removed from your model list.`} disabled={disabled || settingsSaving || !canDelete} onConfirm={async () => { if (deletingModel) await removeModel(deletingModel.value); }} />
       <Dialog open={!!addingGroup} onOpenChange={(open) => { if (!open && !settingsSaving) setAddingGroup(null); }}>
         <DialogContent showCloseButton={!settingsSaving} className="gap-4 rounded-2xl p-4 shadow-lg">

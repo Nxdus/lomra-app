@@ -1,12 +1,9 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
-import { CheckIcon, ChevronDownIcon, DownloadIcon, LoaderCircleIcon, Trash2Icon } from "lucide-react";
+import { CheckIcon, DownloadIcon, LoaderCircleIcon, Trash2Icon } from "lucide-react";
 import { ConfirmDelete } from "@/components/confirm-delete";
 import { ContextMenu, ContextMenuContent, ContextMenuGroup, ContextMenuItem, ContextMenuLabel, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { Tip } from "@/components/tip";
-import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "@/components/ui/toast";
 import { useSpeechModel } from "@/hooks/use-speech-model";
 import { desktopSpeech, type SpeechModel } from "@/lib/desktop";
@@ -19,7 +16,7 @@ const noSubscription = () => () => {};
 const DELETE_DISTANCE = 120;
 
 /** One model: click to download or use it; drag a downloaded one to the left (or press Delete) to remove it (with confirmation). */
-function ModelRow({ Item, model, used, downloading, onPick, onDelete }: { Item: typeof ContextMenuItem | typeof DropdownMenuItem; model: SpeechModel; used: boolean; downloading: boolean; onPick: () => void; onDelete?: () => void }) {
+function ModelRow({ Item, model, used, downloading, onPick, onDelete }: { Item: typeof ContextMenuItem; model: SpeechModel; used: boolean; downloading: boolean; onPick: () => void; onDelete?: () => void }) {
   const [dx, setDx] = useState(0);
   const start = useRef<number | null>(null);
   const dragged = useRef(false);
@@ -63,7 +60,7 @@ export function SpeechMenu({ children }: { children: ReactElement }) {
   const [catalogError, setCatalogError] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const tracking = useRef<SpeechModel | null>(null);
-  const [menu, setMenu] = useState<"context" | "dropdown" | null>(null);
+  const [menu, setMenu] = useState(false);
   const lastRefresh = useRef(0);
   const [deleting, setDeleting] = useState<SpeechModel | null>(null);
   const { ask, dialog } = useSpeechDownload();
@@ -119,17 +116,17 @@ export function SpeechMenu({ children }: { children: ReactElement }) {
     toast.add({ title: `Removed ${model.name}` });
   }
 
-  function openMenu(kind: "context" | "dropdown", open: boolean) {
-    setMenu((current) => open ? kind : current === kind ? null : current);
+  function openMenu(open: boolean) {
+    setMenu(open);
     if (open) void refresh();
   }
 
   function beginRemove(model: SpeechModel) {
-    setMenu(null);
+    setMenu(false);
     setDeleting(model);
   }
 
-  function menuItems(Item: typeof ContextMenuItem | typeof DropdownMenuItem) {
+  function menuItems(Item: typeof ContextMenuItem) {
     return <>
       {catalogError && <Item closeOnClick={false} onClick={() => void refresh()}>Could not load models. Retry</Item>}
       {downloadError && <Item disabled>{downloadError}</Item>}
@@ -150,7 +147,7 @@ export function SpeechMenu({ children }: { children: ReactElement }) {
   }
 
   return <>
-    <ContextMenu open={menu === "context"} onOpenChange={(open) => openMenu("context", open)}>
+    <ContextMenu open={menu} onOpenChange={openMenu}>
       <ContextMenuTrigger render={children} />
       <ContextMenuContent side="top" align="end" aria-label="Speech models" className="w-80 max-w-[calc(100vw-2rem)]">
         <ContextMenuGroup>
@@ -159,18 +156,6 @@ export function SpeechMenu({ children }: { children: ReactElement }) {
         </ContextMenuGroup>
       </ContextMenuContent>
     </ContextMenu>
-    <DropdownMenu open={menu === "dropdown"} onOpenChange={(open) => openMenu("dropdown", open)}>
-      <Tip label="Manage speech models"><DropdownMenuTrigger
-        render={<Button variant="ghost" size="icon-xs" />}
-        aria-label="Manage speech models"
-      ><ChevronDownIcon aria-hidden="true" /></DropdownMenuTrigger></Tip>
-      <DropdownMenuContent side="top" align="end" aria-label="Speech models" className="w-80 max-w-[calc(100vw-2rem)]">
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Speech models</DropdownMenuLabel>
-          {menuItems(DropdownMenuItem)}
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
     {dialog}
     <ConfirmDelete open={deleting !== null} onOpenChange={(next) => { if (!next) setDeleting(null); }}
       actionLabel="Remove"

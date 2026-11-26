@@ -878,13 +878,8 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
               setLoadAttempt((attempt) => attempt + 1);
             }}>{retrying ? "Retrying…" : "Retry"}</Button>
           </Alert>
-        ) : !ready && images.length === 0 ? (
+        ) : !ready && images.length === 0 && (
           <p role="status" className="absolute inset-0 grid place-items-center text-sm text-muted-foreground">Loading canvas…</p>
-        ) : ready && images.length === 0 && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground pointer-events-none">
-            <p>Drop images, videos or 3D models here.</p>
-            <Button data-canvas-interactive className="pointer-events-auto" variant="outline" onClick={() => fileInput.current?.click()}>Add files</Button>
-          </div>
         )}
         <div
           className="absolute inset-0 isolate origin-top-left"
