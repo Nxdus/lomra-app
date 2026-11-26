@@ -1,18 +1,38 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chatStorage, persistentUrl, restoreGenerations, type Chat } from "./chat-storage";
+import { chatStorage, persistentUrl, restoreGenerations, writeChat, type Chat } from "./chat-storage";
 import type { Generation } from "./generation";
 
 test("restores unfinished jobs for explicit recovery without changing completed results", () => {
   const task: Generation = { id: "job", category: "video", model: "video/model", prompt: "cat", status: "Queued", requestId: "existing-job" };
   const complete = { ...task, status: "Completed" };
-  const [restored, done, unsubmitted] = restoreGenerations([task, complete, { ...task, requestId: undefined }]);
+  const stopped = { ...task, status: "Stopped" };
+  const [restored, done, unsubmitted, restoredStop] = restoreGenerations([task, complete, { ...task, requestId: undefined }, stopped]);
   assert.equal(restored.requestId, "existing-job");
   assert.equal(restored.status, "Interrupted");
   assert.match(restored.error!, /Check job/);
   assert.equal(done, complete);
+  assert.equal(restoredStop, stopped);
+  assert.equal(restoredStop.requestId, "existing-job");
+  assert.equal(restoredStop.error, undefined);
   assert.match(unsubmitted.error!, /try again/);
   assert.equal(task.status, "Queued");
+});
+
+test("an acknowledged chat write returns the saved chat without refreshing the list", async () => {
+  const previousFetch = globalThis.fetch;
+  const chat: Chat = { id: "story-owner", title: "Storyboard", updatedAt: 1, history: [], generations: [], models: [] };
+  try {
+    globalThis.fetch = (async (url, options) => {
+      assert.match(String(url), /\/chats\/story-owner$/);
+      assert.equal(options?.method, "PUT");
+      assert.deepEqual(JSON.parse(options?.body as string).value, chat);
+      return Response.json({ saved: true });
+    }) as typeof fetch;
+    assert.deepEqual(await writeChat(chat), chat);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });
 
 test("remote and inline result URLs remain unchanged", async () => {

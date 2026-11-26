@@ -17,7 +17,7 @@ export function StoryboardCharacters({ characters, index, images, status, onEdit
   onGenerate: () => void;
   onStop: () => void;
 }) {
-  const [removing, setRemoving] = useState(false);
+  const [removal, setRemoval] = useState<{ name: string; confirm: () => Promise<void> } | null>(null);
   const character = characters[index];
   if (!character) return null;
   const selected = character.image === null ? undefined : images[character.image];
@@ -59,10 +59,10 @@ export function StoryboardCharacters({ characters, index, images, status, onEdit
     <div className="flex flex-wrap items-center gap-2">
       <Tip label="Remove character"><Button variant="ghost" size="icon-sm" className="text-muted-foreground"
         aria-label={`Remove ${name} from storyboard`}
-        disabled={!!status} onClick={() => setRemoving(true)}><TrashIcon /></Button></Tip>
-      <ConfirmDelete open={removing} onOpenChange={setRemoving} title="Remove character?"
-        description={`${name} will be removed from the storyboard and its shot assignments will be cleared.`}
-        actionLabel="Remove" onConfirm={async () => { await onRemove(); }} />
+        disabled={!!status} onClick={() => setRemoval({ name, confirm: onRemove })}><TrashIcon /></Button></Tip>
+      {removal && <ConfirmDelete open onOpenChange={(open) => { if (!open) setRemoval(null); }} title="Remove character?"
+        description={`${removal.name} will be removed from the storyboard and its shot assignments will be cleared.`}
+        actionLabel="Remove" onConfirm={removal.confirm} />}
       {canGenerate && <div className="ml-auto flex min-w-0 flex-wrap justify-end gap-2">
         <Button variant="outline" size="sm" disabled={!!status || !character.name.trim()} onClick={onGenerate}>
           {character.generatedId ? <RefreshCwIcon data-icon="inline-start" /> : <ImageIcon data-icon="inline-start" />}
