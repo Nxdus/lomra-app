@@ -21,6 +21,18 @@ export const validOllamaName = (name: unknown): name is string =>
 
 export const OLLAMA_OFFLINE = "Cannot reach Ollama. Start it, or check the server address in Settings.";
 
+export async function ollamaCapabilities(base: string, model: string, signal?: AbortSignal) {
+  try {
+    const timeout = AbortSignal.timeout(5000);
+    const show = await fetch(`${base}/api/show`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout, cache: "no-store", redirect: "error",
+    });
+    const capabilities: unknown = show.ok ? ((await show.json()) as { capabilities?: unknown }).capabilities : undefined;
+    return Array.isArray(capabilities) ? capabilities : undefined;
+  } catch { /* Older servers may not report capabilities. */ }
+}
+
 /** Maps an Ollama error response to a short message the user can act on. */
 export async function ollamaErrorMessage(response: Response) {
   let detail = "";

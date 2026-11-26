@@ -4,6 +4,10 @@ export type MediaPart = { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string } }
   | { type: "video_url"; video_url: { url: string } };
 
+export function textMediaParts(content: MediaPart[]) {
+  return content.filter((part) => part.type === "text");
+}
+
 // Keep inline uploads bounded; large-video uploads need a provider file-upload flow.
 export const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 export const MAX_MEDIA_ITEMS = 10;
@@ -59,7 +63,8 @@ export async function promptContent(
     encodedSize += url.length;
     if (encodedSize > Math.ceil(MAX_MEDIA_BYTES / 3) * 4 + MAX_MEDIA_ITEMS * 64) throw new Error("Selected media exceeds 20 MB. Select fewer or smaller files.");
     const indexLabel = kind === "video" ? `video_index=${videoIndex++}` : kind === "3d" ? `model_index=${modelIndex++}, image_index=${imageIndex++}` : `image_index=${imageIndex++}`;
-    parts.push({ type: "text", text: `${kind === "3d" ? "3D preview (current view only)" : `Attached ${kind}`}: ${item.file.name.slice(0, 200)} (${indexLabel})` });
+    const count = parts.length === 1 ? `Selected media count: ${selection.length}. ` : "";
+    parts.push({ type: "text", text: `${count}${kind === "3d" ? "3D preview (current view only)" : `Attached ${kind}`}: ${item.file.name.slice(0, 120)} (${indexLabel}, id=${item.id}, ${item.file.size} bytes)` });
     parts.push(kind === "video" ? { type: "video_url", video_url: { url } } : { type: "image_url", image_url: { url } });
   }
   return parts;

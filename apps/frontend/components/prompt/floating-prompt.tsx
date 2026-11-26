@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EffortPicker } from "./effort-picker";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
-import { imagePreview, MAX_MEDIA_ITEMS, promptContent, type MediaPart } from "./media";
+import { imagePreview, MAX_MEDIA_ITEMS, promptContent, textMediaParts, type MediaPart } from "./media";
 import { isLocalPictureModel, mediaToolModel, pictureAiOperation, type ToolSource } from "./media-tools";
 import { downloadPictureAiModel } from "@/hooks/use-picture-ai";
 import { localModelSize } from "@/components/ollama-settings";
@@ -1448,7 +1448,15 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         setStatus(selection.length ? "Generating · Preparing selected media" : "Generating · Chat response");
       }
       const characters = await loadCharacterReferences(prompt, controller.signal);
-      const routingPrompt = `${prompt.trim()}${characterContext(characters, false)}\n\nSelected 3D model: ${threeDModel || "none"}. ${multiview ? `Multiview: ${multiviewRequirements(threeDModel)}.` : requiresImage(threeDModel) ? "Image-to-3D: requires one image." : "Text-to-3D: no images required."}`;
+      const pictureEdit = isSdModel(pictureModel) && pictureCapabilities(pictureModel, sd.status).imageToImage &&
+        selection.length === 1 && canvasFileKind(selection[0].file) === "image";
+      const pictureContext = pictureEdit
+        ? "\n\nThe selected picture model uses the canvas picture for image-to-image. For requests to make or edit a picture from this selection, call generate_image."
+        : "";
+      const threeDContext = threeDModel
+        ? `Selected 3D model: ${threeDModel}. ${multiview ? `Multiview: ${multiviewRequirements(threeDModel)}.` : requiresImage(threeDModel) ? "Image-to-3D: requires one image." : "Text-to-3D: no images required."}`
+        : "No 3D model is selected.";
+      const routingPrompt = `${prompt.trim()}${characterContext(characters, false)}${pictureContext}\n\n${threeDContext}`;
       if (characters.length && routingPrompt.length > 8000) throw new Error("The prompt is too long. Shorten it before sending.");
       const content = await promptContent(routingPrompt, selection, controller.signal, onModelPreview);
       const images = Array.isArray(content) ? content.filter((part) => part.type === "image_url") : [];
@@ -1456,7 +1464,10 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       const message = await submitMessage(controller.signal);
       const fullHistory = [...history, message];
       setStatus("Generating · Chat response");
-      const input = [...history.slice(-20).map(({ role, content }) => ({ role, content })), { role: "user", content }];
+      const input = [...history.slice(-20).map(({ role, content }) => ({ role, content })), { role: "user", content }]
+        .map((message) => vision.get(llm) === false && Array.isArray(message.content)
+          ? { ...message, content: textMediaParts(message.content) }
+          : message);
       const plan = await request(llmProvider, { action: "route", model: llm, input, signal: controller.signal }) as { text: string; tasks: GenerationTask[] };
       const pictureBridge = desktopPictureAi();
       const pictureStatus = pictureBridge && plan.tasks.some((task) => task.mediaTool && pictureAiOperation(task.mediaTool))

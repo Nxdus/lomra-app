@@ -1,11 +1,11 @@
 import { chatCompletion } from "./chat-stream";
 import { falErrorMessage } from "./provider-error";
-import { MAX_MEDIA_BYTES, MAX_MEDIA_ITEMS } from "@/components/prompt/media";
+import { MAX_MEDIA_BYTES, MAX_MEDIA_ITEMS, textMediaParts, type MediaPart } from "@/components/prompt/media";
 import { GOOGLE_API, GOOGLE_MODEL_PREFIX, OMNI_MODEL, VEO_MODEL, googleModels, googleTools, omniFileId, omniRequest, veoOperation } from "./google";
 import { generationPlan, generationTools, routingInstruction } from "./generation-tools";
 import { sameOrigin } from "../same-origin";
 import { usd } from "../models/price";
-import { OLLAMA_OFFLINE, OLLAMA_PREFIX, ollamaErrorMessage, ollamaUrl, validOllamaName } from "../ollama/ollama";
+import { OLLAMA_OFFLINE, OLLAMA_PREFIX, ollamaCapabilities, ollamaErrorMessage, ollamaUrl, validOllamaName } from "../ollama/ollama";
 
 function json(data: unknown, status = 200) {
   return Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
@@ -101,10 +101,20 @@ export async function POST(request: Request) {
           (action === "route" && message.role === "system") ||
           !("content" in message) || !validContent(message.content, String(message.role)),
       )) return json({ message: "Valid chat messages are required (up to 10 media items, 20 MB total)" }, 400);
-      url = google ? `${GOOGLE_API}/openai/chat/completions` : local ? `${await ollamaUrl()}/v1/chat/completions` : "https://openrouter.ai/api/v1/chat/completions";
-      payload = { model: upstreamModel, messages: input, stream: true, ...(google ? { stream_options: { include_usage: true } } : {}) };
+      const localBase = local ? await ollamaUrl() : undefined;
+      const capabilities = localBase && action === "route" && mediaCount
+        ? await ollamaCapabilities(localBase, upstreamModel, request.signal)
+        : undefined;
+      const messages = capabilities && !capabilities.includes("vision")
+        ? input.map((message: { role: string; content: string | MediaPart[] }) => ({
+          ...message,
+          content: typeof message.content === "string" ? message.content : textMediaParts(message.content).map((part) => part.text).join("\n"),
+        }))
+        : input;
+      url = google ? `${GOOGLE_API}/openai/chat/completions` : local ? `${localBase}/v1/chat/completions` : "https://openrouter.ai/api/v1/chat/completions";
+      payload = { model: upstreamModel, messages, stream: true, ...(google ? { stream_options: { include_usage: true } } : {}) };
       if (action === "route" && (google || local)) {
-        payload = { model: upstreamModel, messages: [{ role: "system", content: routingInstruction }, ...input], tools: google ? googleTools(generationTools) : generationTools, tool_choice: "auto", stream: true, ...(google ? { stream_options: { include_usage: true } } : {}) };
+        payload = { model: upstreamModel, messages: [{ role: "system", content: routingInstruction }, ...messages], tools: google ? googleTools(generationTools) : generationTools, tool_choice: "auto", stream: true, ...(google ? { stream_options: { include_usage: true } } : {}) };
       } else if (action === "route") {
         payload = { model, messages: [{ role: "system", content: routingInstruction }, ...input],
           modalities: ["text"], provider: { require_parameters: true },

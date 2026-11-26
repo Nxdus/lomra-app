@@ -1,6 +1,6 @@
 import { isRemoteOllama } from "@/lib/ollama-url";
 import { sameOrigin } from "../same-origin";
-import { OLLAMA_OFFLINE, ollamaUrl, validOllamaName } from "./ollama";
+import { OLLAMA_OFFLINE, ollamaCapabilities, ollamaUrl, validOllamaName } from "./ollama";
 
 function json(data: unknown, status = 200) {
   return Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
@@ -18,15 +18,7 @@ export async function GET() {
     const tags = result && typeof result === "object" && "models" in result && Array.isArray(result.models) ? result.models as Tag[] : null;
     if (!tags) return json({ ...server, running: false, models: [] });
     const models = await Promise.all(tags.flatMap((tag) => typeof tag?.name === "string" && validOllamaName(tag.name) ? [{ name: tag.name, size: Number(tag.size) }] : []).map(async ({ name, size }) => {
-      let capabilities: unknown;
-      try {
-        const show = await fetch(`${base}/api/show`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: name }),
-          signal: AbortSignal.timeout(5000), cache: "no-store", redirect: "error",
-        });
-        if (show.ok) capabilities = ((await show.json()) as { capabilities?: unknown }).capabilities;
-      } catch { /* Older Ollama versions do not report capabilities. */ }
-      const known = Array.isArray(capabilities) ? capabilities : undefined;
+      const known = await ollamaCapabilities(base, name);
       // Without capability data, assume the model works and let the first request report otherwise.
       return { id: name, size: Number.isFinite(size) ? size : 0, tools: known ? known.includes("tools") : true, vision: !!known?.includes("vision"), embedding: !!known && !known.includes("completion") };
     }));
