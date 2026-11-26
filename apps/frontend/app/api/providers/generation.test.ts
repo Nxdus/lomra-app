@@ -2,6 +2,41 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { POST } from "./route";
 import { generationPlan } from "./generation-tools";
+import { promptContent } from "@/components/prompt/media";
+
+for (const vision of [false, true, undefined]) {
+  test(`Ollama routing forwards selected image bytes with vision capability ${vision}`, async () => {
+    const file = new File(["image"], "source.png", { type: "image/png" });
+    const signal = new AbortController().signal;
+    const content = await promptContent("Make a blue robot from the selected image", [{ id: "source-1", file }], signal);
+    const request = new Request("http://localhost/api/providers", {
+      method: "POST",
+      body: JSON.stringify({ provider: "ollama", action: "route", model: "ollama/test:4b", input: [{ role: "user", content }] }),
+    });
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async (url, options) => {
+        const payload = JSON.parse(options?.body as string);
+        if (String(url).endsWith("/api/show")) {
+          assert.deepEqual(payload, { model: "test:4b" });
+          return Response.json(vision === undefined ? {} : { capabilities: ["completion", "tools", ...(vision ? ["vision"] : [])] });
+        }
+        assert.match(String(url), /\/v1\/chat\/completions$/);
+        assert.deepEqual(payload.messages[1].content, vision === false
+          ? "Make a blue robot from the selected image\nSelected media count: 1. Attached image: source.png (image_index=0, id=source-1, 5 bytes)"
+          : content);
+        return Response.json({ choices: [{ message: { tool_calls: [
+          { type: "function", function: { name: "generate_image", arguments: JSON.stringify({ prompt: "A blue robot" }) } },
+        ] } }] });
+      }) as typeof fetch;
+      const response = await POST(request);
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { text: "", tasks: [{ category: "picture", prompt: "A blue robot" }] });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
 
 test("3D texture requests preserve booleans with and without view mappings", () => {
   const plan = (args: unknown) => generationPlan({ choices: [{ message: { tool_calls: [{ type: "function", function: { name: "generate_3d", arguments: JSON.stringify(args) } }] } }] });
