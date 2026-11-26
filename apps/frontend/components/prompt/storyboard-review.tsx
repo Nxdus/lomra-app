@@ -133,26 +133,27 @@ function ReviewForm({ storyboard, images, unavailableReason, complete, onUpdate 
         </TabsList>
         <TabsContent value="selection" className="min-h-0 overflow-y-auto p-0.5">
           <div className="grid min-w-0 gap-3 md:grid-cols-[minmax(0,1fr)_13rem]">
-            <section aria-label="Shots to review" className="min-w-0 space-y-3 rounded-2xl bg-zinc-950 p-3 text-zinc-50">
-              <h3 className="flex items-center gap-2 text-sm font-medium"><FilmIcon aria-hidden="true" className="size-4 text-zinc-400" />Shots to review</h3>
-              {!shotOptions.length && <p className="text-sm text-zinc-400">There are no shots available to review.</p>}
+            <section aria-label="Shots to review" className="min-w-0 space-y-3 rounded-2xl border bg-card p-3 text-card-foreground">
+              <h3 className="flex items-center gap-2 text-sm font-medium"><FilmIcon aria-hidden="true" className="size-4 text-muted-foreground" />Shots to review</h3>
+              {!shotOptions.length && <p className="text-sm text-muted-foreground">There are no shots available to review.</p>}
               <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-3">
                 {shotOptions.map(({ id, number, index, description, clip, picture, offset }) => {
                   const active = selected.has(id);
                   const caption = storyboard.shots?.[index]?.scene?.trim() || description;
+                  const hasPicture = !!(picture.fileId || picture.url);
                   const media = clip.fileId ? "Video" : picture.fileId || picture.url ? "Still" : "Missing visual";
                   return <Button key={id} type="button" variant="ghost" disabled={!!status} aria-pressed={active}
                     aria-label={`Shot ${number}, ${media}`} title={description}
                     onClick={() => setSelected((current) => toggle(current, id, !current.has(id)))}
-                    className={cn("group/shot relative aspect-video h-auto min-h-16 min-w-0 overflow-hidden rounded-lg border p-0 text-left text-white hover:text-white",
-                      active ? "border-amber-300 ring-1 ring-amber-300" : "border-zinc-800 hover:border-zinc-400")}>
+                    className={cn("relative aspect-video h-auto min-h-16 min-w-0 overflow-hidden rounded-lg border p-0 text-left",
+                      active ? "border-ring ring-1 ring-ring" : "hover:border-ring/50")}>
                     <span className="absolute inset-0"><ReviewThumbnail picture={picture} /></span>
-                    <span aria-hidden="true" className="absolute inset-0 bg-linear-to-t from-black/95 via-black/35 to-black/20" />
-                    <span className="absolute top-1.5 left-1.5 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-medium">Shot {number}</span>
-                    {active && <CheckIcon aria-hidden="true" className="absolute top-1.5 right-1.5 size-4 rounded-full bg-amber-300 p-0.5 text-zinc-950" />}
-                    <span className="absolute inset-x-1.5 bottom-1.5 block min-w-0 leading-tight">
+                    {hasPicture && <span aria-hidden="true" className="absolute inset-0 bg-linear-to-t from-black/95 via-black/35 to-black/20" />}
+                    <span className={cn("absolute top-1.5 left-1.5 rounded px-1.5 py-0.5 text-xs font-medium", hasPicture ? "bg-black/75 text-white" : "bg-background")}>Shot {number}</span>
+                    {active && <CheckIcon aria-hidden="true" className="absolute top-1.5 right-1.5 size-4 rounded-full bg-primary p-0.5 text-primary-foreground" />}
+                    <span className={cn("absolute inset-x-1.5 bottom-1.5 block min-w-0 leading-tight", hasPicture && "text-white")}>
                       {caption && <span className="block truncate text-xs font-medium">{caption}</span>}
-                      <span className="block truncate text-[10px] tabular-nums text-zinc-200">{timestamp(offset)} · {media}</span>
+                      <span className={cn("block truncate text-xs tabular-nums", hasPicture ? "text-white/90" : "text-muted-foreground")}>{timestamp(offset)} · {media}</span>
                     </span>
                   </Button>;
                 })}
@@ -187,7 +188,7 @@ function ReviewForm({ storyboard, images, unavailableReason, complete, onUpdate 
           {tab === "selection" ? <>
             <div className="min-w-0 space-y-1 text-xs tabular-nums text-muted-foreground">
               <p>{shots.length} {shots.length === 1 ? "shot" : "shots"} selected · {imageCount}/{reviewImageLimit} images</p>
-              {status && <p role="status" className="flex items-center gap-1.5"><Loader2Icon aria-hidden="true" className="size-3 animate-spin" />{status}</p>}
+              {status && <p role="status" className="flex items-center gap-1.5"><Loader2Icon aria-hidden="true" className="size-3 motion-safe:animate-spin" />{status}</p>}
             </div>
             <Button type="button" size="sm" disabled={!!status || !!unavailableReason || !plan} onClick={() => void review()}>
               <ScanEyeIcon data-icon="inline-start" />Review selection
@@ -206,7 +207,7 @@ function ReviewThumbnail({ picture }: { picture: { url?: string; fileId?: string
   return src
     // eslint-disable-next-line @next/next/no-img-element
     ? <img src={src} alt="" className="size-full object-cover" />
-    : <span className="flex size-full items-center justify-center bg-zinc-800 text-zinc-400"><ImageIcon aria-hidden="true" className="size-4" /></span>;
+    : <span className="flex size-full items-center justify-center bg-muted text-muted-foreground"><ImageIcon aria-hidden="true" className="size-4" /></span>;
 }
 
 function ReviewResults({ result, shots, stale, applied, disabled, onConfirm }: {
@@ -229,7 +230,7 @@ function ReviewResults({ result, shots, stale, applied, disabled, onConfirm }: {
         {!observations.length && <p className="text-sm text-muted-foreground">No observations for these frames.</p>}
         <ol className="space-y-1.5">
           {observations.map(({ shotId, time, text }, index) => <li key={index} className="flex min-w-0 items-start gap-2.5 rounded-xl border p-2.5">
-            <Badge variant="secondary" className="shrink-0 font-mono text-[11px]">{timestamp(time)}</Badge>
+            <Badge variant="secondary" className="shrink-0 font-mono text-xs">{timestamp(time)}</Badge>
             <div className="min-w-0 space-y-0.5">
               {shotNumber(shotId) && <p className="text-xs font-medium text-muted-foreground">Shot {shotNumber(shotId)}</p>}
               <p className="wrap-anywhere text-sm">{text}</p>
