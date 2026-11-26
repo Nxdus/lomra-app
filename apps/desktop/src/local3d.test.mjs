@@ -169,6 +169,7 @@ test('generate rejects anything but a picture, a UUID run id and an installed mo
 });
 
 test('workerError turns the worker reason into advice', () => {
+  expect(workerError('{"stage":"error","reason":"no-surface"}')).toContain('could not find a 3D surface');
   expect(workerError('{"stage":"error","reason":"memory"}')).toContain('graphics memory');
   expect(workerError('{"stage":"error","reason":"no-cuda"}')).toContain('driver');
   expect(workerError('garbage')).toBe('The 3D model could not be made.');
