@@ -14,7 +14,7 @@ const autoModel = /^(?:Gemini )?Auto\b/i;
 const autoSelected = /\bcurrently(?: selected:?| using)?\s+(?:Gemini )?Auto\b/i;
 
 // Gemini's "limit reached / try again later" replies, in English and Thai.
-const declined = /unusually high|reached (?:its|the|your) [\w ]*limits?|(?:can(?:'|’)?t|cannot|unable to) (?:create|generate) (?:videos?|images?)|try again later|ลองอีกครั้งในภายหลัง|ขีดจำกัด|ไม่สามารถสร้าง(?:วิดีโอ|วิดิโอ|รูปภาพ|ภาพ)/i;
+const declined = /unusually high|reached (?:its|the|your) [\w ]*limits?|(?:can(?:'|’)?t|cannot|unable to|failed to) (?:create|generate) (?:videos?|images?)|video generation (?:failed|is unavailable)|try again later|ลองอีกครั้งในภายหลัง|ขีดจำกัด|ไม่สามารถสร้าง(?:วิดีโอ|วิดิโอ|รูปภาพ|ภาพ)/i;
 
 const isComposerPage = url => /^https:\/\/gemini\.google\.com(?:\/u\/\d+)?\/app(?:\/(?:images?|videos?|create-image|create-video))?$/.test(url.split(/[?#]/)[0].replace(/\/+$/, ''));
 const isConversation = url => conversation.test(url.split(/[?#]/)[0].replace(/\/+$/, ''));
@@ -25,7 +25,7 @@ function videoType(bytes) {
 }
 
 // Creates one image or one video through the signed-in Gemini web app and returns it as a data URL.
-export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } = {}, signal, openPage) {
+export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } = {}, callerSignal, openPage) {
   if ((kind !== 'image' && kind !== 'video') || typeof prompt !== 'string' || !prompt.trim() || prompt.length > 8000 ||
       !Array.isArray(images) || images.length > (kind === 'video' ? 1 : 10) ||
       (aspectRatio !== undefined && (typeof aspectRatio !== 'string' || !/^\d{1,4}:\d{1,4}$/.test(aspectRatio)))) {
@@ -42,6 +42,9 @@ export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } 
     if (!bytes.length || total > maxImageBytes) throw new Error('Reference images must total at most 20 MB.');
     return { type: match[1], bytes };
   });
+  const timeout = kind === 'video' ? AbortSignal.timeout(8 * 60_000) : undefined;
+  const signal = timeout ? AbortSignal.any([callerSignal, timeout]) : callerSignal;
+  const timedOut = `Gemini did not return a ${kind} in time. Check your Gemini activity for the result or a usage limit.`;
   signal.throwIfAborted();
   const dir = await mkdtemp(join(tmpdir(), 'lomra-gemini-'));
   let page;
@@ -120,6 +123,12 @@ export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } 
       const create = await optional(createName, { url: composerUrl, role: menuRoles, timeout: 4000 });
       await page.click(create?.node ?? tools.node, composerUrl);
       tool = !!create;
+      if (tool) {
+        ({ url: composerUrl } = await waitFor(/(?:)/, {
+          find: state => isComposerPage(state.url) && control(state, /(?:)/, 'textbox'),
+          error: 'Could not find the Gemini media prompt box.',
+        }));
+      }
     }
 
     if (!tool) {
@@ -162,34 +171,42 @@ export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } 
 
     const done = kind === 'video' ? /^Download video\b/i : /^Download (?:full size )?image\b/i;
     // Gemini answers a usage limit or busy system with plain text and no media: stop waiting and show it.
-    let refusal;
+    let bytes;
     const share = /^(?:Share|Share video)$/i;
     const downloadRoles = [...menuRoles, 'link'];
     const result = await waitFor(done, {
-      timeout: kind === 'video' ? 15 * 60_000 : 6 * 60_000, interval: 2500,
+      timeout: 6 * 60_000, interval: 2500,
       find: async state => {
         if (!isConversation(state.url) || isComposerPage(state.url)) return;
         const download = control(state, done, downloadRoles) ?? (kind === 'video' ? control(state, share) : undefined);
         if (download) return download;
         const text = await page.responseText(state.url);
-        if (text.length < 600 && declined.test(text)) return (refusal = text);
+        if (text.length < 600 && declined.test(text)) throw new Error(`Gemini could not create the ${kind}: ${text}`);
+        if (kind === 'video') {
+          const data = await page.fetchMedia?.(state.url, kind, limit).catch(() => undefined);
+          signal.throwIfAborted();
+          if (data) {
+            bytes = Buffer.from(data, 'base64');
+            return true;
+          }
+        }
       },
-      error: `Gemini did not return a ${kind} in time. Check your Gemini activity for the result or a usage limit.`,
+      error: timedOut,
     });
-    if (refusal) throw new Error(`Gemini could not create the ${kind}: ${refusal}`);
     const url = result.url;
     if (!isConversation(url)) throw new Error('Could not identify the Gemini conversation.');
     const output = join(dir, `generated-${kind}`);
-    let bytes;
     try {
-      let download = result.node;
-      if (kind === 'video' && share.test(download.name.value)) {
-        await page.click(download, url);
-        ({ node: download } = await waitFor(done, { url, role: downloadRoles, error: 'Could not find Download video in the Gemini share menu.' }));
+      if (!bytes) {
+        let download = result.node;
+        if (kind === 'video' && share.test(download.name.value)) {
+          await page.click(download, url);
+          ({ node: download } = await waitFor(done, { url, role: downloadRoles, error: 'Could not find Download video in the Gemini share menu.' }));
+        }
+        await page.download(download, url, output, kind === 'video' ? 120_000 : 45_000);
+        if ((await stat(output)).size > limit) throw new Error(`The downloaded ${kind} is too large.`);
+        bytes = await readFile(output);
       }
-      await page.download(download, url, output, kind === 'video' ? 120_000 : 45_000);
-      if ((await stat(output)).size > limit) throw new Error(`The downloaded ${kind} is too large.`);
-      bytes = await readFile(output);
     } catch (error) {
       signal.throwIfAborted();
       // Gemini changes how its download control saves files: read the media the page shows instead.
@@ -221,6 +238,9 @@ export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } 
       return { ...media, warning: [mode, `The ${kind} was downloaded. Could not delete the Gemini chat: ${url}`].filter(Boolean).join(' ') };
     }
     return mode ? { ...media, warning: mode } : media;
+  } catch (cause) {
+    if (timeout?.aborted && !callerSignal.aborted) throw new Error(timedOut, { cause });
+    throw cause;
   } finally {
     page?.close();
     await rm(dir, { recursive: true, force: true }).catch(() => {});

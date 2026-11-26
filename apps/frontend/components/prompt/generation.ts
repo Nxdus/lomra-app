@@ -33,7 +33,7 @@ type RequestProvider = (provider: Provider, options: ProviderRequest) => Promise
 /** Models from Google AI Studio carry this prefix; everything else is routed through OpenRouter. */
 export const modelProvider = (model: string): "google" | "openrouter" => model.startsWith("google-ai/") ? "google" : "openrouter";
 /** Whether a video model can start from a picture. Google's Veo API takes text only; Gemini Omni, Gemini Create video and OpenRouter models take a first frame. */
-export const videoStartImage = (model: string) => modelProvider(model) !== "google" || model.startsWith("google-ai/gemini-omni-");
+export const videoStartImage = (model: string) => !!model && (modelProvider(model) !== "google" || model.startsWith("google-ai/gemini-omni-"));
 /** Models installed in Ollama run on this computer and carry this prefix. */
 export const ollamaPrefix = "ollama/";
 export const isOllamaModel = (model: string) => model.startsWith(ollamaPrefix);
@@ -162,6 +162,9 @@ export async function generate(
   sources: ToolSource[] = [],
 ): Promise<GeneratedFile[]> {
   signal.throwIfAborted();
+  if (task.category === "video" && !task.requestId && (task.startImage || images.length) && !videoStartImage(task.model)) {
+    throw new Error("Choose a video model that supports a first frame.");
+  }
   if (task.operation) return processImage(task.operation, images, signal);
   if (task.category === "picture" && task.model === browserImageModel && !task.mediaTool) {
     const bridge = desktopAgents();
@@ -306,7 +309,7 @@ export async function generate(
     }
   }
   const provider = task.category === "3d" || task.mediaTool ? "fal" : modelProvider(task.model);
-  const call = (options: ProviderRequest) => request(provider, { ...options, model: task.model, signal });
+  const call = (options: ProviderRequest) => request(provider, { ...options, model: task.model, signal: options.signal ?? signal });
   if (task.category === "picture" && !task.mediaTool) {
     const caps = pictureCapabilities(task.model);
     if (images.length > 0 && !caps.imageToImage && !caps.referencePictures) {
@@ -320,6 +323,7 @@ export async function generate(
     return files;
   }
   let requestId = task.requestId;
+  let pollTimeout: AbortSignal | undefined;
   try {
     if (!requestId) {
       if (task.texture !== undefined && (typeof task.texture !== "boolean" || task.category !== "3d" || task.model !== "fal-ai/hunyuan3d/v2/multi-view")) throw new Error("Texture control is supported only for Hunyuan3D V2 Multiview.");
@@ -343,12 +347,15 @@ export async function generate(
       if (!requestId || !/^[a-zA-Z0-9_-]{1,100}$/.test(requestId)) throw new Error("Provider returned no valid job ID");
       update({ requestId, status: "Queued · Provider queue" });
     }
-    const deadline = Date.now() + 20 * 60_000;
-    while (Date.now() < deadline) {
-      signal.throwIfAborted();
-      const result = await call({ action: task.category === "video" ? "video-status" : "status", requestId }) as { status?: string; urls?: string[] };
+    pollTimeout = AbortSignal.timeout(20 * 60_000);
+    const pollSignal = AbortSignal.any([signal, pollTimeout]);
+    for (;;) {
+      pollSignal.throwIfAborted();
+      const result = await call({ action: task.category === "video" ? "video-status" : "status", requestId, signal: pollSignal }) as { status?: string; urls?: string[]; message?: string };
       const status = result.status?.toLowerCase();
-      if (["failed", "cancelled", "expired"].includes(status ?? "")) throw new Error("Generation failed at the provider");
+      if (status === "failed" || status === "cancelled" || status === "expired") {
+        throw new Error(result.message || `Generation ${status} at the provider`);
+      }
       if (status === "completed") {
         update({ status: "Generating · Loading result" });
         if (task.mediaTool) {
@@ -369,9 +376,8 @@ export async function generate(
       }
       if (!["pending", "in_queue", "in_progress"].includes(status ?? "")) throw new Error("Provider returned an unknown job status");
       update({ status: status === "in_progress" ? "Generating" : "Queued · Provider queue" });
-      await pause(task.category === "video" ? 15_000 : 5000, signal);
+      await pause(task.category === "video" ? 15_000 : 5000, pollSignal);
     }
-    throw new Error("Still waiting. Use Check job to continue without generating again.");
   } catch (cause) {
     if (signal.aborted && provider === "fal" && requestId) {
       let result: { status?: string };
@@ -385,6 +391,9 @@ export async function generate(
         : result.status === "ALREADY_COMPLETED" ? "Job already completed before cancellation; charges may apply."
         : "Could not confirm job cancellation. Check the provider dashboard; charges may apply.";
       throw new Error(message);
+    }
+    if (!signal.aborted && pollTimeout?.aborted && (cause === pollTimeout.reason || (cause instanceof Error && cause.name === "TimeoutError"))) {
+      throw new Error("Timed out waiting for the provider. Use Check job to continue without generating again.", { cause });
     }
     throw cause;
   }

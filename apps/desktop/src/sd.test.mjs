@@ -56,7 +56,10 @@ test('pinned models and engines carry a hash and a size', () => {
 });
 
 test('engineError turns engine output into a readable message', () => {
-  expect(engineError('ggml_vulkan: ErrorOutOfDeviceMemory')).toContain('memory');
+  const gpuMemory = 'Graphics memory ran out. Close other apps that use the GPU or try a smaller image size.';
+  expect(engineError('ggml_vulkan: ErrorOutOfDeviceMemory')).toBe(gpuMemory);
+  expect(engineError('[W] execution engine cannot make enough memory available on Vulkan0: need 512.00 MB device / 60.67 MB budget, available 379.11 MB device / 1860.93 MB budget --- execution_engine.cpp:947')).toBe(gpuMemory);
+  expect(engineError('[E] unet segment 1/1 (graph) failed during allocated capacity check --- execution_engine.cpp:596')).toBe(gpuMemory);
   expect(engineError('[ERROR] bad model file')).toContain('bad model file');
   expect(engineError('')).toBe('Image generation failed.');
 });
@@ -539,6 +542,7 @@ test('a Hugging Face checkpoint downloads, verifies, runs with its family settin
   const { args } = calls[0];
   expect(args.slice(args.indexOf('-W'), args.indexOf('-W') + 4)).toEqual(['-W', '1024', '-H', '1024']);
   expect(args[args.indexOf('--steps') + 1]).toBe('25');
+  expect(args.slice(args.indexOf('--max-vram'), args.indexOf('--max-vram') + 3)).toEqual(['--max-vram', '-3', '--mmap']);
   expect(sd.remove(custom.id)).toBe(true);
   expect(sd.status().models.some((model) => model.custom)).toBe(false);
   expect(sd.status().engine).toBe(false);

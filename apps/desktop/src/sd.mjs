@@ -21,7 +21,8 @@ const failure = (cause) => /ENOSPC/.test(String(cause?.code ?? cause)) ? 'There 
 /** The last meaningful line the engine printed, for an error the user can act on. */
 export function engineError(output) {
   const text = output.slice(-4000);
-  if (/out of memory|failed to allocate|bad_alloc|ErrorOutOfDeviceMemory/i.test(text)) return 'Not enough memory for this model. Try a smaller model.';
+  if (/out[ _]?of[ _]?device[ _]?memory|cannot make enough memory available on Vulkan|failed during (?:allocated|workspace) capacity check/i.test(text)) return 'Graphics memory ran out. Close other apps that use the GPU or try a smaller image size.';
+  if (/out of memory|failed to allocate|bad_alloc/i.test(text)) return 'Not enough memory for this model. Try a smaller model.';
   if (/vulkan|vk[A-Z]\w+ failed|no .*device/i.test(text) && /fail|error|not found|no /i.test(text)) return 'The image engine could not use this computer’s graphics card.';
   const line = text.split(/\r?\n/).map((item) => item.trim()).filter((item) => /error|fail/i.test(item)).pop();
   return line ? `Image generation failed: ${line.slice(0, 200)}` : 'Image generation failed.';
@@ -276,6 +277,10 @@ export function createSd({ dir, platform = process.platform, arch = process.arch
     const out = join(runDir, 'out.png');
     const { width, height } = image ? editDimensions(aspectRatio ? aspectRatioOf(aspectRatio) : image.width / image.height, resolvedProfile.size) : sdDimensions(aspectRatio, resolvedProfile.size);
     const args = ['-m', checkpointPath, '-p', prompt, '-o', out, '-W', String(width), '-H', String(height), '--steps', String(settings.steps), '--cfg-scale', String(settings.cfg), '-s', String(settings.seed)];
+    // Windows Vulkan can report other apps' VRAM as free. Leave headroom so auto-fit splits the SDXL UNet.
+    if (platform === 'win32' && (model.id === 'sdxl-turbo' || (model.custom && resolvedProfile.headerTypes.includes('sdxl')))) {
+      args.push('--max-vram', '-3', '--mmap');
+    }
     // Tiling saves memory but shifts colors from tile to tile, which shows as a seam around an edited area.
     if (!image || width * height > 512 * 512) args.push('--vae-tiling');
     if (settings.negativePrompt) args.push('-n', settings.negativePrompt);

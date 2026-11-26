@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EffortPicker } from "./effort-picker";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
-import { imagePreview, MAX_MEDIA_ITEMS, promptContent, type MediaPart } from "./media";
+import { imagePreview, MAX_MEDIA_ITEMS, promptContent, textMediaParts, type MediaPart } from "./media";
 import { isLocalPictureModel, mediaToolModel, pictureAiOperation, type ToolSource } from "./media-tools";
 import { downloadPictureAiModel } from "@/hooks/use-picture-ai";
 import { localModelSize } from "@/components/ollama-settings";
@@ -66,11 +66,6 @@ import { storageFile } from "@/lib/storage";
 import { characterContext, characterGeneration, listCharacters, loadCharacterReferences } from "./character-references";
 
 function notifyError(title: string) { toast.add({ title, type: "error" }); }
-function notifyBlockers(blockers: { message: string }[]) {
-  if (blockers.length === 0) return;
-  if (blockers.length === 1) notifyError(blockers[0].message);
-  else toast.add({ title: blockers[0].message, description: blockers.slice(1).map((b) => b.message).join("\n"), type: "error" });
-}
 const storyboardCommand = "/storyboard";
 
 function downloadStoryboardVideo(blob: Blob) {
@@ -187,6 +182,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   const [deleting, setDeleting] = useState<Chat | null>(null);
   const [redrafting, setRedrafting] = useState(false);
   const [videoPlan, setVideoPlan] = useState<{ clips: number; resumes: number; stale: number; pictures: number; model: string; toolBytes: number } | null>(null);
+  const [videoError, setVideoError] = useState<{ owner: string | undefined; message: string }>();
   const videoChecking = useRef(false);
   const [checkingVideo, setCheckingVideo] = useState(false);
   const [startingVideo, setStartingVideo] = useState(false);
@@ -885,7 +881,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     });
   }
 
-  async function runStoryboard(label: string, work: (signal: AbortSignal) => Promise<void>, onFailure?: () => void) {
+  async function runStoryboard(label: string, work: (signal: AbortSignal) => Promise<void>, onFailure?: (message?: string) => void) {
     if (active.current) return;
     const controller = new AbortController();
     active.current = controller;
@@ -893,10 +889,11 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     try {
       await work(controller.signal);
     } catch (cause) {
-      onFailure?.();
+      const message = cause instanceof Error ? cause.message : "Storyboard request failed";
+      onFailure?.(controller.signal.aborted ? undefined : message);
       if (controller.signal.aborted) toast.add({ title: "Generation stopped." });
       else if (cause instanceof MissingApiKeyError) notifyMissingApiKey(cause);
-      else notifyError(cause instanceof Error ? cause.message : "Storyboard request failed");
+      else notifyError(message);
     } finally {
       active.current = null;
       setStatus("");
@@ -1165,7 +1162,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         storageFile,
       });
     } catch (cause) {
-      notifyError(cause instanceof Error ? cause.message : "Could not check the storyboard. Try again.");
+      setVideoError({ owner: boardOwner, message: cause instanceof Error ? cause.message : "Could not check the storyboard. Try again." });
     } finally {
       videoChecking.current = false;
       setCheckingVideo(false);
@@ -1174,10 +1171,11 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   }
 
   async function planStoryboardVideo(story: Storyboard) {
+    setVideoError(undefined);
     const preflight = await checkStoryboardVideo(story, videoModel);
     if (!preflight || latestStoryboard.current !== story) return;
     if (!preflight.ok) {
-      notifyBlockers(preflight.blockers);
+      setVideoError({ owner: boardOwner, message: preflight.blockers.map(({ message }) => message).join("\n") });
       return;
     }
     setVideoPlan({
@@ -1290,10 +1288,13 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     const bridge = desktopVideo();
     if (!bridge || !story.shots) return;
     const preflight = await checkStoryboardVideo(story, model, true);
-    if (!preflight || latestStoryboard.current !== story) return;
+    if (!preflight || latestStoryboard.current !== story) {
+      setVideoPlan(null);
+      return;
+    }
     if (!preflight.ok) {
       setVideoPlan(null);
-      notifyBlockers(preflight.blockers);
+      setVideoError({ owner: boardOwner, message: preflight.blockers.map(({ message }) => message).join("\n") });
       return;
     }
     if (preflight.toolBytes > 0 && !videoPlan?.toolBytes) {
@@ -1339,6 +1340,9 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         if (story.videoItemId) onRemoveFromCanvas?.([story.videoItemId]);
         setStoryboard((current) => current ? { ...current, videoItemId: itemId } : current);
       } finally { URL.revokeObjectURL(url); }
+    }, (message) => {
+      setVideoPlan(null);
+      if (message) setVideoError({ owner: boardOwner, message });
     });
     setStartingVideoDownload(false);
   }
@@ -1448,7 +1452,15 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         setStatus(selection.length ? "Generating · Preparing selected media" : "Generating · Chat response");
       }
       const characters = await loadCharacterReferences(prompt, controller.signal);
-      const routingPrompt = `${prompt.trim()}${characterContext(characters, false)}\n\nSelected 3D model: ${threeDModel || "none"}. ${multiview ? `Multiview: ${multiviewRequirements(threeDModel)}.` : requiresImage(threeDModel) ? "Image-to-3D: requires one image." : "Text-to-3D: no images required."}`;
+      const pictureEdit = isSdModel(pictureModel) && pictureCapabilities(pictureModel, sd.status).imageToImage &&
+        selection.length === 1 && canvasFileKind(selection[0].file) === "image";
+      const pictureContext = pictureEdit
+        ? "\n\nThe selected picture model uses the canvas picture for image-to-image. For requests to make or edit a picture from this selection, call generate_image."
+        : "";
+      const threeDContext = threeDModel
+        ? `Selected 3D model: ${threeDModel}. ${multiview ? `Multiview: ${multiviewRequirements(threeDModel)}.` : requiresImage(threeDModel) ? "Image-to-3D: requires one image." : "Text-to-3D: no images required."}`
+        : "No 3D model is selected.";
+      const routingPrompt = `${prompt.trim()}${characterContext(characters, false)}${pictureContext}\n\n${threeDContext}`;
       if (characters.length && routingPrompt.length > 8000) throw new Error("The prompt is too long. Shorten it before sending.");
       const content = await promptContent(routingPrompt, selection, controller.signal, onModelPreview);
       const images = Array.isArray(content) ? content.filter((part) => part.type === "image_url") : [];
@@ -1456,7 +1468,10 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       const message = await submitMessage(controller.signal);
       const fullHistory = [...history, message];
       setStatus("Generating · Chat response");
-      const input = [...history.slice(-20).map(({ role, content }) => ({ role, content })), { role: "user", content }];
+      const input = [...history.slice(-20).map(({ role, content }) => ({ role, content })), { role: "user", content }]
+        .map((message) => vision.get(llm) === false && Array.isArray(message.content)
+          ? { ...message, content: textMediaParts(message.content) }
+          : message);
       const plan = await request(llmProvider, { action: "route", model: llm, input, signal: controller.signal }) as { text: string; tasks: GenerationTask[] };
       const pictureBridge = desktopPictureAi();
       const pictureStatus = pictureBridge && plan.tasks.some((task) => task.mediaTool && pictureAiOperation(task.mediaTool))
@@ -1883,7 +1898,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       {storyboard && storyboardHost && createPortal(<>
         {storyboard.shots && <div className="absolute top-0 left-0" style={{ transform: `translate(${origin.x}px, ${origin.y}px)` }}>
         <StoryboardShots shots={storyboard.shots} images={storyImages} characters={storyboard.characters ?? []}
-          busy={!!status} status={checkingVideo ? "Checking storyboard…" : status} onEdit={editShot} onReorder={reorderShots} onGenerate={(index) => void generateShot(index, storyboard)} onStop={stopGeneration}
+          busy={!!status} status={checkingVideo ? "Checking storyboard…" : status} videoError={videoError?.owner === boardOwner ? videoError?.message : undefined}
+          onEdit={editShot} onReorder={reorderShots} onGenerate={(index) => void generateShot(index, storyboard)} onStop={stopGeneration}
           renderCharacterReference={(index, close) => <StoryboardCharacters characters={storyboard.characters ?? []} index={index} images={storyImages} status={status}
             onEdit={editCharacter} onRemove={async () => { await removeCharacter(index, storyboard.characters ?? []); close(); }}
             onGenerate={() => void generateCharacter(index, storyboard.characters![index], storyboard.story)}

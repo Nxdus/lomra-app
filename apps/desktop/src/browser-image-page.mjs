@@ -254,7 +254,8 @@ async function open(signal) {
         const kind = ${JSON.stringify(kind)};
         let source;
         if (kind === 'video') {
-          const video = Array.from(document.querySelectorAll('video')).find(item => item.currentSrc || item.src);
+          const reply = Array.from(document.querySelectorAll('model-response')).at(-1);
+          const video = Array.from(reply?.querySelectorAll('video') ?? []).find(item => item.readyState >= 2 && (item.currentSrc || item.src));
           source = video && (video.currentSrc || video.src);
         } else {
           source = Array.from(document.images)
@@ -262,7 +263,7 @@ async function open(signal) {
             .sort((a, b) => b.naturalWidth * b.naturalHeight - a.naturalWidth * a.naturalHeight)[0]?.src;
         }
         if (!source) return null;
-        const response = await fetch(source, { credentials: 'include' });
+        const response = await fetch(source, { credentials: 'include', signal: AbortSignal.timeout(15_000) });
         if (!response.ok) return null;
         const blob = await response.blob();
         if (!blob.type.startsWith(kind + '/') || blob.size > ${Number(limit)}) return null;

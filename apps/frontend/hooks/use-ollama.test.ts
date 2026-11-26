@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ollamaStore } from "./use-ollama";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import { ollamaStore, useOllama } from "./use-ollama";
 
 test("a download keeps going without any screen and reports one steady progress for all its files", async () => {
   const originalFetch = globalThis.fetch;
@@ -42,4 +44,16 @@ test("a download keeps going without any screen and reports one steady progress 
     globalThis.fetch = originalFetch;
     Reflect.deleteProperty(globalThis, "window");
   }
+});
+
+test("Ollama models keep their identity across renders while the first status is pending", () => {
+  let first: ReturnType<typeof useOllama>["models"] | undefined;
+  function Probe() {
+    const { models } = useOllama();
+    if (first) assert.equal(models, first);
+    first = models;
+    return null;
+  }
+  renderToString(createElement(Probe));
+  renderToString(createElement(Probe));
 });

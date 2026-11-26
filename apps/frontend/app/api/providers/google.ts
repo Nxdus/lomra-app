@@ -85,10 +85,10 @@ export function googleModels(result: unknown) {
 }
 
 /** Finished Veo operation: the generated video's download URI, or why there is none. */
-export function veoOperation(result: unknown): { done: boolean; uri?: string } {
+export function veoOperation(result: unknown): { done: boolean; uri?: string; error?: unknown } {
   const operation = result as { done?: unknown; error?: unknown; response?: { generateVideoResponse?: { generatedSamples?: { video?: { uri?: unknown } }[] } } };
   if (operation.done !== true) return { done: false };
   const uri = operation.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri;
   // Only files hosted by the Gemini API may be downloaded with the user's key.
-  return { done: true, uri: !operation.error && typeof uri === "string" && uri.startsWith(`${GOOGLE_API}/files/`) ? uri : undefined };
+  return { done: true, error: operation.error, uri: !operation.error && typeof uri === "string" && uri.startsWith(`${GOOGLE_API}/files/`) ? uri : undefined };
 }

@@ -2,6 +2,105 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { POST } from "./route";
 import { generationPlan } from "./generation-tools";
+import { promptContent } from "@/components/prompt/media";
+
+for (const vision of [false, true, undefined]) {
+  test(`Ollama routing forwards selected image bytes with vision capability ${vision}`, async () => {
+    const file = new File(["image"], "source.png", { type: "image/png" });
+    const signal = new AbortController().signal;
+    const content = await promptContent("Make a blue robot from the selected image", [{ id: "source-1", file }], signal);
+    const request = new Request("http://localhost/api/providers", {
+      method: "POST",
+      body: JSON.stringify({ provider: "ollama", action: "route", model: "ollama/test:4b", input: [{ role: "user", content }] }),
+    });
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async (url, options) => {
+        const payload = JSON.parse(options?.body as string);
+        if (String(url).endsWith("/api/show")) {
+          assert.deepEqual(payload, { model: "test:4b" });
+          return Response.json(vision === undefined ? {} : { capabilities: ["completion", "tools", ...(vision ? ["vision"] : [])] });
+        }
+        assert.match(String(url), /\/v1\/chat\/completions$/);
+        assert.deepEqual(payload.messages[1].content, vision === false
+          ? "Make a blue robot from the selected image\nSelected media count: 1. Attached image: source.png (image_index=0, id=source-1, 5 bytes)"
+          : content);
+        return Response.json({ choices: [{ message: { tool_calls: [
+          { type: "function", function: { name: "generate_image", arguments: JSON.stringify({ prompt: "A blue robot" }) } },
+        ] } }] });
+      }) as typeof fetch;
+      const response = await POST(request);
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { text: "", tasks: [{ category: "picture", prompt: "A blue robot" }] });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+}
+import { generate, type Generation } from "@/components/prompt/generation";
+import type { Provider, ProviderRequest } from "@/components/api-provider";
+
+test("first-frame video surfaces provider rejection, terminal failure, and a pending timeout", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalTimeout = AbortSignal.timeout;
+  const originalTimer = globalThis.setTimeout;
+  const image = "data:image/png;base64,YQ==";
+  const task: Generation = { id: "video", category: "video", model: "selected/video", prompt: "cat", status: "Waiting", startImage: true };
+  const request = async (provider: Provider, { signal, ...options }: ProviderRequest) => {
+    const result = await POST(new Request("http://localhost/api/providers", {
+      method: "POST", signal, headers: { "x-api-key": "test-key" }, body: JSON.stringify({ provider, ...options }),
+    }));
+    const body = await result.json();
+    if (!result.ok) throw new Error(body.message);
+    return body;
+  };
+  const run = (model = task.model) => generate({ ...task, model }, request, new AbortController().signal, () => {}, image);
+  let submits = 0;
+  let checks = 0;
+  let scenario = "rejected";
+  try {
+    globalThis.fetch = (async (url, options) => {
+      if (String(url).endsWith("/videos")) {
+        submits++;
+        assert.deepEqual(JSON.parse(options?.body as string).frame_images, [
+          { type: "image_url", image_url: { url: image }, frame_type: "first_frame" },
+        ]);
+        return scenario === "rejected"
+          ? Response.json({ error: { message: "Image input is unsupported for this model." } }, { status: 422 })
+          : Response.json({ id: "job-1" });
+      }
+      assert.ok(String(url).endsWith("/videos/job-1"));
+      checks++;
+      return scenario === "failed" && checks === 2
+        ? Response.json({ status: "failed", error: { message: "The safety filter blocked this clip." } })
+        : Response.json({ status: "pending" });
+    }) as typeof fetch;
+    await assert.rejects(run("google-ai/veo-3.1-generate-preview"), /supports a first frame/);
+    assert.equal(submits, 0);
+    await assert.rejects(run(), /Image input is unsupported/);
+    assert.equal(checks, 0);
+
+    globalThis.setTimeout = ((fn: () => void, ms?: number) => originalTimer(fn, ms === 15_000 ? 1 : ms)) as typeof setTimeout;
+    scenario = "failed";
+    await assert.rejects(run(), /safety filter blocked this clip/);
+    assert.equal(checks, 2);
+
+    scenario = "pending";
+    const deadline = new AbortController();
+    AbortSignal.timeout = (ms) => {
+      if (ms !== 20 * 60_000) return originalTimeout(ms);
+      originalTimer(() => deadline.abort(new DOMException("Test deadline", "TimeoutError")), 25);
+      return deadline.signal;
+    };
+    await assert.rejects(run(), /Timed out.*Check job/);
+    assert.ok(checks > 2);
+    assert.equal(submits, 3);
+  } finally {
+    globalThis.fetch = originalFetch;
+    AbortSignal.timeout = originalTimeout;
+    globalThis.setTimeout = originalTimer;
+  }
+});
 
 test("3D texture requests preserve booleans with and without view mappings", () => {
   const plan = (args: unknown) => generationPlan({ choices: [{ message: { tool_calls: [{ type: "function", function: { name: "generate_3d", arguments: JSON.stringify(args) } }] } }] });

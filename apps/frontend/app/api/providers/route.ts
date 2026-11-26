@@ -1,11 +1,11 @@
 import { chatCompletion } from "./chat-stream";
-import { falErrorMessage } from "./provider-error";
-import { MAX_MEDIA_BYTES, MAX_MEDIA_ITEMS } from "@/components/prompt/media";
+import { falErrorMessage, providerErrorDetail } from "./provider-error";
+import { MAX_MEDIA_BYTES, MAX_MEDIA_ITEMS, textMediaParts, type MediaPart } from "@/components/prompt/media";
 import { GOOGLE_API, GOOGLE_MODEL_PREFIX, OMNI_MODEL, VEO_MODEL, googleModels, googleTools, omniFileId, omniRequest, veoOperation } from "./google";
 import { generationPlan, generationTools, routingInstruction } from "./generation-tools";
 import { sameOrigin } from "../same-origin";
 import { usd } from "../models/price";
-import { OLLAMA_OFFLINE, OLLAMA_PREFIX, ollamaErrorMessage, ollamaUrl, validOllamaName } from "../ollama/ollama";
+import { OLLAMA_OFFLINE, OLLAMA_PREFIX, ollamaCapabilities, ollamaErrorMessage, ollamaUrl, validOllamaName } from "../ollama/ollama";
 
 function json(data: unknown, status = 200) {
   return Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
@@ -101,10 +101,20 @@ export async function POST(request: Request) {
           (action === "route" && message.role === "system") ||
           !("content" in message) || !validContent(message.content, String(message.role)),
       )) return json({ message: "Valid chat messages are required (up to 10 media items, 20 MB total)" }, 400);
-      url = google ? `${GOOGLE_API}/openai/chat/completions` : local ? `${await ollamaUrl()}/v1/chat/completions` : "https://openrouter.ai/api/v1/chat/completions";
-      payload = { model: upstreamModel, messages: input, stream: true, ...(google ? { stream_options: { include_usage: true } } : {}) };
+      const localBase = local ? await ollamaUrl() : undefined;
+      const capabilities = localBase && action === "route" && mediaCount
+        ? await ollamaCapabilities(localBase, upstreamModel, request.signal)
+        : undefined;
+      const messages = capabilities && !capabilities.includes("vision")
+        ? input.map((message: { role: string; content: string | MediaPart[] }) => ({
+          ...message,
+          content: typeof message.content === "string" ? message.content : textMediaParts(message.content).map((part) => part.text).join("\n"),
+        }))
+        : input;
+      url = google ? `${GOOGLE_API}/openai/chat/completions` : local ? `${localBase}/v1/chat/completions` : "https://openrouter.ai/api/v1/chat/completions";
+      payload = { model: upstreamModel, messages, stream: true, ...(google ? { stream_options: { include_usage: true } } : {}) };
       if (action === "route" && (google || local)) {
-        payload = { model: upstreamModel, messages: [{ role: "system", content: routingInstruction }, ...input], tools: google ? googleTools(generationTools) : generationTools, tool_choice: "auto", stream: true, ...(google ? { stream_options: { include_usage: true } } : {}) };
+        payload = { model: upstreamModel, messages: [{ role: "system", content: routingInstruction }, ...messages], tools: google ? googleTools(generationTools) : generationTools, tool_choice: "auto", stream: true, ...(google ? { stream_options: { include_usage: true } } : {}) };
       } else if (action === "route") {
         payload = { model, messages: [{ role: "system", content: routingInstruction }, ...input],
           modalities: ["text"], provider: { require_parameters: true },
@@ -112,7 +122,7 @@ export async function POST(request: Request) {
       }
     } else if (provider !== "fal" && (action === "image" || action === "video")) {
       if (google && action === "video" && !VEO_MODEL.test(upstreamModel) && !omni) return json({ message: "A valid Google Veo or Omni model ID is required" }, 400);
-      if (google && images?.length && !(omni && action === "video")) return json({ message: "Google models do not support reference images yet" }, 400);
+      if (google && images?.length && !(omni && action === "video")) return json({ message: action === "video" ? "This Google Veo endpoint does not support a first frame. Choose a video model that accepts an image." : "Google models do not support reference images yet" }, 400);
       if (typeof input !== "string" || !input.trim() || input.length > 8000) return json({ message: "A generation prompt is required" }, 400);
       url = google ? (action === "video" ? (omni ? `${GOOGLE_API}/interactions` : `${GOOGLE_API}/models/${upstreamModel}:predictLongRunning`) :`${GOOGLE_API}/openai/images/generations`) : `https://openrouter.ai/api/v1/${action === "image" ? "images" : "videos"}`;
       // Video takes at most one picture, the first frame; images take up to ten references.
@@ -183,6 +193,9 @@ export async function POST(request: Request) {
         if (provider === "fal" && ["submit", "status", "result", "cancel"].includes(action) && ![401, 402, 403, 429].includes(status)) {
           message = await falErrorMessage(response, action, key);
         }
+        if (action === "video" && images?.length && [400, 422].includes(status)) {
+          message = providerErrorDetail(await response.json().catch(() => null), key) || "The video provider rejected the first-frame request.";
+        }
         if (google && action === "verify" && [400, 401, 403].includes(status)) message = "API key was rejected";
         return json({ message }, [400, 401, 402, 403, 404, 422, 429].includes(status) ? status : 502);
       }
@@ -191,12 +204,16 @@ export async function POST(request: Request) {
         return new Response(response.body, { headers: { "Content-Type": "video/mp4", "Cache-Control": "no-store" } });
       }
       if (omni && action === "video-status") {
-        const state = (await response.json() as { state?: unknown })?.state;
-        return json({ status: state === "ACTIVE" ? "completed" : state === "FAILED" ? "failed" : "in_progress" });
+        const file = await response.json() as { state?: unknown };
+        const status = file?.state === "ACTIVE" ? "completed" : file?.state === "FAILED" ? "failed" : "in_progress";
+        return json({ status, ...(status === "failed" ? { message: providerErrorDetail(file, key) || "Google could not process the generated video." } : {}) });
       }
       if (google && (action === "video-status" || action === "video-content")) {
         const operation = veoOperation(await response.json());
-        if (action === "video-status") return json({ status: !operation.done ? "in_progress" : operation.uri ? "completed" : "failed" });
+        if (action === "video-status") {
+          const message = providerErrorDetail({ error: operation.error }, key);
+          return json({ status: !operation.done ? "in_progress" : operation.uri ? "completed" : "failed", ...(message ? { message } : {}) });
+        }
         if (!operation.uri) return json({ message: "Google returned no video" }, 502);
         let file = await fetch(operation.uri, { headers: { "x-goog-api-key": key }, signal, cache: "no-store", redirect: "manual" });
         const location = file.status >= 300 && file.status < 400 ? file.headers.get("location") : null;
@@ -214,6 +231,10 @@ export async function POST(request: Request) {
       }
       const result: unknown = provider !== "fal" && (action === "chat" || action === "route") && response.headers.get("content-type")?.includes("text/event-stream")
         ? await chatCompletion(response) : await response.json();
+      if (action === "video-status" && provider === "openrouter" && result && typeof result === "object" && "status" in result) {
+        const message = providerErrorDetail(result, key);
+        return json({ status: result.status, urls: "urls" in result ? result.urls : undefined, ...(message ? { message } : {}) });
+      }
       if (!result || typeof result !== "object" || ("error" in result && result.error)) {
         return json({ message: "Provider returned an invalid response" }, 502);
       }
