@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { newLocalModelId, readLocalCheckpoint, scanCheckpoints, validLocalPick, validLocalRecord } from './sd-local.mjs';
@@ -19,7 +19,8 @@ test('local records validate ids, absolute checkpoint paths, and file metadata',
 });
 
 test('folder scan finds conventional layouts, bounds traversal, and skips escaping links and pickle', async () => {
-  const scratch = mkdtempSync(join(tmpdir(), 'sd-scan-'));
+  // realpath: Windows runners give tmpdir() as an 8.3 short path, but scan results are canonical.
+  const scratch = realpathSync.native(mkdtempSync(join(tmpdir(), 'sd-scan-')));
   const picked = join(scratch, 'app');
   const outside = join(scratch, 'outside');
   const conventional = join(picked, 'models', 'checkpoints');

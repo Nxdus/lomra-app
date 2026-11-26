@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -11,7 +11,8 @@ import { sdDimensions, sdEngines, sdModels, sdModelUrl } from './sd-models.mjs';
 import { checkpointSample } from './sd-local.mjs';
 
 const sha = (text) => createHash('sha256').update(text).digest('hex');
-const tempDir = () => mkdtempSync(join(tmpdir(), 'lomra-sd-'));
+// realpath: Windows runners give tmpdir() as an 8.3 short path, but checkpoint paths are canonical.
+const tempDir = () => realpathSync.native(mkdtempSync(join(tmpdir(), 'lomra-sd-')));
 const runId = '11111111-1111-1111-1111-111111111111';
 const wait = async (until) => { for (let i = 0; i < 200 && !until(); i++) await new Promise((resolve) => setTimeout(resolve, 5)); };
 
