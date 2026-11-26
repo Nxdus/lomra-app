@@ -136,6 +136,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   const [boardDialog, setBoardDialog] = useState<"preview" | "export" | "timeline" | "review" | "references" | null>(null);
   const [timelineDownload, setTimelineDownload] = useState<{ plan: StoryboardTimelinePlan; action: "preview" | "export"; bytes: number } | null>(null);
   const [startingTimeline, setStartingTimeline] = useState(false);
+  const [renderingTimeline, setRenderingTimeline] = useState(false);
   const [timelinePreview, setTimelinePreview] = useState<{ video: string; captions?: string; blob: Blob } | null>(null);
   const renderedTimeline = useRef<{ key: string; blob: Blob } | null>(null);
   useEffect(() => () => {
@@ -1238,7 +1239,6 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   function returnToTimeline() {
     setTimelineDownload(null);
     setTimelinePreview(null);
-    setBoardDialog("timeline");
   }
 
   async function renderFromTimeline(plan: StoryboardTimelinePlan, action: "preview" | "export") {
@@ -1249,30 +1249,33 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       const tool = await bridge.status();
       if (!tool.supported) throw new Error("Timeline rendering is unavailable on this computer.");
       if (!tool.installed) {
-        setBoardDialog(null);
         setTimelineDownload({ plan, action, bytes: tool.bytes });
         return;
       }
     }
     if (active.current) throw new Error("Wait for the current generation to finish.");
-    setBoardDialog(null);
     await finishTimelineRender(bridge, plan, action, false);
   }
 
   async function finishTimelineRender(bridge: DesktopVideoApi, plan: StoryboardTimelinePlan, action: "preview" | "export", downloadTool: boolean) {
     if (active.current) { returnToTimeline(); return; }
     if (downloadTool) setStartingTimeline(true);
-    await runStoryboard("Generating · Preparing timeline", async (signal) => {
-      if (downloadTool) await ensureVideoTool(bridge, signal, () => {
-        setTimelineDownload(null);
-        setStartingTimeline(false);
-      });
-      const blob = await renderStoryboardPlan(bridge, plan, signal);
-      signal.throwIfAborted();
-      if (action === "export") downloadStoryboardVideo(blob);
-      else setTimelinePreview({ blob, video: URL.createObjectURL(blob), captions: timelineCaptionsUrl(plan.captions) });
-    }, returnToTimeline);
-    setStartingTimeline(false);
+    setRenderingTimeline(true);
+    try {
+      await runStoryboard("Generating · Preparing timeline", async (signal) => {
+        if (downloadTool) await ensureVideoTool(bridge, signal, () => {
+          setTimelineDownload(null);
+          setStartingTimeline(false);
+        });
+        const blob = await renderStoryboardPlan(bridge, plan, signal);
+        signal.throwIfAborted();
+        if (action === "export") downloadStoryboardVideo(blob);
+        else setTimelinePreview({ blob, video: URL.createObjectURL(blob), captions: timelineCaptionsUrl(plan.captions) });
+      }, returnToTimeline);
+    } finally {
+      setRenderingTimeline(false);
+      setStartingTimeline(false);
+    }
   }
 
   // One clip per shot from its picture, then one video from all the clips. Finished pictures and clips stay on their shots, so a stopped run resumes.
@@ -1896,8 +1899,15 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         <StoryboardPreview storyboard={storyboard} images={storyImages} open={boardDialog === "preview"} onOpenChange={(open) => setBoardDialog(open ? "preview" : null)} />
         <StoryboardExport storyboard={storyboard} images={storyImages} open={boardDialog === "export"} onOpenChange={(open) => setBoardDialog(open ? "export" : null)} />
         <StoryboardTimeline storyboard={storyboard} images={storyImages} open={boardDialog === "timeline"} onOpenChange={(open) => setBoardDialog(open ? "timeline" : null)}
-          onSelectTake={(shotId, fileId) => updateShotById(shotId, (shot) => selectShotTake(shot, fileId))}
-          onSave={(timeline) => persistStoryboardChange((current) => ({ ...current, timeline }))}
+          suspended={!!timelineDownload || !!timelinePreview || renderingTimeline}
+          onSave={(timeline, takes) => persistStoryboardChange((current) => ({
+            ...current,
+            timeline,
+            shots: current.shots?.map((shot) => {
+              const fileId = shot.id && takes.get(shot.id);
+              return fileId ? selectShotTake(shot, fileId) : shot;
+            }),
+          }))}
           onPreview={(plan) => renderFromTimeline(plan, "preview")} onExport={(plan) => renderFromTimeline(plan, "export")} />
         <StoryboardReview storyboard={storyboard} images={storyImages} open={boardDialog === "review"} onOpenChange={(open) => setBoardDialog(open ? "review" : null)}
           contextKey={JSON.stringify([canvasId, boardOwner, llm])} unavailableReason={reviewUnavailable} complete={completeStoryboardReview} onUpdate={setStoryboard} />
