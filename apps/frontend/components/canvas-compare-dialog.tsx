@@ -8,6 +8,7 @@ import { Tip } from "@/components/tip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useLocal3d } from "@/hooks/use-local3d";
 import { useSd } from "@/hooks/use-sd";
@@ -35,6 +36,8 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [split, setSplit] = useState(50);
   const [sizes, setSizes] = useState<Record<string, { width: number; height: number }>>({});
+  const [previews, setPreviews] = useState<Record<string, { attempt: number; failed: boolean }>>({});
+  const splitReady = items.every(item => sizes[item.id] && !previews[item.id]?.failed);
   const dragPan = useRef<{ pointer: number; x: number; y: number; originX: number; originY: number } | null>(null);
   const dragSplit = useRef<number | null>(null);
   const sliderStage = useRef<HTMLDivElement>(null);
@@ -67,6 +70,33 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
   );
   const hasAnyProvenance = items.some((item) => !!item.harness?.provenance);
 
+  function previewImage(item: VisibleImage) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img key={previews[item.id]?.attempt ?? 0} src={item.url} alt={itemTitle(item)} draggable={false}
+        style={imageTransformStyle} className={cn("size-full object-contain", previews[item.id]?.failed && "invisible")}
+        onLoad={(event) => recordSize(item.id, event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)}
+        onError={() => setPreviews(current => ({ ...current, [item.id]: { attempt: current[item.id]?.attempt ?? 0, failed: true } }))} />
+    );
+  }
+
+  function previewStatus(item: VisibleImage) {
+    if (previews[item.id]?.failed) return (
+      <div className="pointer-events-auto flex size-full min-h-24 flex-col items-center justify-center gap-2 bg-muted p-3 text-center text-sm">
+        <p role="alert">Could not load {itemTitle(item)}</p>
+        <Button variant="outline" size="sm" onClick={() => {
+          setSizes(current => {
+            const next = { ...current };
+            delete next[item.id];
+            return next;
+          });
+          setPreviews(current => ({ ...current, [item.id]: { failed: false, attempt: (current[item.id]?.attempt ?? 0) + 1 } }));
+        }}>Retry</Button>
+      </div>
+    );
+    if (!sizes[item.id]) return <Skeleton className="size-full motion-reduce:animate-none" role="status" aria-label={`Loading ${itemTitle(item)}`} />;
+  }
+
   function setZoomSynced(next: number) {
     const clamped = clamp(Math.round(next * 100) / 100, MIN_ZOOM, MAX_ZOOM);
     setZoom(clamped);
@@ -85,7 +115,7 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
   }
 
   function startPan(event: PointerEvent<HTMLDivElement>) {
-    if (zoom <= 1 || !event.isPrimary || event.button !== 0) return;
+    if (zoom <= 1 || !event.isPrimary || event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
     event.preventDefault();
     dragPan.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY, originX: pan.x, originY: pan.y };
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -108,6 +138,7 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
   }
 
   function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (activeMode === "slider" && !splitReady) return;
     const target = event.target as HTMLElement | null;
     if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") return;
     if (event.key === "+" || event.key === "=") {
@@ -123,7 +154,7 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
   }
 
   function handleViewportKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (zoom <= 1) return;
+    if (zoom <= 1 || event.target !== event.currentTarget) return;
     const step = event.shiftKey ? 40 : 16;
     const delta = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[event.key];
     if (!delta) return;
@@ -183,18 +214,18 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
             )}
             <div className="flex items-center gap-1 rounded-4xl border bg-muted/40 p-1" role="group" aria-label="Zoom controls">
               <Tip label="Zoom out (-)">
-                <Button type="button" variant="ghost" size="icon-xs" aria-label="Zoom out" disabled={zoom <= MIN_ZOOM} onClick={() => setZoomSynced(zoom - 0.5)}>
+                <Button type="button" variant="ghost" size="icon-xs" aria-label="Zoom out" disabled={(activeMode === "slider" && !splitReady) || zoom <= MIN_ZOOM} onClick={() => setZoomSynced(zoom - 0.5)}>
                   <ZoomOutIcon />
                 </Button>
               </Tip>
               <span className="min-w-12 text-center text-xs font-medium tabular-nums" aria-live="polite">{Math.round(zoom * 100)}%</span>
               <Tip label="Zoom in (+)">
-                <Button type="button" variant="ghost" size="icon-xs" aria-label="Zoom in" disabled={zoom >= MAX_ZOOM} onClick={() => setZoomSynced(zoom + 0.5)}>
+                <Button type="button" variant="ghost" size="icon-xs" aria-label="Zoom in" disabled={(activeMode === "slider" && !splitReady) || zoom >= MAX_ZOOM} onClick={() => setZoomSynced(zoom + 0.5)}>
                   <ZoomInIcon />
                 </Button>
               </Tip>
               <Tip label="Reset zoom (0)">
-                <Button type="button" variant="ghost" size="icon-xs" aria-label="Reset zoom" disabled={zoom === 1 && pan.x === 0 && pan.y === 0} onClick={resetView}>
+                <Button type="button" variant="ghost" size="icon-xs" aria-label="Reset zoom" disabled={(activeMode === "slider" && !splitReady) || (zoom === 1 && pan.x === 0 && pan.y === 0)} onClick={resetView}>
                   <RotateCcwIcon />
                 </Button>
               </Tip>
@@ -209,10 +240,10 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
               tabIndex={0}
               role="region"
               aria-label={`Before and after comparison: ${itemTitle(items[0])} and ${itemTitle(items[1])}`}
-              onWheel={onViewportWheel}
-              onKeyDown={handleViewportKeyDown}
+              onWheel={splitReady ? onViewportWheel : undefined}
+              onKeyDown={splitReady ? handleViewportKeyDown : undefined}
               onPointerDown={(event) => {
-                if ((event.target as HTMLElement).closest("[data-split-handle]")) return;
+                if (!splitReady || (event.target as HTMLElement).closest("[data-split-handle]")) return;
                 if (zoom > 1) { startPan(event); return; }
                 if (!event.isPrimary || event.button !== 0) return;
                 event.preventDefault();
@@ -239,32 +270,18 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
             >
               {/* Left (before) picture */}
               <div className="pointer-events-none absolute inset-0 overflow-hidden" style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={items[0].url}
-                  alt={itemTitle(items[0])}
-                  draggable={false}
-                  style={imageTransformStyle}
-                  className="size-full object-contain"
-                  onLoad={(event) => recordSize(items[0].id, event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)}
-                />
+                {previewImage(items[0])}
               </div>
               {/* Right (after) picture */}
               <div className="pointer-events-none absolute inset-0 overflow-hidden" style={{ clipPath: `inset(0 0 0 ${split}%)` }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={items[1].url}
-                  alt={itemTitle(items[1])}
-                  draggable={false}
-                  style={imageTransformStyle}
-                  className="size-full object-contain"
-                  onLoad={(event) => recordSize(items[1].id, event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)}
-                />
+                {previewImage(items[1])}
               </div>
               <Badge variant="secondary" className="pointer-events-none absolute top-3 left-3 max-w-[40%] truncate">{itemTitle(items[0])}</Badge>
               <Badge variant="secondary" className="pointer-events-none absolute top-3 right-3 max-w-[40%] truncate">{itemTitle(items[1])}</Badge>
-              {/* Split handle */}
-              <div
+              {!splitReady && <div className="pointer-events-none absolute inset-0 grid grid-cols-2">
+                {items.map(item => <div key={item.id} className="min-w-0">{previewStatus(item)}</div>)}
+              </div>}
+              {splitReady && <div
                 data-split-handle
                 role="slider"
                 tabIndex={0}
@@ -296,7 +313,7 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
                 <span className="absolute top-1/2 left-1/2 flex size-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border bg-background text-foreground shadow-md">
                   <MoveHorizontalIcon className="size-4" aria-hidden="true" />
                 </span>
-              </div>
+              </div>}
             </div>
           </div>
         ) : (
@@ -329,15 +346,8 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
                     zoom > 1 && "cursor-grab active:cursor-grabbing",
                   )}
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={item.url}
-                    alt={itemTitle(item)}
-                    draggable={false}
-                    style={imageTransformStyle}
-                    className="size-full object-contain"
-                    onLoad={(event) => recordSize(item.id, event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)}
-                  />
+                  {previewImage(item)}
+                  <div className="pointer-events-none absolute inset-0">{previewStatus(item)}</div>
                 </div>
               </div>
             ))}
@@ -380,12 +390,12 @@ export function CanvasCompareDialog({ items, onClose, onUseSetup, busy = false }
                   <tr
                     key={row.id}
                     data-diff={row.differs ? "true" : undefined}
-                    className={cn(row.differs ? "bg-amber-500/10 text-foreground dark:bg-amber-400/10" : "text-muted-foreground")}
+                    className={cn(row.differs ? "bg-muted/60 text-foreground" : "text-muted-foreground")}
                   >
                     <th scope="row" className="px-3 py-2 align-top font-medium whitespace-nowrap">
                       <span className="inline-flex items-center gap-1.5">
                         <span>{row.label}</span>
-                        {row.differs && <Badge variant="secondary" className="border border-amber-500/40 bg-amber-500/15 text-[10px] text-amber-900 dark:text-amber-200">Differs</Badge>}
+                        {row.differs && <Badge variant="secondary">Differs</Badge>}
                       </span>
                     </th>
                     {row.values.map((value, index) => (

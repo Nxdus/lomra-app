@@ -2,6 +2,7 @@
 
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { GripVerticalIcon } from "lucide-react";
+import { Tip } from "@/components/tip";
 import { Button } from "@/components/ui/button";
 import { PopupBoundaryContext } from "@/components/ui/popup-boundary";
 
@@ -37,12 +38,11 @@ export function PictureTools({ children }: { children: ReactNode }) {
 
   return (
     <div ref={menu} role="toolbar" aria-label="Image editing tools" style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }} className="absolute top-full left-1/2 mt-4 flex max-h-[calc(var(--app-content-height)-2rem)] w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 gap-1 overflow-y-auto rounded-3xl border bg-popover p-2 text-popover-foreground shadow-lg">
-      <Button
+      <Tip label="Drag to move or use arrow keys"><Button
         variant="ghost"
         size="icon-sm"
         className="shrink-0 touch-none cursor-grab active:cursor-grabbing"
         aria-label="Move picture tools. Drag or use arrow keys."
-        title="Drag to move · Arrow keys to reposition"
         onPointerDown={(event) => {
           if (!event.isPrimary || event.button !== 0) return;
           event.preventDefault();
@@ -69,7 +69,7 @@ export function PictureTools({ children }: { children: ReactNode }) {
         }}
       >
         <GripVerticalIcon />
-      </Button>
+      </Button></Tip>
       {/* The padding keeps focus rings inside the scroll area, which would cut them off. */}
       <div className="-m-1 flex min-w-0 items-center gap-1 overflow-x-auto p-1">{children}</div>
 

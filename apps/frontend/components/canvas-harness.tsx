@@ -30,6 +30,8 @@ export function CanvasCardDialog({ item, items, onLoaded, onClose, onSave, onUse
   busy?: boolean;
 }) {
   const id = useId();
+  const [discard, setDiscard] = useState(false);
+  const keepEditing = useRef<HTMLButtonElement>(null);
   const card = !item || item.file.type === canvasCardType;
   const [role, setRole] = useState<(typeof canvasRoles)[number] | "Unassigned">(item?.harness?.role ?? (card ? "Brief" : "Unassigned"));
   const [title, setTitle] = useState(item?.harness?.title ?? "");
@@ -46,7 +48,15 @@ export function CanvasCardDialog({ item, items, onLoaded, onClose, onSave, onUse
   const targetItems = targets.map(other => ({ value: other.id, label: `${itemTitle(other)} · ${other.id.slice(0, 8)}` }));
   const provenance = item?.harness?.provenance;
 
-  return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
+  function requestClose() {
+    const dirty = title !== (item?.harness?.title ?? "") || notes !== (item?.harness?.notes ?? "") ||
+      role !== (item?.harness?.role ?? (card ? "Brief" : "Unassigned")) ||
+      JSON.stringify(links) !== JSON.stringify(item?.harness?.links ?? []) || (linking && !!target);
+    if (dirty) setDiscard(true);
+    else onClose();
+  }
+
+  return <Dialog open onOpenChange={open => { if (!open) requestClose(); }}>
     <DialogContent initialFocus={card ? titleInput : heading} className={card ? undefined : "sm:max-w-3xl"}>
       <DialogHeader className="pr-10">
         <DialogTitle ref={heading} tabIndex={-1} className="truncate leading-normal outline-none" title={item && itemTitle(item)}>{item && <span className="sr-only">Canvas details · </span>}{item ? itemTitle(item) : "Add canvas card"}</DialogTitle>
@@ -109,9 +119,15 @@ export function CanvasCardDialog({ item, items, onLoaded, onClose, onSave, onUse
             </div> : targets.length > 0 && <Button ref={addLink} type="button" variant="outline" size="sm" className="w-fit!" disabled={links.length >= canvasLinkLimit} onClick={() => setLinking(true)}><PlusIcon data-icon="inline-start" />Add link</Button>}
           </Field>}
         </FieldGroup>
-        <DialogFooter className="mt-auto"><Button type="submit" disabled={card && !title.trim()}>Save</Button></DialogFooter>
+        <DialogFooter className="mt-auto"><Button type="button" variant="outline" onClick={requestClose}>Cancel</Button><Button type="submit" disabled={card && !title.trim()}>Save</Button></DialogFooter>
       </form>
       </div>
+      <Dialog open={discard} onOpenChange={setDiscard}>
+        <DialogContent showCloseButton={false} initialFocus={keepEditing}>
+          <DialogHeader><DialogTitle>Discard changes?</DialogTitle><DialogDescription>Your changes won’t be saved.</DialogDescription></DialogHeader>
+          <DialogFooter><Button ref={keepEditing} variant="outline" onClick={() => setDiscard(false)}>Keep editing</Button><Button variant="destructive" onClick={onClose}>Discard changes</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DialogContent>
   </Dialog>;
 }

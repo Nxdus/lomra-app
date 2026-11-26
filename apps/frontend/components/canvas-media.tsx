@@ -3,6 +3,8 @@
 import { CameraIcon, EllipsisIcon, PauseIcon, PlayIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { CanvasModelViewer } from "@/components/canvas-model-viewer";
+import { Tip } from "@/components/tip";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -119,9 +121,9 @@ export function CanvasMedia({ image, onLoaded, onCaptureFrame }: {
           onKeyDown={(event) => event.stopPropagation()}
         >
           <div className="flex min-w-28 items-center gap-1 p-1">
-            <Button variant="ghost" size="icon-xs" className="hover:bg-white/20" aria-label={playback.paused ? "Play" : "Pause"} onClick={togglePlayback}>
+            <Tip label={playback.paused ? "Play" : "Pause"}><Button variant="ghost" size="icon-xs" className="hover:bg-white/20" aria-label={playback.paused ? "Play" : "Pause"} onClick={togglePlayback}>
               {playback.paused ? <PlayIcon /> : <PauseIcon />}
-            </Button>
+            </Button></Tip>
             <Slider aria-label="Video timeline (seconds)"
               className="min-w-0 flex-1 [&_[data-slot=slider-control]]:h-6 [&_[data-slot=slider-track]]:h-1 [&_[data-slot=slider-track]]:bg-white/40 [&_[data-slot=slider-range]]:bg-white [&_[data-slot=slider-thumb]]:size-3 [&_[data-slot=slider-thumb]]:border-white"
               min={0} max={playback.duration || 1}
@@ -129,14 +131,14 @@ export function CanvasMedia({ image, onLoaded, onCaptureFrame }: {
               onValueChange={(value) => {
                 if (videoRef.current) videoRef.current.currentTime = typeof value === "number" ? value : value[0];
               }} />
-            <Button variant="ghost" size="icon-xs" className="hover:bg-white/20" aria-label="Capture current frame as image" title="Capture current frame"
+            <Tip label="Capture current frame"><Button variant="ghost" size="icon-xs" className="hover:bg-white/20" aria-label="Capture current frame as image"
               disabled={capturing} onClick={captureFrame}>
               <CameraIcon aria-hidden="true" />
-            </Button>
+            </Button></Tip>
             <Popover>
-              <PopoverTrigger render={<Button variant="ghost" size="icon-xs" className="hover:bg-white/20 aria-expanded:bg-white/20" aria-label="Video options" />}>
+              <Tip label="Video options"><PopoverTrigger render={<Button variant="ghost" size="icon-xs" className="hover:bg-white/20 aria-expanded:bg-white/20" aria-label="Video options" />}>
                 <EllipsisIcon />
-              </PopoverTrigger>
+              </PopoverTrigger></Tip>
               <PopoverContent data-canvas-interactive onKeyDown={(event) => event.stopPropagation()} className="w-48" side="top">
                 <PopoverTitle>Video options</PopoverTitle>
                 <Slider aria-label="Volume" min={0} max={1} step={0.05} value={[playback.muted ? 0 : playback.volume]}
@@ -147,12 +149,15 @@ export function CanvasMedia({ image, onLoaded, onCaptureFrame }: {
                 <Button variant="outline" size="sm" onClick={() => { if (videoRef.current) videoRef.current.muted = !playback.muted; }}>
                   {playback.muted ? "Unmute" : "Mute"}
                 </Button>
-                <label className="flex items-center justify-between gap-2">
-                  Speed
-                  <select value={playback.rate} onChange={(event) => { if (videoRef.current) videoRef.current.playbackRate = Number(event.target.value); }}>
-                    {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
-                  </select>
-                </label>
+                <div className="flex items-center justify-between gap-2">
+                  <span>Speed</span>
+                  <Select value={String(playback.rate)} onValueChange={(rate) => { if (rate && videoRef.current) videoRef.current.playbackRate = Number(rate); }}>
+                    <SelectTrigger size="sm" aria-label="Playback speed"><SelectValue>{playback.rate}×</SelectValue></SelectTrigger>
+                    <SelectContent side="top" align="end" alignItemWithTrigger={false}><SelectGroup>
+                      {["0.25", "0.5", "0.75", "1", "1.25", "1.5", "1.75", "2"].map(rate => <SelectItem key={rate} value={rate}>{rate}×</SelectItem>)}
+                    </SelectGroup></SelectContent>
+                  </Select>
+                </div>
                 {typeof document !== "undefined" && document.fullscreenEnabled &&
                   <Button variant="outline" size="sm" onClick={() => { if (videoRef.current) openFullscreen(videoRef.current); }}>Fullscreen</Button>}
                 {typeof document !== "undefined" && document.pictureInPictureEnabled &&
