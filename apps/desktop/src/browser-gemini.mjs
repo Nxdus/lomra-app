@@ -181,7 +181,7 @@ export async function generateGeminiMedia({ kind, prompt, images, aspectRatio } 
         const download = control(state, done, downloadRoles) ?? (kind === 'video' ? control(state, share) : undefined);
         if (download) return download;
         const text = await page.responseText(state.url);
-        if (declined.test(text)) throw new Error(`Gemini could not create the ${kind}: ${text.slice(0, 600)}`);
+        if (text.length < 600 && declined.test(text)) throw new Error(`Gemini could not create the ${kind}: ${text}`);
         if (kind === 'video') {
           const data = await page.fetchMedia?.(state.url, kind, limit).catch(() => undefined);
           signal.throwIfAborted();
