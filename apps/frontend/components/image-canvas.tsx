@@ -614,8 +614,8 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       ...image, x: image.x + direction[0] * step, y: image.y + direction[1] * step,
     } : image);
     if (!areCanvasItemsEqual(previous, next)) {
-      recordCanvasHistory({ items: previous, type: "move" });
       update(next);
+      recordCanvasHistory({ items: previous, type: "move" });
     }
   }
 
@@ -829,7 +829,11 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           importFiles(Array.from(event.dataTransfer.files), point(event.clientX, event.clientY));
         }}
         onKeyDown={(event) => {
-          if (!ready || event.defaultPrevented || event.target !== event.currentTarget) return;
+          if (!ready || event.defaultPrevented) return;
+          const target = event.target;
+          if (target !== event.currentTarget && (
+            !(target instanceof HTMLElement) || !target.hasAttribute("data-canvas-image") || !event.currentTarget.contains(target)
+          )) return;
 
           if (isUndoKeyboardShortcut(event)) {
             event.preventDefault();
