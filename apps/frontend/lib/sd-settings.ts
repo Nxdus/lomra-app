@@ -15,14 +15,17 @@ export type SdNumber = keyof typeof sdRanges;
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 
+export function validSdRangeNumber(range: { min: number; max: number; whole: boolean }, value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= range.min && value <= range.max && (!range.whole || Number.isInteger(value));
+}
+
 export function validSdNumber(name: SdNumber, value: unknown): value is number {
-  const { min, max, whole } = sdRanges[name];
-  return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max && (!whole || Number.isInteger(value));
+  return validSdRangeNumber(sdRanges[name], value);
 }
 
 const validNegativePrompt = (value: unknown) => typeof value === "string" && value.length <= sdNegativePromptLimit;
 
-function validSettings(value: unknown) {
+export function validSdModelSettings(value: unknown) {
   return record(value) && Object.entries(value).every(([name, saved]) => name === "negativePrompt" ? validNegativePrompt(saved)
     : Object.hasOwn(sdRanges, name) && validSdNumber(name as SdNumber, saved));
 }
@@ -30,7 +33,7 @@ function validSettings(value: unknown) {
 /** The saved `sd-settings` setting: one entry per model id. */
 export function validSdSettings(value: unknown) {
   return record(value) && Object.keys(value).length <= 200 &&
-    Object.entries(value).every(([model, saved]) => /^[a-z0-9-]{1,64}$/.test(model) && validSettings(saved));
+    Object.entries(value).every(([model, saved]) => /^[a-z0-9-]{1,64}$/.test(model) && validSdModelSettings(saved));
 }
 
 export function validSdUsed(value: unknown) {

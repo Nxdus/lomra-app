@@ -5,6 +5,7 @@ import { ApiKeysPanel } from "@/components/api-settings";
 import type { KeyedProvider } from "@/components/api-provider";
 import { OllamaSettings } from "@/components/ollama-settings";
 import { SdSettings } from "@/components/sd-settings";
+import { PictureAiSettings } from "@/components/picture-ai-settings";
 import { Local3dSettings } from "@/components/local3d-settings";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -102,6 +103,8 @@ export function ModelSetupDialog({
             <OllamaSettings />
             <Separator />
             <SdSettings search={imageSearch} />
+            <Separator />
+            <PictureAiSettings />
             <Separator />
             <Local3dSettings />
           </TabsContent>

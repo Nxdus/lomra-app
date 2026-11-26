@@ -103,7 +103,7 @@ export function SdHuggingFace({ status, onDownload, initialQuery = "" }: {
       <Combobox items={found.map((item) => item.id)} filter={null} value={null} open={open} onOpenChange={setOpen} inputValue={query}
         onInputValueChange={(text, { reason }) => { if (reason === "input-change") change(text); }}
         onValueChange={(value) => { if (typeof value === "string") pick(value); }}>
-        <ComboboxInput ref={input} className="h-11" showTrigger={false} placeholder="Search Hugging Face or paste a link" aria-label="Hugging Face model to download" autoComplete="off" spellCheck={false} maxLength={200}>
+        <ComboboxInput ref={input} className="h-11" showTrigger={false} placeholder="Search Hugging Face or paste a link" aria-label="Hugging Face model to download" autoComplete="off" spellCheck={false} maxLength={1800}>
           <InputGroupAddon align="inline-end">
             <InputGroupButton type="submit" size="icon-sm" aria-label="Choose a version to download" disabled={loading || !found.length}><DownloadIcon aria-hidden="true" /></InputGroupButton>
           </InputGroupAddon>

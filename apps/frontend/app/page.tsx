@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { FloatingPrompt } from "@/components/prompt/floating-prompt";
+import { FloatingPrompt, type PromptHandle } from "@/components/prompt/floating-prompt";
 import { ImageCanvas, type CanvasHandle, type VisibleImage } from "@/components/image-canvas";
 import type { ImageBounds } from "@/lib/image-canvas/image-canvas-resize";
 import { PopupBoundaryContext } from "@/components/ui/popup-boundary";
@@ -9,9 +9,11 @@ import { FirstRunFlow } from "@/components/first-run/first-run-flow";
 
 export default function Home() {
   const canvas = useRef<CanvasHandle>(null);
+  const prompt = useRef<PromptHandle>(null);
   const [selection, setSelection] = useState<VisibleImage[]>([]);
   const [canvasReady, setCanvasReady] = useState(false);
   const [canvasId, setCanvasId] = useState("default");
+  const [promptBusy, setPromptBusy] = useState(false);
   const [storyboardHost, setStoryboardHost] = useState<HTMLElement | null>(null);
   const [storyboardOrigin, setStoryboardOrigin] = useState({ x: 0, y: 0 });
   const [videoItem, setVideoItem] = useState<string>();
@@ -31,15 +33,15 @@ export default function Home() {
       </div>
       <main ref={setContentBoundary} className="relative min-h-0 flex-1 overflow-hidden">
         <PopupBoundaryContext value={contentBoundary ?? undefined}>
-          <ImageCanvas ref={canvas} onSelectionChange={setSelection} onReadyChange={setCanvasReady} onCanvasChange={setCanvasId} onStoryboardHost={setStoryboardHost} onStoryboardOrigin={setStoryboardOrigin} watchItem={videoItem} onWatchedBounds={setVideoBounds} />
+          <ImageCanvas ref={canvas} onSelectionChange={setSelection} onReadyChange={setCanvasReady} onCanvasChange={setCanvasId} onStoryboardHost={setStoryboardHost} onStoryboardOrigin={setStoryboardOrigin} watchItem={videoItem} onWatchedBounds={setVideoBounds} promptBusy={promptBusy} onUseSetup={(item, items) => void prompt.current?.useSetup(item, items)} onMakeVariations={(item, items) => void prompt.current?.makeVariations(item, items)} onGenerateAgain={(item, items) => void prompt.current?.generateAgain(item, items)} />
           <FirstRunFlow canvasRef={canvas} canvasReady={canvasReady} />
           <div className="relative z-10">
-            <FloatingPrompt key={canvasId} canvasId={canvasId} storyboardHost={storyboardHost} storyboardOrigin={storyboardOrigin} videoBounds={videoBounds} onVideoItem={setVideoItem} onRemoveFromCanvas={(ids) => canvas.current?.removeItems(ids)} loading={!canvasReady} selection={selection} onDeselect={(ids) => canvas.current?.deselect(ids)} onModelPreview={(id) => {
+            <FloatingPrompt ref={prompt} key={canvasId} canvasId={canvasId} storyboardHost={storyboardHost} storyboardOrigin={storyboardOrigin} videoBounds={videoBounds} onVideoItem={setVideoItem} onRemoveFromCanvas={(ids) => canvas.current?.removeItems(ids)} onSelectItems={(ids) => canvas.current?.selectItems?.(ids)} onBusyChange={setPromptBusy} loading={!canvasReady} selection={selection} onDeselect={(ids) => canvas.current?.deselect(ids)} onModelPreview={(id) => {
               if (!canvas.current) throw new Error("Canvas is not ready");
               return canvas.current.modelPreview(id);
-            }} onAddToCanvas={(files, at, harness) => {
+            }} onAddToCanvas={(files, at, harness, options) => {
               if (!canvas.current) throw new Error("Canvas is not ready");
-              return canvas.current.addFiles(files, at, harness);
+              return canvas.current.addFiles(files, at, harness, options);
             }} onFocusFile={(file) => {
               if (!canvas.current) throw new Error("Canvas is not ready");
               canvas.current.focusFile(file);

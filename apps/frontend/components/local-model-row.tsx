@@ -4,23 +4,27 @@ import { Tip } from "@/components/tip";
 
 type Action = { label: string; icon: ReactNode; onClick: () => void; disabled?: boolean };
 
-export function LocalModelRow({ name, description, size, status, action, secondary }: {
+export function LocalModelRow({ name, description, size, status, control, action, secondary }: {
   name: string;
   description: string;
   size: string;
   status?: string;
+  control?: ReactNode;
   action?: Action;
   /** Shown before `action`. */
   secondary?: Action;
 }) {
   return <div className="flex items-center gap-3 py-2.5 text-sm">
-    <div className="min-w-0 flex-1">
-      <div className="break-words">
-        {name} <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{size}</span>
+    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2">
+      <div className="min-w-0 flex-1 basis-36">
+        <div className="break-words">
+          {name} <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{size}</span>
+        </div>
+        <div className="break-words text-xs text-muted-foreground">
+          {description}{status && <> · <span role="status">{status}</span></>}
+        </div>
       </div>
-      <div className="break-words text-xs text-muted-foreground">
-        {description}{status && <> · <span role="status">{status}</span></>}
-      </div>
+      {control}
     </div>
     <div className="flex h-8 min-w-8 shrink-0">
       {[secondary, action].map((item) => item && <Tip key={item.label} label={item.label}>

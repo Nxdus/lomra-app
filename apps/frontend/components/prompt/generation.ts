@@ -1,7 +1,9 @@
 import { processImage, type ImageOperation } from "./image-tools";
 import { animationInput, animationFiles, rigFiles } from "./animation";
-import { localMediaTool, mediaToolModel, validateMediaTool, type MediaTool, type ToolSource } from "./media-tools";
-import { desktopAgents, desktopLocal3d, desktopSd } from "@/lib/desktop";
+import { localMediaTool, isLocalPictureModel, validMediaToolModel, validateMediaTool, type MediaTool, type ToolSource } from "./media-tools";
+export { isLocalPictureModel, pictureAiPrefix } from "./media-tools";
+import { desktopAgents, desktopLocal3d, desktopPictureAi, desktopSd } from "@/lib/desktop";
+import { filterSdSettings, incompatibleSdSettings, pictureCapabilities, sdModelUnavailable } from "@/lib/picture-capabilities";
 import type { SdSettings, SdUsed } from "@/lib/sd-settings";
 import { loadSdSettings, rememberSdSeed, sdSettingsOf } from "@/lib/sd-settings-store";
 import { restoreRatio, sdPicture } from "./sd-image";
@@ -19,6 +21,8 @@ export type Generation = GenerationTask & {
   motionJobs?: { rig?: string; motion?: string };
   /** What a local Stable Diffusion model used, for repeating the result. */
   sd?: SdUsed;
+  /** Explicit per-run settings (for variations) that bypass the per-model store. */
+  sdSettings?: SdSettings;
   /** A local Stable Diffusion edit: redraw only what is white in `mask` (a picture URL), with settings that replace the saved ones. */
   sdEdit?: SdSettings & { mask: string };
 };
@@ -196,19 +200,34 @@ export async function generate(
   if (task.category === "picture" && isSdModel(task.model) && !task.mediaTool) {
     const bridge = desktopSd();
     if (!bridge) throw new Error("Local image models require the Lomra desktop app.");
+    const sdStatus = await bridge.status?.().catch(() => undefined);
+    const caps = pictureCapabilities(task.model, sdStatus);
+    const model = task.model.slice(sdPrefix.length);
+    const unavailable = sdStatus && sdModelUnavailable(sdStatus.models.find(entry => entry.id === model));
+    if (unavailable) throw new Error(unavailable);
     // Kept with the job, so trying again asks for the picture instead of quietly drawing from the text alone.
     if (images.length) update({ startImage: true });
     else if (task.startImage) throw new Error("Select the picture to edit on the canvas, then try again.");
-    if (images.length > 1) throw new Error("Local Stable Diffusion works from one picture at a time. Select a single picture or choose another image model.");
+    if (task.sdEdit?.mask && !caps.inpaint) throw new Error("This image model cannot edit a brushed area.");
+    if (!task.sdEdit?.mask && !images.length && !caps.textToImage) throw new Error("Select a picture on the canvas first.");
+    if (!task.sdEdit?.mask && images.length > 0 && !caps.imageToImage && !caps.referencePictures) throw new Error("This image model does not support starting from a picture.");
+    if (images.length > caps.maxInputImages) {
+      throw new Error(caps.maxInputImages === 1
+        ? "Local Stable Diffusion works from one picture at a time. Select a single picture or choose another image model."
+        : `Select at most ${caps.maxInputImages} pictures for this image model.`);
+    }
     const abort = () => bridge.cancel(task.id);
     signal.addEventListener("abort", abort, { once: true });
     const stopProgress = bridge.onProgress((event) => { if (event.runId === task.id) update({ status: waitingStatus(event.waiting) ?? `Generating locally… ${event.step}/${event.total}` }); });
     try {
       update({ status: "Generating locally…" });
       await loadSdSettings();
-      const model = task.model.slice(sdPrefix.length);
       const { mask: maskUrl, ...override } = task.sdEdit ?? {};
-      const { strength, ...settings } = { ...sdSettingsOf(model), ...override };
+      const { strength, ...settings } = filterSdSettings(task.sdSettings ?? { ...sdSettingsOf(model), ...override }, caps);
+      if (task.sdSettings) {
+        const issues = incompatibleSdSettings({ ...settings, ...(images.length ? { strength } : {}) }, caps);
+        if (issues.length) throw new Error(issues.join(" "));
+      }
       const source = images.length ? await sdPicture(images[0], signal, maskUrl ? {} : { aspectRatio: task.aspectRatio }) : undefined;
       const mask = maskUrl ? (await sdPicture(maskUrl, signal, { background: "#000" })).url : undefined;
       signal.throwIfAborted();
@@ -250,8 +269,34 @@ export async function generate(
   }
   if (task.mediaTool) {
     validateMediaTool(task.mediaTool);
-    if (task.model !== mediaToolModel(task.mediaTool)) throw new Error("Invalid media tool model.");
+    if (!validMediaToolModel(task.mediaTool, task.model)) throw new Error("Invalid media tool model.");
     if (task.model === "Local media tools") return localMediaTool(task.mediaTool, sources, signal, summary => update({ summary }));
+    if ((task.mediaTool.name === "remove_background" || task.mediaTool.name === "upscale_image") && isLocalPictureModel(task.model)) {
+      const bridge = desktopPictureAi();
+      if (!bridge) throw new Error("Local picture tools require the Lomra desktop app.");
+      const url = images[task.mediaTool.image_index];
+      if (!url) throw new Error("Select the source image on the canvas first.");
+      const operation = task.mediaTool.name === "remove_background" ? "remove-background" : "upscale";
+      const scale = task.mediaTool.name === "upscale_image" ? (task.mediaTool.scale as 2 | 4) : undefined;
+      const label = operation === "remove-background" ? "Removing background locally…" : "Upscaling locally…";
+      const abort = () => bridge.cancel(task.id);
+      signal.addEventListener("abort", abort, { once: true });
+      const stopProgress = bridge.onProgress((event) => {
+        if (event.runId !== task.id) return;
+        const detail = event.stage === "processing" && event.total && event.total > 1 ? ` ${event.done ?? 0}/${event.total}` : "";
+        update({ status: `${label}${detail}` });
+      });
+      try {
+        update({ status: label });
+        const result = await bridge.run(task.id, { operation, image: url, ...(scale ? { scale } : {}) });
+        if ("error" in result) throw new Error(result.error);
+        signal.throwIfAborted();
+        return [{ url: result.image, name: task.mediaTool.name === "remove_background" ? "Background removed" : `Upscaled ${scale}x`, kind: "image" }];
+      } finally {
+        stopProgress();
+        signal.removeEventListener("abort", abort);
+      }
+    }
     if (task.mediaTool.name === "animate_3d" && task.mediaTool.motion_prompt) {
       try { return await generateMotion(task, request, signal, update, sources); }
       catch (cause) {
@@ -263,6 +308,13 @@ export async function generate(
   const provider = task.category === "3d" || task.mediaTool ? "fal" : modelProvider(task.model);
   const call = (options: ProviderRequest) => request(provider, { ...options, model: task.model, signal });
   if (task.category === "picture" && !task.mediaTool) {
+    const caps = pictureCapabilities(task.model);
+    if (images.length > 0 && !caps.imageToImage && !caps.referencePictures) {
+      throw new Error("This image model does not support reference images. Deselect the picture or choose another image model.");
+    }
+    if (images.length > caps.maxInputImages) {
+      throw new Error(`Select at most ${caps.maxInputImages} pictures for this image model.`);
+    }
     const files = imageFiles(await call({ action: "image", input: task.prompt, images, ...(task.aspectRatio ? { aspectRatio: task.aspectRatio } : {}) }));
     if (!files.length) throw new Error("The image model returned no supported images");
     return files;

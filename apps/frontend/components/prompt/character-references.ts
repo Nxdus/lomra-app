@@ -1,6 +1,8 @@
 import { characterImageId, mentionedCharacters, type Character } from "@/lib/characters";
+import type { SdStatus } from "@/lib/desktop";
+import { pictureCapabilities } from "@/lib/picture-capabilities";
 import { storage, storageFile } from "@/lib/storage";
-import { geminiVideoModel, isSdModel, modelProvider, type Generation } from "./generation";
+import { geminiVideoModel, type Generation } from "./generation";
 import { imagePreview, MAX_MEDIA_BYTES, MAX_MEDIA_ITEMS, promptContent } from "./media";
 
 export async function listCharacters(): Promise<Character[]> {
@@ -42,7 +44,7 @@ export function characterContext(references: Reference[], includeNotes = true) {
     references.map(({ character }) => `@${character.name}${includeNotes && character.notes ? `: ${character.notes}` : ""}`).join("\n");
 }
 
-export function characterGeneration(task: Generation, images: string[], references: Reference[]) {
+export function characterGeneration(task: Generation, images: string[], references: Reference[], sdStatus?: SdStatus | null) {
   if (!references.length || task.mediaTool || task.operation) return { task, images };
   const prompt = task.prompt + characterContext(references);
   if (prompt.length > 8000) throw new Error("The prompt and Character notes are too long. Use a shorter prompt or fewer Characters.");
@@ -54,7 +56,7 @@ export function characterGeneration(task: Generation, images: string[], referenc
     }
     return { task: { ...task, prompt }, images: images.length ? images : [references[0].url] };
   }
-  if (isSdModel(task.model) || modelProvider(task.model) === "google") {
+  if (!pictureCapabilities(task.model, sdStatus).referencePictures) {
     throw new Error("The selected image model cannot use Character references. Choose a model that supports reference images.");
   }
   const allImages = [...images];

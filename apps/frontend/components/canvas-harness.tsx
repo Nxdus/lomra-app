@@ -18,12 +18,16 @@ import { canvasHandoff, canvasHandoffZip } from "@/lib/image-canvas/canvas-harne
 
 const itemTitle = (item: CanvasImage) => item.harness?.title ?? item.file.name;
 
-export function CanvasCardDialog({ item, items, onLoaded, onClose, onSave }: {
+export function CanvasCardDialog({ item, items, onLoaded, onClose, onSave, onUseSetup, onMakeVariations, onGenerateAgain, busy }: {
   item?: VisibleImage;
   items: VisibleImage[];
   onLoaded: (id: string, file: File) => void;
   onClose: () => void;
   onSave: (harness: CanvasHarness) => void;
+  onUseSetup?: (item: VisibleImage) => void;
+  onMakeVariations?: (item: VisibleImage) => void;
+  onGenerateAgain?: (item: VisibleImage) => void;
+  busy?: boolean;
 }) {
   const id = useId();
   const card = !item || item.file.type === canvasCardType;
@@ -49,7 +53,10 @@ export function CanvasCardDialog({ item, items, onLoaded, onClose, onSave }: {
         <DialogDescription className={item ? "sr-only" : undefined}>{item ? "Role, title, notes and links of this item." : "Add a brief, reference note or output note to the canvas."}</DialogDescription>
       </DialogHeader>
       <div className={card ? undefined : "grid gap-6 md:grid-cols-2"}>
-      {!card && <CanvasItemSummary item={item} items={items} onLoaded={onLoaded} />}
+      {!card && <CanvasItemSummary item={item} items={items} onLoaded={onLoaded} busy={busy}
+        onUseSetup={onUseSetup ? (chosen) => { onClose(); onUseSetup(chosen); } : undefined}
+        onMakeVariations={onMakeVariations ? (chosen) => { onClose(); onMakeVariations(chosen); } : undefined}
+        onGenerateAgain={onGenerateAgain ? (chosen) => { onClose(); onGenerateAgain(chosen); } : undefined} />}
       <form className="flex min-w-0 flex-col gap-6" onSubmit={event => {
         event.preventDefault();
         if (card && !title.trim()) return;

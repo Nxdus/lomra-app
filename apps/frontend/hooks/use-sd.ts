@@ -23,9 +23,13 @@ export function useSd() {
     return next;
   }, [read]);
   useEffect(() => {
-    const onRemove = () => void refresh();
-    window.addEventListener("sd-model-removed", onRemove);
-    return () => window.removeEventListener("sd-model-removed", onRemove);
+    const onChange = () => void refresh();
+    window.addEventListener("sd-model-removed", onChange);
+    window.addEventListener("sd-status-changed", onChange);
+    return () => {
+      window.removeEventListener("sd-model-removed", onChange);
+      window.removeEventListener("sd-status-changed", onChange);
+    };
   }, [refresh]);
   useEffect(() => {
     let cancelled = false;
@@ -49,5 +53,9 @@ export function useSd() {
     if (!await desktopSd()?.remove(id)) throw new Error("Could not remove the model");
     window.dispatchEvent(new Event("sd-model-removed"));
   }, []);
-  return { status, refresh, download, cancel, remove };
+  const setProfile = useCallback(async (id: string, profileId: string) => {
+    if (!await desktopSd()?.setProfile(id, profileId)) throw new Error("Could not update the model profile");
+    window.dispatchEvent(new Event("sd-status-changed"));
+  }, []);
+  return { status, refresh, download, cancel, remove, setProfile };
 }

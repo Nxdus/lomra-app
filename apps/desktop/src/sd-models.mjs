@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { sdProfiles } from './sd-profiles.mjs';
 
 /**
  * Local image generation runs stable-diffusion.cpp's `sd-cli`. The engine build and the checkpoints below are
@@ -15,27 +16,31 @@ export const sdEngines = {
 
 export const sdEngineUrl = (engine) => `https://github.com/leejet/stable-diffusion.cpp/releases/download/${sdRelease}/${engine.asset}`;
 
-/** Single-file checkpoints. `size` is the long side in pixels the model was trained for; `bytes` is the download size. */
+/** Single-file checkpoints. `sample` hashes 64 evenly spaced 64 KiB ranges for local import deduplication. */
 export const sdModels = [
   {
     id: 'sd-turbo', name: 'SD Turbo', quality: 'Fast', note: 'Recommended. Four steps, quick even without a strong GPU. Stability AI community license.',
     repo: 'stabilityai/sd-turbo', file: 'sd_turbo.safetensors', sha256: '3f067a1b943cf162f2b8f8588f6cf5824bd5b4c7d1d88d87164b9ca123616549', bytes: 5214561328,
-    size: 512, steps: 4, cfg: 1, default: true,
+    sample: '18d22e7fe78e64ba3896eb37daf717887ff804afa35a2e4399eca0134f694ca6',
+    profile: 'turbo', default: true,
   },
   {
     id: 'sdxl-turbo', name: 'SDXL Turbo', quality: 'Better detail', note: 'Needs about 8 GB of memory. Stability AI community license.',
     repo: 'stabilityai/sdxl-turbo', file: 'sd_xl_turbo_1.0_fp16.safetensors', sha256: 'e869ac7d6942cb327d68d5ed83a40447aadf20e0c3358d98b2cc9e270db0da26', bytes: 6938081905,
-    size: 512, steps: 4, cfg: 1,
+    sample: '8358663aaa6baddcc27a101caa466d0044897295ac50dcebb75c79945e3224a6',
+    profile: 'turbo',
   },
   {
     id: 'sd15', name: 'Stable Diffusion 1.5', quality: 'Classic', note: 'Slower (20 steps) but the most flexible. CreativeML OpenRAIL-M license.',
     repo: 'stable-diffusion-v1-5/stable-diffusion-v1-5', file: 'v1-5-pruned-emaonly.safetensors', sha256: '6ce0161689b3853acaa03779ec93eafe75a02f4ced659bee03f50797806fa2fa', bytes: 4265146304,
-    size: 512, steps: 20, cfg: 7,
+    sample: 'f57cd964d430c96a1d09b2b1895838afe198a75347ec52212675036ae2b9614d',
+    profile: 'sd15',
   },
 ];
 
 export const defaultSdModel = sdModels.find((model) => model.default).id;
-export const sdModelUrl = (model) => `https://huggingface.co/${model.repo}/resolve/main/${model.file}`;
+export const encodeHfPath = (file) => file.split('/').map(encodeURIComponent).join('/');
+export const sdModelUrl = (model) => `https://huggingface.co/${model.repo}/resolve/main/${encodeHfPath(model.file)}`;
 
 /** The number a `W:H` aspect ratio stands for; 1 when it is missing or makes no sense. */
 export function aspectRatioOf(aspectRatio) {
@@ -51,20 +56,12 @@ export function sdDimensions(aspectRatio, size) {
   return ratio >= 1 ? { width: size, height: snap(size / ratio) } : { width: snap(size * ratio), height: size };
 }
 
-/**
- * What a downloaded checkpoint is, since the engine needs different settings for each. Other single-file
- * checkpoints from Hugging Face are run with these, and the user picks one when adding a model.
- */
-export const sdFamilies = [
-  { id: 'sd15', name: 'Stable Diffusion 1.x / 2.x', note: '512 px, 20 steps', size: 512, steps: 20, cfg: 7 },
-  { id: 'sdxl', name: 'SDXL', note: '1024 px, 25 steps', size: 1024, steps: 25, cfg: 7 },
-  { id: 'turbo', name: 'Turbo (few steps)', note: '512 px, 4 steps', size: 512, steps: 4, cfg: 1 },
-  { id: 'sdxl-few', name: 'SDXL Lightning or Turbo (few steps)', note: '1024 px, 6 steps', size: 1024, steps: 6, cfg: 1 },
-];
+/** Re-exported for callers/tests that import the profile list under its older name. */
+export const sdFamilies = sdProfiles;
 
 export const hfRepoPattern = /^[A-Za-z0-9][\w.-]{0,95}\/[A-Za-z0-9][\w.-]{0,95}$/;
-/** Single-file checkpoints at the top of a repository; `.ckpt` is left out because it is a pickle. */
-export const hfFilePattern = /^[\w.-]{1,200}\.(?:safetensors|gguf)$/;
+/** Checkpoint paths up to four subfolders deep. Ignore diffusers component directories. */
+export const hfFilePattern = /^(?=.{1,512}$)(?:(?!(?:unet|vae|text_encoder|transformer|controlnet|image_encoder|safety_checker)(?:_\d+)?\/)[\w-][\w. -]{0,199}\/){0,4}[\w-][\w. -]{0,199}\.(?:safetensors|gguf)$/i;
 
 /** A Hugging Face `owner/name` or a huggingface.co link (optionally to one file on `main`), as `{ repo, file? }`. */
 export function parseHuggingFace(input) {
@@ -72,20 +69,28 @@ export function parseHuggingFace(input) {
   if (/^https?:\/\//i.test(path)) {
     try {
       const url = new URL(path);
-      if (url.protocol !== 'https:' || url.hostname !== 'huggingface.co') return null;
-      path = decodeURIComponent(url.pathname).replace(/^\/+|\/+$/g, '');
+      if (url.origin !== 'https://huggingface.co' || url.username || url.password) return null;
+      // URL normalizes dot segments before exposing pathname, so validate the original segments.
+      const raw = /^https:\/\/huggingface\.co\/([^?#]*)/i.exec(path)?.[1];
+      if (!raw) return null;
+      const segments = raw.split('/').map(decodeURIComponent);
+      if (segments.some((segment) => segment.startsWith('.') || /[\\/]/.test(segment))) return null;
+      path = segments.join('/');
     } catch { return null; }
   }
   const [owner, name, kind, revision, ...rest] = path.split('/');
   if (!owner || !name) return null;
   const repo = `${owner}/${name}`;
   if (!hfRepoPattern.test(repo)) return null;
-  const file = (kind === 'blob' || kind === 'resolve') && revision === 'main' && rest.length === 1 && hfFilePattern.test(rest[0]) ? rest[0] : undefined;
+  const target = rest.join('/');
+  const file = (kind === 'blob' || kind === 'resolve') && revision === 'main' && hfFilePattern.test(target) ? target : undefined;
+  if ((kind === 'blob' || kind === 'resolve') && !file && (revision !== 'main' || !/^[\w-][\w.-]*\.ckpt$/i.test(target))) return null;
+  if (kind !== undefined && kind !== 'blob' && kind !== 'resolve' && kind !== 'tree' && !(kind === '' && revision === undefined)) return null;
   return file ? { repo, file } : { repo };
 }
 
 /** A safe, stable id (`hf-…`, usable as a file name and in `sd/<id>`) for a Hugging Face file. */
 export function customModelId(repo, file) {
   const slug = `${repo}-${file.replace(/\.[^.]+$/, '')}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40).replace(/-$/, '');
-  return `hf-${slug}-${createHash('sha1').update(`${repo}/${file}`).digest('hex').slice(0, 6)}`;
+  return `hf-${slug}-${createHash('sha1').update(`${repo}/${file}`).digest('hex').slice(0, file.includes('/') ? 16 : 6)}`;
 }

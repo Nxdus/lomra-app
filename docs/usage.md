@@ -52,7 +52,7 @@ prompt; prompt-driven media tools need a tool-capable chat model.
   recompose the picture for a new aspect ratio (not with local Stable
   Diffusion). With local Stable Diffusion an ordinary checkpoint follows your
   words but can leave visible edges; an inpainting checkpoint blends in better
-  but keeps closer to what is around the area. **Remove BG** uses Fal.AI.
+  but keeps closer to what is around the area. **Remove BG** and **Upscale 2× / 4×** run locally on desktop once downloaded (or via Fal.AI).
 - **Inspect model** opens a GLB viewer: orbit, adjust lighting, show the
   skeleton, play animations at different speeds, and save the current view as a
   PNG up to 2048 px.
@@ -66,12 +66,16 @@ prompt; prompt-driven media tools need a tool-capable chat model.
 
 ## Generate images, video, and 3D
 
-- **Images:** local Stable Diffusion (set up under **Settings → Local models**)
-  or a hosted image model through OpenRouter or Fal.AI. Local Stable Diffusion
-  redraws the picture you select, one at a time; describe the result you want.
-  **Image settings** next to the model picker sets its negative prompt, seed,
-  steps, CFG scale and edit strength. **Canvas details** shows what was used, so
-  you can repeat a result.
+- **Images:** local Stable Diffusion (set up under **Settings → Local models**,
+  where added checkpoints can also switch between compatible
+  profiles) or a hosted image model through OpenRouter or Fal.AI. Local Stable
+  Diffusion redraws the picture you select, one at a time; describe the result
+  you want. **Image settings** next to the model picker sets seed, steps, and
+  (where the model profile supports them) negative prompt, CFG scale and edit
+  strength. **Canvas details** shows what was used and lets you reuse
+  the setup in the prompt, generate a local picture again with the same seed
+  and settings (without the chat), or make 4 local variations. Select 2 to 4 pictures to compare them
+  side by side, or use the slider to compare 2.
 - **Video:** text to video with a supported hosted model.
 - **3D:** turn one image into a GLB with local Hunyuan3D or TripoSR, or use
   Fal.AI for text-to-3D and supported multiview models.
@@ -131,11 +135,15 @@ after a restart.
   Lomra to. Only models that report the `tools` capability are offered.
 - **Stable Diffusion** models run through stable-diffusion.cpp. The search field
   finds other models on Hugging Face (not ones marked for adults), or takes an
-  `owner/name` or a link. Only
+  `owner/name` or a checkpoint link, including files in subfolders. Only
   single-file Stable Diffusion 1.x/2.x and SDXL checkpoints (`.safetensors` or
   `.gguf`) work; Lomra reads the file's header to tell before you download it.
   Turn on **Few-step model** for Turbo, Lightning and LCM models if it is not
-  already.
+  already. Use **Add a file from this computer** to use a checkpoint in place,
+  or **Scan a model folder** to add several checkpoints from ComfyUI (including
+  portable installs), A1111, Forge, or another model folder. If the scan reaches
+  its limit, pick a narrower folder to find more. Use **Locate…** if the file moved or reconnect the drive
+  if it was unplugged. **Remove from Lomra** keeps the original file.
 - **Image-to-3D** (Hunyuan3D 2 Mini, Hunyuan3D 2, TripoSR) requires Windows x64
   and an NVIDIA GPU with at least 6 GB of VRAM.
 
@@ -216,9 +224,7 @@ collision-free limbs or support quadrupeds. Older preset jobs still resume.
 Select source files on the canvas and ask in chat, for example: “remove the background”,
 “upscale 2x”, “extract frames at 1 and 3 seconds”, “trim from 2 to 8 seconds”, or
 “render front, right, back and left views”. Results become new canvas files.
-Background removal uses [Fal BiRefNet V2](https://fal.ai/models/fal-ai/birefnet/v2/api);
-upscaling uses [Fal ESRGAN](https://fal.ai/models/fal-ai/esrgan/api) at 2x or 4x.
-Both require a Fal key in Settings and use provider credits.
+Background removal and 2x or 4x upscaling run locally in the desktop app (BiRefNet Lite and Real-ESRGAN x4v3 on CPU once downloaded under **Settings → Local models**) or through [Fal BiRefNet V2](https://fal.ai/models/fal-ai/birefnet/v2/api) and [Fal ESRGAN](https://fal.ai/models/fal-ai/esrgan/api) with a Fal key.
 Frame extraction (up to 16 PNGs) and GLB views (1024px PNGs, model axes) run locally.
 Trimming runs in compatible browsers such as Chrome, preserves audio, and re-encodes
 to WebM at up to 30fps in real time. Keep the tab active; clips are limited to

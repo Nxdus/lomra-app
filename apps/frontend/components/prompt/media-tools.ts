@@ -29,10 +29,26 @@ export function validateMediaTool(value: unknown): asserts value is MediaTool {
     (tool.name === "render_3d_views" && index(tool.model_index) && Array.isArray(tool.views) && tool.views.length > 0 && tool.views.length <= 4 && new Set(tool.views).size === tool.views.length && tool.views.every(v => Object.hasOwn(viewAngles, v)))
   )) throw new Error("Invalid media tool arguments");
 }
-export function mediaToolModel(tool: MediaTool) {
+export const pictureAiPrefix = "local-picture/";
+export const isLocalPictureModel = (model: string) => model.startsWith(pictureAiPrefix);
+export const hostedPictureToolNames: Readonly<Partial<Record<string, string>>> = {
+  "fal-ai/birefnet/v2": "BiRefNet (Fal)",
+  "fal-ai/esrgan": "ESRGAN (Fal)",
+};
+export function pictureAiOperation(tool: MediaTool): "remove-background" | "upscale" | undefined {
+  if (tool.name === "remove_background") return "remove-background";
+  if (tool.name === "upscale_image") return "upscale";
+  return undefined;
+}
+export function mediaToolModel(tool: MediaTool, localModelId?: string) {
   if (tool.name === "rig_3d") return "fal-ai/meshy/rigging";
   if (tool.name === "animate_3d") return tool.motion_prompt ? "fal-ai/hunyuan-motion" : "fal-ai/meshy/rigging";
-  return tool.name === "remove_background" ? "fal-ai/birefnet/v2" : tool.name === "upscale_image" ? "fal-ai/esrgan" : "Local media tools";
+  if (tool.name === "remove_background") return localModelId ? `${pictureAiPrefix}${localModelId}` : "fal-ai/birefnet/v2";
+  if (tool.name === "upscale_image") return localModelId ? `${pictureAiPrefix}${localModelId}` : "fal-ai/esrgan";
+  return "Local media tools";
+}
+export function validMediaToolModel(tool: MediaTool, model: string) {
+  return model === mediaToolModel(tool) || (pictureAiOperation(tool) !== undefined && isLocalPictureModel(model));
 }
 
 function waitEvent(target: EventTarget, event: string, signal: AbortSignal, timeout = 30_000) {

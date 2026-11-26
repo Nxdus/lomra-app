@@ -272,7 +272,12 @@ const tree = JSON.stringify([{ type: 'file', path: 'my.safetensors', size: weigh
 
 /** Image models downloaded from a real local server; only the host is swapped. */
 function makeSd(url, dir = tempDir(), overrides = {}) {
-  const fetchImpl = (target, init) => fetch(`${url}/${String(target).includes('/tree/') ? 'tree' : String(target).split('/').pop()}`, init);
+  const fetchImpl = async (target, init) => {
+    const isTree = String(target).includes('/tree/');
+    const response = await fetch(`${url}/${isTree ? 'tree' : String(target).split('/').pop()}`, init);
+    if (isTree) Object.defineProperty(response, 'url', { value: String(target) });
+    return response;
+  };
   return createSd({
     dir, platform: 'win32', arch: 'x64', env: {}, fetchImpl, extract: async (_zip, dest) => writeFileSync(join(dest, 'sd-cli.exe'), 'binary'),
     models: [sdModel('one', { default: true }), sdModel('two')], engines: { 'win32-x64': { asset: 'engine.zip', sha256: sha(engineZip), bytes: engineZip.length } }, ...overrides,

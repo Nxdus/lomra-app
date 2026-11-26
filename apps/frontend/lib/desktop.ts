@@ -86,20 +86,42 @@ export function desktopOllama(): DesktopOllamaApi | undefined {
 /** A model waiting for the downloads before it. */
 export type QueuedModel = { id: string; name: string };
 
+export type SdRange = { min: number; max: number; whole: boolean };
+export type SdCapabilities = {
+  textToImage: boolean;
+  imageToImage: boolean;
+  inpaint: boolean;
+  negativePrompt: boolean;
+  cfg: boolean;
+  strength: boolean;
+  outpaint: boolean;
+  referencePictures: boolean;
+};
+/** Capabilities, defaults and ranges of one local image model profile. */
+export type SdProfile = {
+  id: string; name: string; note: string; size: number; steps: number; cfg: number; strength: number;
+  ranges: { steps: SdRange; cfg: SdRange; strength: SdRange };
+  capabilities: SdCapabilities;
+};
 export type SdModel = {
   id: string; name: string; quality: string; note: string; bytes: number; recommended: boolean; installed: boolean;
   /** Bytes of an unfinished download kept on disk; `download` continues it and `remove` deletes it. 0 when there is none. */
   partial: number;
-  /** Added from Hugging Face rather than one of the built-in models; `note` is then its repository. */
+  /** Added from Hugging Face or from this computer. */
   custom: boolean;
+  local?: boolean;
+  localState?: "ready" | "missing" | "changed";
   /** Made for filling in a brushed area; only known for models the user added. */
   inpaint: boolean;
+  /** Resolved profile for this model. */
+  profile: SdProfile;
+  /** Profile ids compatible with this installed custom checkpoint's header. */
+  compatibleProfiles?: string[];
 };
-/** What a checkpoint is, which decides the image size and steps used, such as `sd15` or `sdxl`. */
-export type SdFamily = { id: string; name: string; note: string };
 /** What a Hugging Face file is, from its header. `fewStep` is a guess from its name; the two families are what to download it as. */
 export type SdInspection = { known: false } | { known: true; supported: false }
   | { known: true; supported: true; label: string; inpaint: boolean; family: string; fewStepFamily: string; fewStep: boolean };
+export type SdLocalCandidate = { id: string; name: string; bytes: number; label: string; inpaint: boolean; suggestedProfile: string; compatibleProfiles: string[] };
 export type SdDownloadRequest = string | { repo: string; file: string; family: string };
 export type SdStatus = {
   /** False on a computer the image engine has no build for. */
@@ -114,7 +136,7 @@ export type SdStatus = {
   queued: QueuedModel[];
   /** Why downloads failed, one line per model, ready to show. */
   error: string | null;
-  families: SdFamily[];
+  profiles: SdProfile[];
   models: SdModel[];
 };
 
@@ -125,14 +147,18 @@ export type DesktopSdApi = {
   download(request?: SdDownloadRequest): Promise<boolean>;
   /** A Hugging Face `owner/name` or link gives `repo` (and `file` for a file link); other text searches text-to-image models with a usable file. */
   search(query: string): Promise<{ result: { repo?: string; file?: string; models: { id: string; downloads: number; license?: string }[] } } | { error: string }>;
-  /** Single-file checkpoints at the top of a Hugging Face repository; `id` is the model each one becomes in `status()`. */
-  files(repo: string): Promise<{ result: { id: string; file: string; bytes: number; sha256: string }[] } | { error: string }>;
+  /** Lists checkpoints in a Hugging Face repository or looks up a specific checkpoint. */
+  files(repo: string, file?: string): Promise<{ result: { id: string; file: string; bytes: number; sha256: string }[] } | { error: string }>;
   /** What one of those files is, read from its first bytes. */
   inspect(repo: string, file: string): Promise<{ result: SdInspection } | { error: string }>;
+  pickLocal(mode: "file" | "folder" | "locate", id?: string): Promise<{ result: { files: SdLocalCandidate[]; limited: boolean } | null } | { error: string }>;
+  addLocal(id: string, family: string, downloadEngine: boolean): Promise<{ result: true } | { error: string }>;
   /** Stop the download of one model (the running one when omitted); what was downloaded is kept. */
   cancelDownload(id?: string): Promise<void>;
   /** Delete a downloaded model or its unfinished download; the engine goes with the last one. */
   remove(id: string): Promise<boolean>;
+  /** Switch an installed Hugging Face model to another profile compatible with its header. */
+  setProfile(id: string, profileId: string): Promise<boolean>;
   /** Make one image from a downloaded model, from text or by redrawing `image` (white in `mask` marks the only part redrawn). `runId` is a UUID. */
   generate(runId: string, input: { model: string; prompt: string; aspectRatio?: string; image?: string; mask?: string } & SdSettings): Promise<{ image: string; settings: SdUsed } | { error: string }>;
   cancel(runId: string): void;
@@ -142,6 +168,43 @@ export type DesktopSdApi = {
 
 export function desktopSd(): DesktopSdApi | undefined {
   return (window as unknown as { lomra?: { sd?: DesktopSdApi } }).lomra?.sd;
+}
+
+export type PictureAiModel = {
+  id: string;
+  operation: "remove-background" | "upscale";
+  name: string;
+  quality: string;
+  note: string;
+  license: string;
+  source: string;
+  bytes: number;
+  installed: boolean;
+  /** Bytes of an unfinished download kept on disk; `download` continues it and `remove` deletes it. 0 when there is none. */
+  partial: number;
+};
+
+export type PictureAiStatus = {
+  supported: boolean;
+  downloading: { id: string; name: string; received: number; total: number } | null;
+  queued: QueuedModel[];
+  error: string | null;
+  models: PictureAiModel[];
+};
+
+/** Local background removal and upscaling of the desktop app. */
+export type DesktopPictureAiApi = {
+  status(): Promise<PictureAiStatus>;
+  download(id: string): Promise<boolean>;
+  cancelDownload(id?: string): Promise<void>;
+  remove(id: string): Promise<boolean>;
+  run(runId: string, input: { operation: "remove-background" | "upscale"; image: string; scale?: 2 | 4 }): Promise<{ image: string; model: string } | { error: string }>;
+  cancel(runId: string): void;
+  onProgress(callback: (event: { runId: string; stage: string; done?: number; total?: number }) => void): () => void;
+};
+
+export function desktopPictureAi(): DesktopPictureAiApi | undefined {
+  return (window as unknown as { lomra?: { picture?: DesktopPictureAiApi } }).lomra?.picture;
 }
 
 export type VideoToolStatus = {

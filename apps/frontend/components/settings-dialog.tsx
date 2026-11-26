@@ -7,6 +7,7 @@ import { ApiKeysPanel } from "@/components/api-settings";
 import { AppVersionFooter } from "@/components/app-version-footer";
 import { OllamaSettings } from "@/components/ollama-settings";
 import { SdSettings } from "@/components/sd-settings";
+import { PictureAiSettings } from "@/components/picture-ai-settings";
 import { Local3dSettings } from "@/components/local3d-settings";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -40,6 +41,8 @@ export function SettingsDialog() {
           <OllamaSettings />
           <Separator />
           <SdSettings />
+          <Separator />
+          <PictureAiSettings />
           <Separator />
           <Local3dSettings />
         </TabsContent>

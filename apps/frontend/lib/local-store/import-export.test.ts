@@ -31,7 +31,7 @@ test('canvas cards and generation provenance survive project import, and handoff
   const output = { ...item('output'), harness: {
     role: 'Output',
     links: [{ to: brief.id, relation: 'Continues from' }],
-    provenance: { model: 'model', prompt: 'Warm lamp', selectedInputs: [{ id: 'ref', name: 'Reference' }], sd: { seed: 42, steps: 20, cfg: 7, strength: 0.6, negativePrompt: 'blur', image: true, mask: true } },
+    provenance: { model: 'model', prompt: 'Warm lamp', aspectRatio: '4:3', selectedInputs: [{ id: 'ref', name: 'Reference' }], sd: { seed: 42, steps: 20, cfg: 7, strength: 0.6, negativePrompt: 'blur', image: true, mask: true } },
   } satisfies CanvasHarness };
   const reference = item('ref');
   const saved = [brief, reference, output];
@@ -44,12 +44,13 @@ test('canvas cards and generation provenance survive project import, and handoff
   const [newBrief, newReference, newOutput] = mapped;
   expect(newOutput).toMatchObject({ harness: {
     links: [{ to: newBrief.id, relation: 'Continues from' }],
-    provenance: { prompt: 'Warm lamp', selectedInputs: [{ id: newReference.id, name: 'Reference' }], sd: output.harness.provenance.sd },
+    provenance: { prompt: 'Warm lamp', aspectRatio: '4:3', selectedInputs: [{ id: newReference.id, name: 'Reference' }], sd: output.harness.provenance.sd },
   } });
   const items = saved.map(item => ({ ...item, file: new File([Uint8Array.of(42)], item.name, { type: item.type }) }));
   const handoff = canvasHandoff(items, new Set(['brief', 'output']));
   expect(handoff.markdown).toContain('Continues from: Lamp brief (brief)');
   expect(handoff.markdown).toContain('Warm lamp');
+  expect(handoff.markdown).toContain('- Aspect ratio: 4:3\n');
   expect(handoff.markdown).toContain('- Seed: 42\n- Steps: 20\n- CFG scale: 7\n- Started from: Picture, brushed area only\n- Strength: 0\\.6\n- Negative prompt: blur\n');
   const zip = await canvasHandoffZip(handoff.markdown, handoff.assets);
   expect(Object.keys(unzipSync(new Uint8Array(await zip.arrayBuffer())))).toEqual(['canvas.md', 'files/output-output.png']);
@@ -275,4 +276,22 @@ test('importing invalid or corrupted archives fails with descriptive StoreErrors
     '../etc/passwd': new Uint8Array([1]),
   };
   await expect(importProject(s, Uint8Array.from(zipSync(unsafePath)))).rejects.toMatchObject({ status: 400 });
+});
+
+test('project archives round-trip local picture tools, imported SD and resize provenance', async () => {
+  const { store } = await makeStore();
+  const outputs = [
+    { model: 'local-picture/birefnet-lite', prompt: 'Remove background' },
+    { model: 'local-picture/realesrgan-x4v3', prompt: 'Upscale 2?' },
+    { model: 'fal-ai/esrgan', prompt: 'Upscale 2?' },
+    { model: 'fal-ai/birefnet/v2', prompt: 'Remove background' },
+    { model: 'sd/local-checkpoint', prompt: 'Redraw', aspectRatio: '1:1', sd: { seed: 42, steps: 8, cfg: 1, image: true, strength: 0.6 } },
+    { model: 'openrouter/image-model', prompt: 'Extend', aspectRatio: '16:9' },
+  ].map((provenance, index) => ({ ...item(`output-${index}`), harness: { provenance } }));
+  await Promise.all(outputs.map(output => store.writeFile(output.id, Uint8Array.of(42))));
+  await store.save('canvas', 'default', outputs);
+  const { archive } = await exportProject(store, 'default');
+  const { canvasId } = await importProject(store, archive);
+  const imported = (await store.list('canvas')).find(row => row.id === canvasId)?.value as typeof outputs;
+  expect(imported.map(output => output.harness.provenance)).toEqual(outputs.map(output => output.harness.provenance));
 });

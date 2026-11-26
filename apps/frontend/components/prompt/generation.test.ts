@@ -267,6 +267,11 @@ test("local Stable Diffusion redraws one selected picture with the saved setting
     assert.equal((await run({ aspectRatio: "1:1", sdEdit: { mask, strength: 1, negativePrompt: "object" } }))[0].url, "data:image/png;base64,cmVzdWx0");
     assert.deepEqual(calls.pop(), { model: "edit-model", prompt: "a fox", seed: 5, negativePrompt: "object", strength: 1, image: "data:image/png;base64,1500x1000#fff", mask: "data:image/png;base64,1500x1000#000" });
     assert.ok(browser.loaded.includes(mask));
+    // Explicit per-run sdSettings (variations) bypasses and never mutates stored settings.
+    await run({ sdSettings: { seed: 99, steps: 8, cfg: 2, negativePrompt: "", strength: 0.65 } });
+    assert.deepEqual(calls.pop(), { model: "edit-model", prompt: "a fox", seed: 99, steps: 8, cfg: 2, negativePrompt: "", strength: 0.65, image: "data:image/png;base64,1500x1000#fff" });
+    const { sdSettingsOf } = await import("@/lib/sd-settings-store");
+    assert.deepEqual(sdSettingsOf("edit-model"), { seed: 5, strength: 0.4, negativePrompt: "blur" });
   } finally {
     browser.restore();
     changeSdSettings("edit-model", {});
@@ -339,5 +344,59 @@ test("a local 3D model sends one picture through the desktop bridge, returns a G
     await assert.rejects(generate(task, async () => ({}), new AbortController().signal, () => {}, picture), /desktop app/);
   } finally {
     delete (globalThis as { window?: unknown }).window;
+  }
+});
+
+test("local and hosted picture generation enforces profile capabilities and forwards full few-step settings", async () => {
+  const picture = "data:image/png;base64,YQ==";
+  const calls: Record<string, unknown>[] = [];
+  const fakeStatus = {
+    supported: true, engine: true, engineBytes: 0, gpuBytes: 0, downloading: null, queued: [], error: null, profiles: [],
+    models: [
+      {
+        id: "sd-turbo", name: "SD Turbo", quality: "Fast", note: "", bytes: 1, recommended: true, installed: true, partial: 0, custom: false, inpaint: false,
+        profile: {
+          id: "turbo", name: "Turbo", note: "", size: 512, steps: 4, cfg: 1, strength: 0.75,
+          ranges: { steps: { min: 1, max: 50, whole: true }, cfg: { min: 0, max: 20, whole: false }, strength: { min: 0, max: 1, whole: false } },
+          capabilities: { textToImage: true, imageToImage: true, inpaint: true, negativePrompt: true, cfg: true, strength: true, outpaint: false, referencePictures: false },
+        },
+      },
+      {
+        id: "no-inpaint", name: "No Inpaint", quality: "", note: "", bytes: 1, recommended: false, installed: true, partial: 0, custom: true, inpaint: false,
+        profile: {
+          id: "no-inpaint", name: "No Inpaint", note: "", size: 512, steps: 4, cfg: 1, strength: 0.75,
+          ranges: { steps: { min: 1, max: 12, whole: true }, cfg: { min: 1, max: 1, whole: false }, strength: { min: 0, max: 1, whole: false } },
+          capabilities: { textToImage: false, imageToImage: true, inpaint: false, negativePrompt: false, cfg: false, strength: true, outpaint: false, referencePictures: false },
+        },
+      },
+    ],
+  };
+  const sd = {
+    status: async () => fakeStatus,
+    onProgress: () => () => {},
+    cancel: () => {},
+    generate: async (_runId: string, input: Record<string, unknown>) => { calls.push(input); return { image: picture, settings: used }; },
+  };
+  const { changeSdSettings } = await import("@/lib/sd-settings-store");
+  changeSdSettings("sd-turbo", { negativePrompt: "blur", cfg: 1.5, steps: 16 });
+  changeSdSettings("no-inpaint", { negativePrompt: "blur", cfg: 7, steps: 4 });
+  const browser = fakeBrowser(sd);
+  try {
+    await generate({ id: "11111111-1111-1111-1111-111111111111", category: "picture", prompt: "fox", model: "sd/sd-turbo", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {});
+    assert.deepEqual(calls.pop(), { model: "sd-turbo", prompt: "fox", negativePrompt: "blur", cfg: 1.5, steps: 16 });
+    await generate({ id: "11111111-1111-1111-1111-111111111114", category: "picture", prompt: "fox", model: "sd/no-inpaint", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]);
+    assert.deepEqual(calls.pop(), { model: "sd/no-inpaint".slice(3), prompt: "fox", steps: 4, image: "data:image/png;base64,1500x1000#fff" });
+    const variant: Generation = { id: "variant", category: "picture", prompt: "fox", model: "sd/no-inpaint", status: "Waiting", sdSettings: { steps: 8, cfg: 8, negativePrompt: "blur", strength: 0.6 } };
+    await generate(variant, async () => ({}), new AbortController().signal, () => {}, picture, [picture]);
+    assert.deepEqual(calls.pop(), { model: "no-inpaint", prompt: "fox", steps: 8, strength: 0.6, image: "data:image/png;base64,1500x1000#fff" });
+    await assert.rejects(generate({ ...variant, sdSettings: { steps: 13 } }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]), /Recorded Steps.*outside the current profile range/);
+    assert.equal(calls.length, 0);
+    await assert.rejects(generate({ id: "11111111-1111-1111-1111-111111111112", category: "picture", prompt: "fox", model: "sd/no-inpaint", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}), /Select a picture/);
+    await assert.rejects(generate({ id: "11111111-1111-1111-1111-111111111113", category: "picture", prompt: "fox", model: "sd/no-inpaint", sdEdit: { mask: picture }, status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]), /cannot edit a brushed area/);
+    await assert.rejects(generate({ id: "g1", category: "picture", prompt: "fox", model: "google-ai/imagen-3", status: "Waiting" }, async () => ({}), new AbortController().signal, () => {}, picture, [picture]), /does not support reference images/);
+  } finally {
+    browser.restore();
+    changeSdSettings("sd-turbo", {});
+    changeSdSettings("no-inpaint", {});
   }
 });

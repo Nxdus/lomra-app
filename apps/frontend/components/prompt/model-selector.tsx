@@ -145,10 +145,11 @@ type Group = typeof categories[number] & {
   error: boolean;
 };
 
-export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onOpenModelSetup, disabled = false }: {
+export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onSelectableChange, onOpenModelSetup, disabled = false }: {
   models: string[];
   onModelsChange: Dispatch<SetStateAction<string[]>>;
   onCatalogInfoChange?: (info: { prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean> }) => void;
+  onSelectableChange?: (selectable: ReadonlySet<string>) => void;
   onOpenModelSetup: (options?: { provider?: KeyedProvider; modelName?: string }) => void;
   disabled?: boolean;
 }) {
@@ -375,13 +376,15 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
 
   useEffect(() => {
     if (!preferencesReady.current) return;
-    const available = models.filter((value) => {
+    const isAvailable = (value: string) => {
       const provider = modelApiKeyProvider(value);
       return (!provider || !!keys[provider]) && isInstalled(value) && allGroups.some((group) =>
         group.models.some((item) => item.value === value && item.custom) ||
         (!hiddenModels.includes(value) && (group.models.some((item) => item.value === value) ||
           (group.error && value.startsWith(`${group.value}:`)))));
-    });
+    };
+    onSelectableChange?.(new Set(allGroups.flatMap((group) => group.models.map((item) => item.value)).filter(isAvailable)));
+    const available = models.filter(isAvailable);
     if (available.length !== models.length) {
       onModelsChange(available);
       return;
@@ -390,7 +393,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onO
       void saveSetting('selected-models', models).catch(() => toast.add({ id: 'model-settings-error', title: 'Could not save selected models. Please retry.', type: 'error' }));
     }, 400);
     return () => clearTimeout(timer);
-  }, [models, allGroups, hiddenModels, isInstalled, keys, onModelsChange]);
+  }, [models, allGroups, hiddenModels, isInstalled, keys, onModelsChange, onSelectableChange]);
 
   const existingValues = new Set(allGroups.flatMap((group) => group.models
     .filter((item) => item.custom || !hiddenModels.includes(item.value))

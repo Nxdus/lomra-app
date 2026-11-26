@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron';
 import pty from '@lydell/node-pty';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -13,6 +13,8 @@ import { unloadOllama } from './ollama-unload.mjs';
 import { createGpuQueue } from './gpu-queue.mjs';
 import { createFfmpeg } from './ffmpeg.mjs';
 import { createSd } from './sd.mjs';
+import { validLocalPick } from './sd-local.mjs';
+import { createPictureAi } from './picture-ai.mjs';
 import { createLocal3d, nvidiaMemory } from './local3d.mjs';
 import { createToolBridge, toolConfig } from './tool-bridge.mjs';
 import { generateBrowserImage } from './browser-image.mjs';
@@ -40,6 +42,8 @@ let ffmpegInstance;
 const ffmpeg = () => ffmpegInstance ??= createFfmpeg({ dir: join(app.getPath('userData'), 'ffmpeg') });
 let sdInstance;
 const sd = () => sdInstance ??= createSd({ dir: join(app.getPath('userData'), 'stable-diffusion'), gpuQueue, gpuMemory: async () => await nvidiaMemory({ env: process.env, spawnProcess: spawn }) * 1024 * 1024 });
+let pictureAiInstance;
+const pictureAi = () => pictureAiInstance ??= createPictureAi({ dir: join(app.getPath('userData'), 'picture-ai') });
 let local3dInstance;
 // The first version of local 3D only had Hunyuan3D and kept it in `hunyuan3d`; carry that install over instead of downloading it again.
 const local3dDir = () => {
@@ -280,10 +284,47 @@ ipcMain.handle('sd:status', async (event) => { if (!trusted(event)) throw new Er
 ipcMain.handle('sd:download', (event, request) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sd().download(request); });
 const sdLookup = async (lookup) => { try { return { result: await lookup() }; } catch (cause) { return { error: cause instanceof Error ? cause.message : 'Could not reach Hugging Face.' }; } };
 ipcMain.handle('sd:search', (event, query) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sdLookup(() => sd().search(query)); });
-ipcMain.handle('sd:files', (event, repo) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sdLookup(() => sd().files(repo)); });
+ipcMain.handle('sd:files', (event, repo, file) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sdLookup(() => sd().files(repo, file)); });
 ipcMain.handle('sd:inspect', (event, repo, file) => { if (!trusted(event)) throw new Error('Untrusted sender'); return sdLookup(() => sd().inspect(repo, file)); });
+const localLookup = async (action) => {
+  try { return { result: await action() }; }
+  catch (cause) { return { error: cause instanceof Error && !cause.code ? cause.message : 'Could not access the checkpoint.' }; }
+};
+let pickingCheckpoint = false;
+ipcMain.handle('sd:pickLocal', (event, mode, id) => {
+  if (!trusted(event)) throw new Error('Untrusted sender');
+  return localLookup(async () => {
+    if (pickingCheckpoint || !sd().supported) return null;
+    const folder = mode === 'folder';
+    if (!validLocalPick(mode, id) || (mode === 'locate' && !sd().canLocate(id))) throw new Error('Invalid checkpoint selection.');
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return null;
+    pickingCheckpoint = true;
+    try {
+      const choice = await dialog.showOpenDialog(window, folder
+        ? { title: 'Scan for Stable Diffusion checkpoints', properties: ['openDirectory'] }
+        : { title: mode === 'locate' ? 'Locate checkpoint' : 'Add a model from this computer', properties: ['openFile'], filters: [{ name: 'Model checkpoints', extensions: ['safetensors', 'gguf'] }] });
+      if (choice.canceled || !choice.filePaths[0] || event.sender.isDestroyed() || !trusted(event)) return null;
+      return await sd().pickLocal(choice.filePaths[0], folder, id);
+    } finally { pickingCheckpoint = false; }
+  });
+});
+let addingCheckpoint = false;
+ipcMain.handle('sd:addLocal', (event, id, family, downloadEngine) => {
+  if (!trusted(event)) throw new Error('Untrusted sender');
+  return localLookup(async () => {
+    if (addingCheckpoint) throw new Error('Wait for the current checkpoint to finish.');
+    addingCheckpoint = true;
+    try { return await sd().addLocal(id, family, downloadEngine); }
+    finally { addingCheckpoint = false; }
+  });
+});
 ipcMain.handle('sd:cancelDownload', async (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); if (id === undefined || typeof id === 'string') await sd().cancelDownload(id); });
 ipcMain.handle('sd:remove', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return typeof id === 'string' && sd().remove(id); });
+ipcMain.handle('sd:setProfile', async (event, id, profileId) => {
+  if (!trusted(event)) throw new Error('Untrusted sender');
+  return typeof id === 'string' && typeof profileId === 'string' && await sd().setProfile(id, profileId);
+});
 ipcMain.handle('sd:generate', async (event, runId, input) => {
   if (!trusted(event)) throw new Error('Untrusted sender');
   try {
@@ -293,6 +334,21 @@ ipcMain.handle('sd:generate', async (event, runId, input) => {
   }
 });
 ipcMain.on('sd:cancel', (event, runId) => { if (trusted(event) && typeof runId === 'string') sd().cancel(runId); });
+
+// Local background removal and upscaling (CPU ONNX). Downloads start only after the user agrees.
+ipcMain.handle('picture:status', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return pictureAi().status(); });
+ipcMain.handle('picture:download', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return typeof id === 'string' && pictureAi().download(id); });
+ipcMain.handle('picture:cancelDownload', async (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); if (id === undefined || typeof id === 'string') await pictureAi().cancelDownload(id); });
+ipcMain.handle('picture:remove', (event, id) => { if (!trusted(event)) throw new Error('Untrusted sender'); return typeof id === 'string' && pictureAi().remove(id); });
+ipcMain.handle('picture:run', async (event, runId, input) => {
+  if (!trusted(event)) throw new Error('Untrusted sender');
+  try {
+    return await pictureAi().run(runId, input, (progress) => { if (!event.sender.isDestroyed()) event.sender.send('picture:progress', { runId, ...progress }); });
+  } catch (cause) {
+    return { error: cause instanceof Error && cause.name !== 'AbortError' ? cause.message : 'Stopped.' };
+  }
+});
+ipcMain.on('picture:cancel', (event, runId) => { if (trusted(event) && typeof runId === 'string') pictureAi().cancel(runId); });
 
 // Joining the clips of a storyboard into one video. The app asks before downloading ffmpeg; the renderer sends clip bytes only, never a path or a command.
 ipcMain.handle('video:status', (event) => { if (!trusted(event)) throw new Error('Untrusted sender'); return ffmpeg().status(); });
@@ -452,6 +508,6 @@ app.on('before-quit', () => {
   server?.kill();
   whisper?.kill();
   ollama.stop();
-  sdInstance?.stop(); local3dInstance?.stop(); ffmpegInstance?.stop();
+  sdInstance?.stop(); pictureAiInstance?.stop(); local3dInstance?.stop(); ffmpegInstance?.stop();
 });
-process.on('exit', () => { if (!quitting) { server?.kill(); whisper?.kill(); ollama.stop(); sdInstance?.stop(); local3dInstance?.stop(); ffmpegInstance?.stop(); } });
+process.on('exit', () => { if (!quitting) { server?.kill(); whisper?.kill(); ollama.stop(); sdInstance?.stop(); pictureAiInstance?.stop(); local3dInstance?.stop(); ffmpegInstance?.stop(); } });

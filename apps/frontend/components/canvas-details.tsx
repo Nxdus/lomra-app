@@ -1,18 +1,20 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { BoxIcon, CheckIcon, CopyIcon, FileTextIcon, ImageIcon, VideoIcon } from "lucide-react";
+import { BoxIcon, CheckIcon, CopyIcon, FileTextIcon, Grid2x2Icon, ImageIcon, RotateCcwIcon, SparklesIcon, VideoIcon } from "lucide-react";
 import { CanvasMedia } from "@/components/canvas-media";
 import type { VisibleImage } from "@/components/image-canvas";
-import { isLocal3dModel, isSdModel, local3dPrefix, sdPrefix } from "@/components/prompt/generation";
+import { isLocal3dModel, isLocalPictureModel, isSdModel, local3dPrefix, pictureAiPrefix, sdPrefix } from "@/components/prompt/generation";
 import { Tip } from "@/components/tip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { useLocal3d } from "@/hooks/use-local3d";
+import { usePictureAi } from "@/hooks/use-picture-ai";
 import { useSd } from "@/hooks/use-sd";
 import type { CanvasProvenance } from "@/lib/image-canvas/canvas-harness";
 import { canvasFileKind, isCanvasFilePending } from "@/lib/image-canvas/image-canvas-storage";
+import { canMakeVariationsFromProvenance, canUsePictureSetup } from "@/lib/image-canvas/provenance-setup";
 import { cn } from "@/lib/utils";
 
 const fileSize = (bytes: number) => bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1e3))} KB`;
@@ -53,8 +55,10 @@ export function ItemThumbnail({ item }: { item?: VisibleImage }) {
 /** The name a model goes by; the id of one that is gone, or that Lomra has no name for. */
 function ModelBadge({ model }: { model: string }) {
   const sd = useSd();
+  const pictureAi = usePictureAi();
   const local3d = useLocal3d();
   const name = isSdModel(model) ? sd.status?.models.find((item) => item.id === model.slice(sdPrefix.length))?.name
+    : isLocalPictureModel(model) ? pictureAi.status?.models.find((item) => item.id === model.slice(pictureAiPrefix.length))?.name
     : isLocal3dModel(model) ? local3d.status?.models.find((item) => item.id === model.slice(local3dPrefix.length))?.name : undefined;
   return <Badge variant="secondary" className="max-w-full" title={model}><span className="truncate">{name ?? model}</span></Badge>;
 }
@@ -84,16 +88,27 @@ function Generation({ provenance, items }: { provenance: CanvasProvenance; items
     </div>}
     <div className="flex flex-wrap gap-1.5">
       <ModelBadge model={model} />
+      {provenance.aspectRatio && <Badge variant="secondary">{provenance.aspectRatio}</Badge>}
       {sd?.image && <Badge variant="secondary">{sd.mask ? "Brushed area only" : "From a picture"}</Badge>}
     </div>
   </section>;
 }
 
 /** The left side of Canvas details: the item itself, and how it was made or else what file it is. */
-export function CanvasItemSummary({ item, items, onLoaded }: { item: VisibleImage; items: VisibleImage[]; onLoaded: (id: string, file: File) => void }) {
+export function CanvasItemSummary({ item, items, onLoaded, onUseSetup, onMakeVariations, onGenerateAgain, busy }: {
+  item: VisibleImage;
+  items: VisibleImage[];
+  onLoaded: (id: string, file: File) => void;
+  onUseSetup?: (item: VisibleImage) => void;
+  onMakeVariations?: (item: VisibleImage) => void;
+  onGenerateAgain?: (item: VisibleImage) => void;
+  busy?: boolean;
+}) {
   const [size, setSize] = useState<{ width: number; height: number }>();
   const kind = canvasFileKind(item.file);
   const provenance = item.harness?.provenance;
+  const canReuse = canUsePictureSetup(provenance) && onUseSetup;
+  const canVary = kind === "image" && canMakeVariationsFromProvenance(provenance);
   let preview: ReactNode = <CanvasMedia image={item} onLoaded={onLoaded} />;
   if (kind === "image" && item.url) {
     // Local blob URLs need no Next.js image optimization.
@@ -102,7 +117,26 @@ export function CanvasItemSummary({ item, items, onLoaded }: { item: VisibleImag
   }
   return <div className="flex min-w-0 flex-col gap-4">
     <div className="max-h-96 w-full overflow-hidden rounded-3xl bg-muted/60" style={{ aspectRatio: `${item.width} / ${item.height}` }}>{preview}</div>
-    {provenance ? <Generation provenance={provenance} items={items} /> : <dl aria-label="File" className="grid grid-cols-2 gap-2">
+    {provenance ? <>
+      {kind === "image" && (canReuse || (canVary && (onMakeVariations || onGenerateAgain))) && (
+        <div className="flex flex-wrap gap-2">
+          {canReuse && <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => canReuse(item)}>
+            <SparklesIcon data-icon="inline-start" />Use this setup
+          </Button>}
+          {canVary && onGenerateAgain && <Tip label="Generate this picture again with the same seed and settings">
+            <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => onGenerateAgain(item)}>
+              <RotateCcwIcon data-icon="inline-start" />Generate again
+            </Button>
+          </Tip>}
+          {canVary && onMakeVariations && <Tip label="Generate 4 variations with different seeds">
+            <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={() => onMakeVariations(item)}>
+              <Grid2x2Icon data-icon="inline-start" />Make 4 variations
+            </Button>
+          </Tip>}
+        </div>
+      )}
+      <Generation provenance={provenance} items={items} />
+    </> : <dl aria-label="File" className="grid grid-cols-2 gap-2">
       <Fact label="Type" value={item.file.name.includes(".") ? item.file.name.slice(item.file.name.lastIndexOf(".") + 1).toUpperCase() : item.file.type || "Unknown"} />
       {size && <Fact label="Dimensions" value={`${size.width} × ${size.height}`} />}
       {!isCanvasFilePending(item.file) && item.file.size > 0 && <Fact label="Size" value={fileSize(item.file.size)} />}

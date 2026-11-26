@@ -71,3 +71,45 @@ test("local tools reject absent sources and honor cancellation before processing
   await assert.rejects(localMediaTool({ name: "inspect_3d", model_index: 0 }, [], signal), /Select a GLB/);
   await assert.rejects(localMediaTool({ name: "extract_video_frames", video_index: 0, timestamps: [0] }, [], AbortSignal.abort()));
 });
+
+test("local desktop picture tools route locally without Fal, report progress, honor cancel, and never fall back to Fal on failure", async () => {
+  const calls: unknown[] = [];
+  let progress: ((event: { runId: string; stage: string; done?: number; total?: number }) => void) | undefined;
+  let cancelled = "";
+  const picture = {
+    onProgress: (cb: typeof progress) => { progress = cb; return () => { progress = undefined; }; },
+    run: async (runId: string, input: unknown): Promise<{ image: string; model: string } | { error: string }> => {
+      calls.push([runId, input]);
+      progress?.({ runId, stage: "processing", done: 1, total: 2 });
+      return { image: "data:image/png;base64,b3V0", model: "realesrgan-x4v3" };
+    },
+    cancel: (runId: string) => { cancelled = runId; },
+  };
+  Object.assign(globalThis, { window: { lomra: { picture } } });
+  const providerMustNotRun: Parameters<typeof generate>[1] = async () => { throw new Error("Must not call Fal"); };
+  try {
+    const statuses: string[] = [];
+    const bgTask: Generation = { id: "11111111-1111-1111-1111-111111111111", category: "picture", prompt: "remove bg", model: mediaToolModel({ name: "remove_background", image_index: 0 }, "birefnet-lite"), status: "Waiting", mediaTool: { name: "remove_background", image_index: 0 } };
+    const bg = await generate(bgTask, providerMustNotRun, new AbortController().signal, (c) => { if (c.status) statuses.push(c.status); }, undefined, ["data:image/png;base64,YQ=="]);
+    assert.deepEqual(bg, [{ url: "data:image/png;base64,b3V0", name: "Background removed", kind: "image" }]);
+    assert.deepEqual(calls[0], [bgTask.id, { operation: "remove-background", image: "data:image/png;base64,YQ==" }]);
+
+    const upTask: Generation = { id: "22222222-2222-2222-2222-222222222222", category: "picture", prompt: "upscale", model: mediaToolModel({ name: "upscale_image", image_index: 0, scale: 4 }, "realesrgan-x4v3"), status: "Waiting", mediaTool: { name: "upscale_image", image_index: 0, scale: 4 } };
+    const up = await generate(upTask, providerMustNotRun, new AbortController().signal, (c) => { if (c.status) statuses.push(c.status); }, undefined, ["data:image/png;base64,YQ=="]);
+    assert.deepEqual(up, [{ url: "data:image/png;base64,b3V0", name: "Upscaled 4x", kind: "image" }]);
+    assert.ok(statuses.includes("Upscaling locally… 1/2"));
+    assert.equal(progress, undefined);
+
+    // Local failure must not fall back to Fal.
+    picture.run = async () => ({ error: "Output exceeds limit." });
+    await assert.rejects(generate(upTask, providerMustNotRun, new AbortController().signal, () => {}, undefined, ["data:image/png;base64,YQ=="]), /Output exceeds limit/);
+
+    // Cancellation stops the run.
+    const controller = new AbortController();
+    picture.run = async () => { controller.abort(); return { error: "Stopped." }; };
+    await assert.rejects(generate(upTask, providerMustNotRun, controller.signal, () => {}, undefined, ["data:image/png;base64,YQ=="]), /Stopped/);
+    assert.equal(cancelled, upTask.id);
+  } finally {
+    delete (globalThis as { window?: unknown }).window;
+  }
+});
