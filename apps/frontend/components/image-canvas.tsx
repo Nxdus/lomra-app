@@ -8,7 +8,7 @@ import { CanvasCardDialog, CanvasHandoffDialog, CanvasLinks } from "@/components
 import { ReferenceSetDialog } from "@/components/reference-set-dialog";
 
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref } from "react";
-import { ArrowDownToLineIcon, ArrowUpToLineIcon, Columns2Icon, CopyIcon, DownloadIcon, Grid2x2Icon, GripVerticalIcon, ImagesIcon, InfoIcon, PencilIcon, PlusIcon, RotateCcwIcon, ScanIcon, StickyNoteIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
+import { ArrowDownToLineIcon, ArrowUpToLineIcon, Columns2Icon, CopyIcon, DownloadIcon, Grid2x2Icon, GripVerticalIcon, ImagesIcon, InfoIcon, PencilIcon, PlusIcon, RotateCcwIcon, ScanIcon, ShareIcon, StickyNoteIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
 import { CanvasCompareDialog } from "@/components/canvas-compare-dialog";
 import { CanvasMedia } from "@/components/canvas-media";
 import dynamic from "next/dynamic";
@@ -22,7 +22,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { toast } from "@/components/ui/toast";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { canvasHistory, canvasTitle, canvasStorage, isCanvasFilePending, deleteCanvasStorage, canvasFileError, canvasFileKind, canvasFileSize, type CanvasImage, type CanvasHistoryItem } from "@/lib/image-canvas/image-canvas-storage";
+import { canvasHistory, canvasName, canvasStorage, isCanvasFilePending, deleteCanvasStorage, canvasFileError, canvasFileKind, canvasFileSize, type CanvasImage, type CanvasHistoryItem } from "@/lib/image-canvas/image-canvas-storage";
 import { CANVAS_CAMERA_KEY, canvasPoint, parseCanvasCamera, zoomCamera, type CanvasCamera } from "@/lib/image-canvas/image-canvas-camera";
 import { resizeImage, type ImageBounds, type ImageCorner } from "@/lib/image-canvas/image-canvas-resize";
 import { shotGridSize } from "@/components/prompt/storyboard-shots";
@@ -86,6 +86,14 @@ export type CanvasHandle = {
   selectItems?: (ids: string[]) => void;
 };
 
+function uniqueName(name: string, taken: Set<string>) {
+  if (!taken.has(name)) return name;
+  const dot = name.lastIndexOf(".");
+  const extension = dot > 0 ? name.slice(dot) : "";
+  const base = (dot > 0 ? name.slice(0, dot) : name).replace(/ \d+$/, "");
+  for (let number = 2; ; number++) if (!taken.has(`${base} ${number}${extension}`)) return `${base} ${number}${extension}`;
+}
+
 export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasChange, onStoryboardHost, onStoryboardOrigin, watchItem, onWatchedBounds, onUseSetup, onMakeVariations, onGenerateAgain, promptBusy }: { watchItem?: string; onWatchedBounds?: (bounds: ImageBounds | null) => void; onStoryboardHost?: (host: HTMLDivElement | null) => void; onStoryboardOrigin?: (origin: { x: number; y: number }) => void; ref?: Ref<CanvasHandle>; onSelectionChange?: (images: VisibleImage[]) => void; onReadyChange?: (ready: boolean) => void; onCanvasChange?: (id: string) => void; onUseSetup?: (item: VisibleImage, items: VisibleImage[]) => void; onMakeVariations?: (item: VisibleImage, items: VisibleImage[]) => void; onGenerateAgain?: (item: VisibleImage, items: VisibleImage[]) => void; promptBusy?: boolean }) {
   const viewport = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -102,6 +110,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
   const canvasHistories = useRef<Map<string, CanvasHistoryState>>(new Map());
   const dragDepth = useRef(0);
   const view = useRef<CanvasCamera>({ x: 0, y: 0, scale: 1 });
+  const importedIds = useRef(new WeakMap<File, string>());
   const pan = useRef<{ pointer: number; x: number; y: number } | null>(null);
   const selection = useRef<{ pointer: number; x: number; y: number; initial: string[] } | null>(null);
   const [selectionBox, setSelectionBox] = useState<ImageBounds | null>(null);
@@ -205,6 +214,44 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
         .catch(() => { toast.add({ id: "canvas-view-error", title: "Could not save canvas view. Reload to retry.", type: "error" }); });
     }, 400);
   }, []);
+
+  // The window title names the open canvas.
+  useEffect(() => {
+    if (!canvasId) return;
+    let cancelled = false;
+    canvasHistory().then((next) => { if (!cancelled) setHistory(next); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [canvasId]);
+  useEffect(() => {
+    document.title = history.some((item) => item.id === canvasId) ? `${canvasName(canvasId, history)} — Lomra` : "Lomra";
+  }, [canvasId, history]);
+
+  // When the window shrinks so that content that was fully in view (pictures and storyboard) is cut off, fit it again.
+  useEffect(() => {
+    const element = viewport.current!;
+    let previous = { width: element.clientWidth, height: element.clientHeight };
+    const observer = new ResizeObserver(() => {
+      const size = { width: element.clientWidth, height: element.clientHeight };
+      const shrank = size.width < previous.width || size.height < previous.height;
+      const before = previous;
+      previous = size;
+      if (!shrank || !ready || !cameraLoaded.current || pan.current || drag.current || resize.current || selection.current) return;
+      const origin = element.getBoundingClientRect();
+      const rects = [
+        ...element.querySelectorAll<HTMLElement>("[data-canvas-image]"),
+        ...Array.from(storyboardHost.current?.children ?? []).filter((child) => !(child instanceof SVGElement)),
+      ].map((child) => child.getBoundingClientRect()).filter((rect) => rect.width > 0 && rect.height > 0);
+      if (!rects.length) return;
+      const left = Math.min(...rects.map((rect) => rect.left)) - origin.left, top = Math.min(...rects.map((rect) => rect.top)) - origin.top;
+      const right = Math.max(...rects.map((rect) => rect.right)) - origin.left, bottom = Math.max(...rects.map((rect) => rect.bottom)) - origin.top;
+      const fitted = left >= 0 && top >= 0 && right <= before.width && bottom <= before.height;
+      if (!fitted || (right <= size.width && bottom <= size.height)) return;
+      const { x, y, scale } = view.current;
+      changeView(fitCanvas([{ x: (left - x) / scale, y: (top - y) / scale, width: (right - left) / scale, height: (bottom - top) / scale }], size.width, size.height));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ready, changeView]);
 
   const smoothZoom = useCallback((scale: number, x: number, y: number) => {
     const target = zoomCamera(zoomTarget.current ?? view.current, scale, x, y);
@@ -631,9 +678,12 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     imports.current = imports.current.then(async () => {
       const failures: string[] = [];
       let offset = 0;
-      for (const file of files) {
+      for (const added of files) {
         if (!mounted.current) return;
-        const error = canvasFileError(file);
+        const error = canvasFileError(added);
+        // New pictures get a name no other item on this canvas has ("Image 1.png" becomes "Image 2.png").
+        const name = added.type.startsWith("image/") ? uniqueName(added.name, new Set(current.current.map((item) => item.file.name))) : added.name;
+        const file = name === added.name ? added : new File([added], name, { type: added.type, lastModified: added.lastModified });
         if (error) { failures.push(`${file.name}: ${error}`); continue; }
         const url = URL.createObjectURL(file);
         try {
@@ -650,6 +700,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
           // Track the URL only after the history step: it sweeps every tracked URL the canvas does not reference yet.
           urls.current.add(url);
           update([...current.current, image]);
+          importedIds.current.set(added, image.id);
           if (selectAdded) setSelected([image.id]);
           offset += 24;
         } catch {
@@ -687,7 +738,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     if (!viewer?.loaded) throw new Error("Wait for the selected 3D model to finish loading, then try again.");
     return viewer.toDataURL("image/png");
   }, focusFile(file) {
-    const image = current.current.find((item) => item.file === file);
+    const image = current.current.find((item) => item.file === file || item.id === importedIds.current.get(file));
     const element = viewport.current;
     if (!image || !element) throw new Error("This item is no longer on the canvas. Add it again.");
     select(image.id);
@@ -711,7 +762,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     if (target) importFiles(files, target, false, !exact, harness, selectAdded);
     else importFiles(files, canvasPoint(view.current, element.clientWidth / 2, element.clientHeight / 2), true, false, harness, selectAdded);
     await imports.current;
-    const added = files.map((file) => current.current.find((image) => image.file === file));
+    const added = files.map((file) => current.current.find((image) => image.id === importedIds.current.get(file)));
     if (added.some((image) => !image)) throw new Error("Could not add this result to canvas. Check its format and try again.");
     await saves.current;
     return added.flatMap((image) => image ? [image.id] : []);
@@ -1000,7 +1051,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                   <Grid2x2Icon /> Make 4 variations
                 </ContextMenuItem>}
                 <ContextMenuItem onClick={() => setHandoffIds(contextMenuFiles.map(item => item.id))}>
-                  <ArrowDownToLineIcon /> Export canvas selection
+                  <ShareIcon /> Export canvas selection
                 </ContextMenuItem>
                 {contextMenuFiles.length > 0 && contextMenuFiles.every(({ file, url }) => url && canvasFileKind(file) === "image") && (
                   <>
@@ -1086,7 +1137,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
               ...(provenance && { provenance: { ...provenance, selectedInputs: [{ id: preview.id, name: (preview.harness?.title ?? preview.file.name).slice(0, 512) }] } }),
             });
             await imports.current;
-            if (!current.current.some((image) => image.file === file)) throw new Error("Could not add edited picture to canvas.");
+            if (!current.current.some((image) => image.id === importedIds.current.get(file))) throw new Error("Could not add edited picture to canvas.");
             toast.add({ title: "Edited picture saved to canvas", type: "success" });
           }} />}
         </DialogContent>
@@ -1094,7 +1145,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
       {characterSource && <CharacterDialog images={characterSource} onClose={() => setCharacterSource(null)} />}
       {referenceSetFiles && <ReferenceSetDialog files={referenceSetFiles} onClose={() => setReferenceSetFiles(null)} />}
       <ConfirmDelete open={deletingFiles.length > 0} onOpenChange={(open) => { if (!open) setDeletingFiles([]); }} title="Delete canvas files?" description={`${deletingFiles.length} selected file(s) will be removed from this canvas.`} disabled={!ready} onConfirm={() => removeConfirmed(deletingFiles)} />
-      <CanvasMenu canvasId={canvasId} history={history} onHistory={refreshHistory} onNew={() => void openCanvas()} onOpen={(id) => void openCanvas(id)} onDelete={deleteCanvas} title={canvasId ? canvasTitle(canvasId) : 'Canvas'} scale={camera.scale} ready={ready} onZoom={zoom} onReset={() => changeView({ x: 0, y: 0, scale: 1 })} canReorganize={images.length > 0} onReorganize={reorganize} />
+      <CanvasMenu canvasId={canvasId} history={history} onHistory={refreshHistory} onNew={() => void openCanvas()} onOpen={(id) => void openCanvas(id)} onDelete={deleteCanvas} title={canvasName(canvasId, history)} scale={camera.scale} ready={ready} onZoom={zoom} onReset={() => changeView({ x: 0, y: 0, scale: 1 })} canReorganize={images.length > 0} onReorganize={reorganize} />
       <div className="absolute left-4 top-4 flex items-center gap-2 text-muted-foreground">
         <input ref={fileInput} type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,.glb" className="hidden" aria-label="Add canvas files" onChange={(event) => {
           const files = Array.from(event.target.files ?? []);
@@ -1105,7 +1156,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
         <Tip label="Add images, videos or 3D models"><Button variant="ghost" size="icon-sm" aria-label="Add images, videos or 3D models" disabled={!ready} onClick={() => fileInput.current?.click()}><PlusIcon /></Button></Tip>
         <Tip label="Add canvas card"><Button variant="ghost" size="icon-sm" aria-label="Add canvas card" disabled={!ready} onClick={() => setEditingCard("")}><StickyNoteIcon /></Button></Tip>
         {canCompareSelection && <Tip label="Compare selected pictures"><Button variant="ghost" size="icon-sm" aria-label="Compare selected pictures" onClick={() => setCompareIds(selectedCompare.map((item) => item.id))}><Columns2Icon /></Button></Tip>}
-        {selected.length > 0 && <Tip label="Export canvas selection"><Button variant="ghost" size="icon-sm" aria-label="Export canvas selection" onClick={() => setHandoffIds(selected)}><ArrowDownToLineIcon /></Button></Tip>}
+        {selected.length > 0 && <Tip label="Export canvas selection"><Button variant="ghost" size="icon-sm" aria-label="Export canvas selection" onClick={() => setHandoffIds(selected)}><ShareIcon /></Button></Tip>}
         <TooltipProvider>
           <Tooltip open={helpOpen} onOpenChange={setHelpOpen}>
             <TooltipTrigger
@@ -1125,7 +1176,7 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
                 <div className="flex flex-col gap-2">
                   <dl className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-2.5">
                     <dt>Select multiple</dt><dd className="text-right"><Kbd>Shift</Kbd> + click</dd>
-                    <dt className="col-span-2 opacity-65">Left-drag the background to select; hold <Kbd>Shift</Kbd> to add.</dt>
+                    <dt>Select area</dt><dd className="text-right">Left-drag the background<br /><Kbd>Shift</Kbd> to add</dd>
                     <dt>Pan canvas</dt><dd className="text-right">Two-finger scroll<br />or middle-drag</dd>
                     <dt>Zoom canvas</dt><dd className="text-right"><Kbd>Ctrl</Kbd> / <Kbd aria-label="Command">⌘</Kbd> + scroll</dd>
                     <dt>Nudge selection</dt><dd className="text-right"><KbdGroup aria-label="Arrow keys"><Kbd aria-label="Up arrow">↑</Kbd><Kbd aria-label="Down arrow">↓</Kbd><Kbd aria-label="Left arrow">←</Kbd><Kbd aria-label="Right arrow">→</Kbd></KbdGroup></dd>

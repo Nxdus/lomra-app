@@ -2,7 +2,7 @@
 
 import { Tip } from "@/components/tip";
 import { useEffect, useRef, useState } from "react";
-import { DownloadIcon, EllipsisIcon, HistoryIcon, FilePlusIcon, LayoutGridIcon, MenuIcon, MinusIcon, PlusIcon, SearchIcon, Trash2Icon, UploadIcon, XIcon } from "lucide-react";
+import { EllipsisIcon, FilePlusIcon, FolderInputIcon, FolderOutputIcon, HistoryIcon, LayoutGridIcon, MenuIcon, MinusIcon, PencilIcon, PlusIcon, SearchIcon, Trash2Icon, XIcon, ZoomInIcon } from "lucide-react";
 import { ConfirmDelete } from "@/components/confirm-delete";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { SettingsDialog } from "@/components/settings-dialog";
@@ -12,7 +12,7 @@ import { toast } from "@/components/ui/toast";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { swipeDeleteThreshold, useSwipeToDelete } from "@/hooks/use-swipe-to-delete";
-import { canvasTitle, renameCanvas, type CanvasHistoryItem } from "@/lib/image-canvas/image-canvas-storage";
+import { canvasName, renameCanvas, type CanvasHistoryItem } from "@/lib/image-canvas/image-canvas-storage";
 import { exportProject, importProject } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
@@ -45,7 +45,7 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { swipe, bind: bindSwipe } = useSwipeToDelete();
   useEffect(() => () => clearTimeout(openTimer.current), []);
-  const nameOf = (id: string) => history.find(item => item.id === id)?.name || canvasTitle(id);
+  const nameOf = (id: string) => canvasName(id, history);
   const filteredHistory = history.filter((item) => nameOf(item.id).toLocaleLowerCase().includes(historySearch.trim().toLocaleLowerCase()));
 
   function downloadBlob(filename: string, blob: Blob) {
@@ -107,7 +107,7 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
     setRenameError("");
     editId.current = item.id;
     setEditing(item.id);
-    setDraft(item.name || (item.id === 'default' ? 'Original canvas' : 'Canvas'));
+    setDraft(nameOf(item.id));
   }
   function cancelRename() { editId.current = null; setEditing(null); }
   async function saveRename() {
@@ -133,7 +133,7 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
     <><ConfirmDelete open={deleting !== null} onOpenChange={(next) => { if (!next) setDeleting(null); }}
       title="Delete canvas?" description={`${deleting ? nameOf(deleting) : "This canvas"} and its chats, images and other files will be permanently deleted. Files used by other canvases will stay.`}
       disabled={!ready || busy} onConfirm={async () => { if (deleting) await onDelete(deleting); }} /><Popover open={open} onOpenChange={(next) => { setOpen(next); if (!next) setZoomOpen(false); }}>
-      <PopoverTrigger render={<Button size="icon-lg" className="fixed bottom-24 left-4 z-20 size-12 shadow-lg min-[900px]:bottom-6" />} aria-label={open ? "Close canvas menu" : "Open canvas menu"}>
+      <PopoverTrigger render={<Button size="icon-lg" className="fixed bottom-24 left-4 z-20 size-12 shadow-lg min-[480px]:bottom-6" />} aria-label={open ? "Close canvas menu" : "Open canvas menu"}>
         <span className={cn("transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none", open && "rotate-90")}>
           {open ? <XIcon /> : <MenuIcon />}
         </span>
@@ -141,11 +141,11 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
       <PopoverContent side="top" align="start" sideOffset={8} className="group/fab w-auto gap-2 bg-transparent p-1 shadow-none ring-0 transition-opacity duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] data-open:animate-none data-closed:animate-none data-starting-style:opacity-0 data-ending-style:opacity-0 motion-reduce:transition-none">
         <PopoverTitle className="sr-only">Canvas menu</PopoverTitle>
         <Tip label="New canvas"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || busy} onClick={onNew} aria-label="New canvas"><FilePlusIcon /></Button></Tip>
-        <Tip label="Import project"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || busy} onClick={() => fileInputRef.current?.click()} aria-label="Import project"><UploadIcon /></Button></Tip>
-        <Tip label="Export project"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || busy} onClick={() => void handleExport()} aria-label="Export project"><DownloadIcon /></Button></Tip>
+        <Tip label="Import project"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || busy} onClick={() => fileInputRef.current?.click()} aria-label="Import project"><FolderInputIcon /></Button></Tip>
+        <Tip label="Export project"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || busy} onClick={() => void handleExport()} aria-label="Export project"><FolderOutputIcon /></Button></Tip>
         <Tip label="Reorganize canvas"><Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" disabled={!ready || !canReorganize || busy} onClick={onReorganize} aria-label="Reorganize canvas"><LayoutGridIcon /></Button></Tip>
         <Popover onOpenChange={(next) => { if (next) { setHistorySearch(""); onHistory(); } }}>
-          <Tip label={history.find(item => item.id === canvasId)?.name || title}><PopoverTrigger render={<Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" />} aria-label="Canvas history"><HistoryIcon /></PopoverTrigger></Tip>
+          <Tip label={`Canvas history · ${title}`}><PopoverTrigger render={<Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover" />} aria-label="Canvas history"><HistoryIcon /></PopoverTrigger></Tip>
           <PopoverContent side="top" align="start" sideOffset={10} className="w-80 max-w-[calc(100vw-2rem)] gap-3 p-3">
             <PopoverTitle className="px-1">Canvas history</PopoverTitle>
             <InputGroup>
@@ -181,8 +181,8 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
                   if (event.key === "Delete") { event.preventDefault(); clearTimeout(openTimer.current); setDeleting(item.id); }
                 }}>
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="truncate">{item.name || (item.id === "default" ? "Original canvas" : "Canvas")}</span>
-                    <span className="truncate text-xs font-normal text-muted-foreground">{item.id !== "default" && `${canvasTitle(item.id).replace("Canvas · ", "")} · `}{item.count} {item.count === 1 ? "file" : "files"}</span>
+                    <span className="truncate">{nameOf(item.id)}</span>
+                    <span className="truncate text-xs font-normal text-muted-foreground">{item.date !== undefined && `${new Date(item.date).toLocaleString()} · `}{item.count} {item.count === 1 ? "file" : "files"}</span>
                   </span>
                 </Button>
                 <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
@@ -194,8 +194,8 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
                     </Tip>
                     <DropdownMenuContent align="end">
                       <DropdownMenuGroup>
-                        <DropdownMenuItem onClick={() => startRename(item)}>Rename</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => void handleExport(item.id)}><DownloadIcon />Export</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => startRename(item)}><PencilIcon />Rename</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => void handleExport(item.id)}><FolderOutputIcon />Export</DropdownMenuItem>
                         <DropdownMenuItem variant="destructive" onClick={() => setDeleting(item.id)}><Trash2Icon />Delete</DropdownMenuItem>
                       </DropdownMenuGroup>
                     </DropdownMenuContent>
@@ -213,7 +213,7 @@ export function CanvasMenu({ canvasId, history, onHistory, onNew, onOpen, onDele
         <div className="transition-[translate,scale,opacity] duration-250 delay-50 ease-[cubic-bezier(0.22,1,0.36,1)] group-data-starting-style/fab:translate-y-12 group-data-starting-style/fab:scale-75 group-data-starting-style/fab:opacity-0 group-data-ending-style/fab:translate-y-12 group-data-ending-style/fab:scale-75 group-data-ending-style/fab:opacity-0 motion-reduce:transition-none">
           <Popover open={zoomOpen} onOpenChange={setZoomOpen}>
             <Tip label="Zoom"><PopoverTrigger render={<Button variant="outline" size="icon-lg" className="size-12 rounded-full bg-popover text-popover-foreground shadow-sm" />} aria-label="Zoom">
-              <SearchIcon />
+              <ZoomInIcon />
             </PopoverTrigger></Tip>
             <PopoverContent side="right" align="center" sideOffset={12} className="w-auto p-1">
               <PopoverTitle className="sr-only">Canvas zoom</PopoverTitle>
