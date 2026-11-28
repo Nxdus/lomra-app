@@ -22,7 +22,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { toast } from "@/components/ui/toast";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { canvasHistory, canvasName, canvasStorage, isCanvasFilePending, deleteCanvasStorage, canvasFileError, canvasFileKind, canvasFileSize, type CanvasImage, type CanvasHistoryItem } from "@/lib/image-canvas/image-canvas-storage";
+import { canvasHistory, canvasName, canvasStorage, isCanvasFilePending, deleteCanvasStorage, canvasFileError, canvasFileKind, canvasFileSize, uniqueName, type CanvasImage, type CanvasHistoryItem } from "@/lib/image-canvas/image-canvas-storage";
 import { CANVAS_CAMERA_KEY, canvasPoint, parseCanvasCamera, zoomCamera, type CanvasCamera } from "@/lib/image-canvas/image-canvas-camera";
 import { resizeImage, type ImageBounds, type ImageCorner } from "@/lib/image-canvas/image-canvas-resize";
 import { shotGridSize } from "@/components/prompt/storyboard-shots";
@@ -86,15 +86,7 @@ export type CanvasHandle = {
   selectItems?: (ids: string[]) => void;
 };
 
-function uniqueName(name: string, taken: Set<string>) {
-  if (!taken.has(name)) return name;
-  const dot = name.lastIndexOf(".");
-  const extension = dot > 0 ? name.slice(dot) : "";
-  const base = (dot > 0 ? name.slice(0, dot) : name).replace(/ \d+$/, "");
-  for (let number = 2; ; number++) if (!taken.has(`${base} ${number}${extension}`)) return `${base} ${number}${extension}`;
-}
-
-export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasChange, onStoryboardHost, onStoryboardOrigin, watchItem, onWatchedBounds, onUseSetup, onMakeVariations, onGenerateAgain, promptBusy }: { watchItem?: string; onWatchedBounds?: (bounds: ImageBounds | null) => void; onStoryboardHost?: (host: HTMLDivElement | null) => void; onStoryboardOrigin?: (origin: { x: number; y: number }) => void; ref?: Ref<CanvasHandle>; onSelectionChange?: (images: VisibleImage[]) => void; onReadyChange?: (ready: boolean) => void; onCanvasChange?: (id: string) => void; onUseSetup?: (item: VisibleImage, items: VisibleImage[]) => void; onMakeVariations?: (item: VisibleImage, items: VisibleImage[]) => void; onGenerateAgain?: (item: VisibleImage, items: VisibleImage[]) => void; promptBusy?: boolean }) {
+export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasChange, onStoryboardHost, onStoryboardOrigin, watchItem, onWatchedBounds, onUseSetup, onMakeVariations, onGenerateAgain, onTitleChange, promptBusy }: { onTitleChange?: (name: string) => void; watchItem?: string; onWatchedBounds?: (bounds: ImageBounds | null) => void; onStoryboardHost?: (host: HTMLDivElement | null) => void; onStoryboardOrigin?: (origin: { x: number; y: number }) => void; ref?: Ref<CanvasHandle>; onSelectionChange?: (images: VisibleImage[]) => void; onReadyChange?: (ready: boolean) => void; onCanvasChange?: (id: string) => void; onUseSetup?: (item: VisibleImage, items: VisibleImage[]) => void; onMakeVariations?: (item: VisibleImage, items: VisibleImage[]) => void; onGenerateAgain?: (item: VisibleImage, items: VisibleImage[]) => void; promptBusy?: boolean }) {
   const viewport = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const current = useRef<VisibleImage[]>([]);
@@ -223,8 +215,10 @@ export function ImageCanvas({ ref, onSelectionChange, onReadyChange, onCanvasCha
     return () => { cancelled = true; };
   }, [canvasId]);
   useEffect(() => {
-    document.title = history.some((item) => item.id === canvasId) ? `${canvasName(canvasId, history)} — Lomra` : "Lomra";
-  }, [canvasId, history]);
+    const name = history.some((item) => item.id === canvasId) ? canvasName(canvasId, history) : "";
+    document.title = name ? `${name} — Lomra` : "Lomra";
+    onTitleChange?.(name);
+  }, [canvasId, history, onTitleChange]);
 
   // When the window shrinks so that content that was fully in view (pictures and storyboard) is cut off, fit it again.
   useEffect(() => {

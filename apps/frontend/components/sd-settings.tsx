@@ -133,8 +133,7 @@ export function SdSettings({ search }: { search?: string }) {
             status={model.localState === "missing" ? "File missing" : model.localState === "changed" ? "Checkpoint changed" : model.local && !status.engine ? "Image engine required" : model.installed ? "Installed" : model.partial ? `Paused, ${localModelSize(model.partial)} downloaded` : undefined}
             control={compatible.length ? <Select value={model.profile.id} disabled={savingProfileId === model.id}
               onValueChange={(value) => { if (value && value !== model.profile.id) void changeProfile(model.id, value); }}>
-              <SelectTrigger size="sm" aria-label={`Profile for ${model.name}`} title="Generation settings profile" className="max-w-52 text-xs">
-                <span aria-hidden="true" className="shrink-0 text-muted-foreground">Profile</span>
+              <SelectTrigger size="sm" aria-label={`Profile for ${model.name}`} className="max-w-44 text-xs">
                 <SelectValue className="truncate">{model.profile.name}</SelectValue>
               </SelectTrigger>
               <SelectContent align="end" alignItemWithTrigger={false} className="w-auto min-w-64 max-w-[calc(100vw-2rem)]">

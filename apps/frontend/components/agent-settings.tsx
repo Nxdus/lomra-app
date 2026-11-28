@@ -64,7 +64,6 @@ export function AgentSettings() {
         <RefreshCwIcon aria-hidden="true" className={refreshing ? "motion-safe:animate-spin" : undefined} />
       </Button></Tip>}
     </div>
-    <p className="-mt-1 text-xs text-muted-foreground">Enabled agents run on this computer with their own sign-in. They open in the agent terminal and can be added as chat models.</p>
     {!bridge ? <p role="status" className="text-xs text-muted-foreground">Local agents are available in the desktop app only.</p>
       : listError ? <Alert variant="destructive"><AlertDescription>Could not load local agents. Use Refresh to try again.</AlertDescription></Alert>
       : !agents ? <p role="status" className="text-xs text-muted-foreground">Looking for installed agents…</p>

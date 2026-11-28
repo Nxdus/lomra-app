@@ -4,7 +4,7 @@ import { ConfirmDelete } from "@/components/confirm-delete";
 import { Tip } from "@/components/tip";
 import { useEffect, useId, useImperativeHandle, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, ImagesIcon, Loader2Icon, MessageCircleIcon, MicIcon, SquareIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, Rows3Icon, ScanEyeIcon, TrashIcon } from "lucide-react";
+import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, ImagesIcon, Loader2Icon, MessageCircleIcon, MicIcon, SquareIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, ScanEyeIcon, TrashIcon, FileDownIcon, ChartGanttIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { chatStorage, persistentUrl, restoreGenerations, writeChat, type Chat } from "./chat-storage";
 import { Button } from "@/components/ui/button";
@@ -1917,8 +1917,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
           toolbarActions={<>
             <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Apply reference set" onClick={() => setBoardDialog("references")} />}><ImagesIcon /></TooltipTrigger><TooltipContent>Apply reference set</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Preview storyboard" onClick={() => setBoardDialog("preview")} />}><PlayIcon /></TooltipTrigger><TooltipContent>Preview storyboard</TooltipContent></Tooltip>
-            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Export storyboard" onClick={() => setBoardDialog("export")} />}><DownloadIcon /></TooltipTrigger><TooltipContent>Export storyboard</TooltipContent></Tooltip>
-            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Edit timeline" onClick={() => setBoardDialog("timeline")} />}><Rows3Icon /></TooltipTrigger><TooltipContent>Edit timeline</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Export storyboard" onClick={() => setBoardDialog("export")} />}><FileDownIcon /></TooltipTrigger><TooltipContent>Export storyboard</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Edit timeline" onClick={() => setBoardDialog("timeline")} />}><ChartGanttIcon /></TooltipTrigger><TooltipContent>Edit timeline</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="AI storyboard review" onClick={() => setBoardDialog("review")} />}><ScanEyeIcon /></TooltipTrigger><TooltipContent>AI storyboard review</TooltipContent></Tooltip>
           </>}
           video={videoBounds && { ...videoBounds, x: videoBounds.x - origin.x, y: videoBounds.y - origin.y }} onMoveStart={startMove} onMakeVideo={() => void planStoryboardVideo(storyboard)} onEditStory={() => setStoryDraft(storyboard.story)} onRedraft={() => setRedrafting(true)} />
@@ -2068,9 +2068,9 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
             <GripVerticalIcon />
           </Button>
       {threeDModel && <div aria-label="3D model input requirements" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">3D</span>
+        <span className="font-medium text-foreground">{multiview ? "Multiview" : requiresImage(threeDModel) ? "Single image" : "Text to 3D"}</span>
         <span aria-hidden="true">·</span>
-        <span>{multiview ? `Multiview · ${multiviewRequirements(threeDModel)}` : requiresImage(threeDModel) ? "1 image" : "Text only"}</span>
+        <span>{multiview ? multiviewRequirements(threeDModel) : requiresImage(threeDModel) ? "1 image" : "Text only"}</span>
       </div>}
           <div className="ml-auto flex min-w-0 items-center gap-2">
           {localEngine && agentEfforts[localEngine.engine] && <EffortPicker levels={agentEfforts[localEngine.engine] ?? []} value={efforts[localEngine.engine]}
@@ -2084,7 +2084,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
               <Select items={ratioItems} value={aspectRatio} onValueChange={(value) => setAspectRatio(value ?? "")} disabled={!!status}>
                 <Tip label="Image aspect ratio">
                   <SelectTrigger size="sm" variant="ghost" aria-label="Image aspect ratio" className="w-auto min-w-0 px-2 text-xs">
-                    <SelectValue>{`Image · ${aspectRatio || "Auto"}`}</SelectValue>
+                    <SelectValue>{aspectRatio || "Auto"}</SelectValue>
                   </SelectTrigger>
                 </Tip>
                 <SelectContent side="top" align="end" alignItemWithTrigger={false}>

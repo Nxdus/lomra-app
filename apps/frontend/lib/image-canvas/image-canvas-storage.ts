@@ -102,6 +102,27 @@ async function saveCanvas(images: CanvasImage[], id: string) {
   await storage(`canvas/${encodeURIComponent(id)}`, 'PUT', manifest);
 }
 
+/** `name`, or the first free "<base> <n><ext>" when another item already has it ("Image 1.png" becomes "Image 2.png"). */
+export function uniqueName(name: string, taken: ReadonlySet<string>) {
+  if (!taken.has(name)) return name;
+  const dot = name.lastIndexOf('.');
+  const extension = dot > 0 ? name.slice(dot) : '';
+  const base = (dot > 0 ? name.slice(0, dot) : name).replace(/ \d+$/, '');
+  for (let number = 2; ; number++) if (!taken.has(`${base} ${number}${extension}`)) return `${base} ${number}${extension}`;
+}
+
+/** Gives repeated item names a number so every item on a canvas has its own name; the first keeps its name. */
+export function uniqueNames(names: readonly string[]) {
+  const taken = new Set(names);
+  const seen = new Set<string>();
+  return names.map((name) => {
+    const unique = seen.has(name) ? uniqueName(name, taken) : name;
+    seen.add(unique);
+    taken.add(unique);
+    return unique;
+  });
+}
+
 export async function canvasStorage(images?: CanvasImage[], id = 'default', layoutOnly = false): Promise<CanvasImage[]> {
   if (images !== undefined) {
     await saveCanvas(images, id);
@@ -116,7 +137,10 @@ export async function canvasStorage(images?: CanvasImage[], id = 'default', layo
       await saveCanvas(legacy, id);
       return legacy;
     }
-    if (layoutOnly) return saved.value.map(({ name, type, lastModified, ...item }) => {
+    // Older canvases can hold several items with one name; number them here so the next save keeps the names apart.
+    const names = uniqueNames(saved.value.map((item) => item.name));
+    const entries = saved.value.map((item, index) => ({ ...item, name: names[index] }));
+    if (layoutOnly) return entries.map(({ name, type, lastModified, ...item }) => {
       const file = new File([], name, { type, lastModified });
       pendingFiles.add(file);
       // These files already exist remotely; saving a layout must never upload empty placeholders.
@@ -128,7 +152,7 @@ export async function canvasStorage(images?: CanvasImage[], id = 'default', layo
     await Promise.all(Array.from({ length: Math.min(4, saved.value.length) }, async () => {
     while (cursor < saved.value.length) {
       const index = cursor++;
-      const { name, type, lastModified, ...item } = saved.value[index];
+      const { name, type, lastModified, ...item } = entries[index];
       try {
         const blob = await storageFile(item.id);
         if (!blob) throw new Error('Canvas file missing');

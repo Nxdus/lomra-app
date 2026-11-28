@@ -19,7 +19,6 @@ import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field
 type UsageResult = { metrics: { label: string; amount: number }[] };
 const creditCache = new Map<string, { apiKey: string; at: number; metrics: UsageResult["metrics"] }>();
 const creditCacheTtl = 60_000;
-const creditTimeout = 20_000;
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 4 });
 
 const tokens = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
@@ -58,7 +57,6 @@ function CreditUsage({ provider, apiKey }: { provider: Provider; apiKey: string 
   const [result, setResult] = useState<{
     refresh: number;
     metrics: UsageResult["metrics"];
-    errors: string[];
   } | null>(null);
   const loading = result?.refresh !== refresh;
 
@@ -72,13 +70,12 @@ function CreditUsage({ provider, apiKey }: { provider: Provider; apiKey: string 
       const last = cached?.apiKey === apiKey ? cached : undefined;
       if (last && !force && Date.now() - last.at < creditCacheTtl) return { metrics: last.metrics };
       try {
-        // The usage endpoints can hang for a long time; give up early so the box never stays on "Loading".
-        const metrics = ((await callProvider(provider, apiKey, { action, signal: AbortSignal.timeout(creditTimeout) })) as UsageResult).metrics;
+        const metrics = ((await callProvider(provider, apiKey, { action })) as UsageResult).metrics;
         creditCache.set(cacheKey, { apiKey, at: Date.now(), metrics });
         return { metrics };
       } catch (error) {
         // Keep showing the last good value; only surface the error when the user asked to refresh.
-        const message = error instanceof Error && error.name !== "TimeoutError" && error.name !== "AbortError" ? error.message : `${provider === "fal" ? "Fal" : "OpenRouter"} did not respond in time`;
+        const message = error instanceof Error ? error.message : "Could not load credit usage";
         if (last) return { metrics: last.metrics, error: force ? message : undefined };
         throw new Error(message);
       }
@@ -93,7 +90,8 @@ function CreditUsage({ provider, apiKey }: { provider: Provider; apiKey: string 
           if (response.value.error) errors.push(response.value.error);
         }
       });
-      setResult({ refresh, metrics, errors: [...new Set(errors)] });
+      [...new Set(errors)].forEach((title) => toast.add({ title, type: "error" }));
+      setResult({ refresh, metrics });
     });
     return () => { cancelled = true; };
   }, [provider, apiKey, refresh]);
@@ -111,15 +109,12 @@ function CreditUsage({ provider, apiKey }: { provider: Provider; apiKey: string 
             <dd className="text-xs tabular-nums">{usd.format(metric.amount)}</dd>
           </div>)}
         </dl>
-        {!result?.metrics.length && !result?.errors.length && <p className="text-muted-foreground">No usage reported yet.</p>}
-        {!result?.metrics.length && !!result?.errors.length && <p className="text-muted-foreground">Credit usage unavailable.</p>}
       </>}
     </div>
     <Tip label="Refresh credit usage"><Button type="button" variant="outline" size="icon-sm" className="rounded-lg" disabled={loading} aria-label={`Refresh ${provider === "fal" ? "Fal" : "OpenRouter"} credit usage`} onClick={() => setRefresh((value) => value + 1)}>
       <RefreshCwIcon aria-hidden="true" />
     </Button></Tip>
     </div>
-    {!loading && !!result?.errors.length && <Alert variant="destructive"><AlertDescription>{result.errors.map((error) => error.replace(/\.$/, "")).join(". ")}.{result.metrics.length ? " Showing what could be loaded." : ""} Use Refresh to try again.</AlertDescription></Alert>}
   </section>;
 }
 
