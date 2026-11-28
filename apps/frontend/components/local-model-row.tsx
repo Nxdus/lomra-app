@@ -17,11 +17,13 @@ export function LocalModelRow({ name, description, size, status, control, action
   return <div className="flex items-center gap-3 py-2.5 text-sm">
     <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2">
       <div className="min-w-0 flex-1 basis-36">
-        <div className="break-words">
-          {name} <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{size}</span>
+        <div className="flex min-w-0 items-baseline gap-1">
+          <span className="truncate" title={name}>{name}</span>
+          <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground">{size}</span>
         </div>
-        <div className="break-words text-xs text-muted-foreground">
-          {description}{status && <> · <span role="status">{status}</span></>}
+        <div className="flex min-w-0 text-xs text-muted-foreground">
+          <span className="truncate" title={description}>{description}</span>
+          {status && <span className="shrink-0 whitespace-pre"> · <span role="status">{status}</span></span>}
         </div>
       </div>
       {control}
