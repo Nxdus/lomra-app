@@ -149,7 +149,7 @@ type Group = typeof categories[number] & {
 export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onSelectableChange, onOpenModelSetup, disabled = false }: {
   models: string[];
   onModelsChange: Dispatch<SetStateAction<string[]>>;
-  onCatalogInfoChange?: (info: { prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean> }) => void;
+  onCatalogInfoChange?: (info: { prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean>; names: ReadonlyMap<string, string> }) => void;
   onSelectableChange?: (selectable: ReadonlySet<string>) => void;
   onOpenModelSetup: (options?: { provider?: KeyedProvider; modelName?: string }) => void;
   disabled?: boolean;
@@ -315,12 +315,14 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
       // Prices come from the full catalog so saved models are priced too; a failed lookup just hides prices.
       const prices = new Map<string, string>();
       const vision = new Map<string, boolean>();
+      const names = new Map<string, string>();
       await Promise.all(categories.filter((category) => category.value !== "3d").map(async (category) => {
         try {
           const response = await fetch(`/api/models?category=${category.value}&all=true`, { signal: controller.signal });
           if (response.ok) for (const item of (await response.json()).models as CatalogModel[]) {
             if (item.price) prices.set(`${category.value}:${item.id}`, item.price);
             if (category.value === "llm" && typeof item.vision === "boolean") vision.set(item.id, item.vision);
+            if (category.value === "llm") names.set(item.id, modelDisplayName(item.name));
           }
         } catch { /* Prices are optional. */ }
       }));
@@ -355,7 +357,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
         if (controller.signal.aborted) return;
         for (const group of results) for (const model of group.models) model.price = group.value === "3d" ? falPriced.get(model.value.slice(3)) : prices.get(model.value);
         setGroups(results);
-        onCatalogInfoChange?.({ prices, vision });
+        onCatalogInfoChange?.({ prices, vision, names });
         setHiddenModels(hidden ?? []);
         const useSavedSelection = !saveSelection.current;
         saveSelection.current ??= createSelectionSaver(savedSelection ?? [], (values) => saveSetting('selected-models', values));

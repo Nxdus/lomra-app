@@ -115,7 +115,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   const [characterOptions, setCharacterOptions] = useState<Character[] | false | null>(null);
   const [characterIndex, setCharacterIndex] = useState(0);
   const [models, setModels] = useState<string[]>([]);
-  const [{ prices: modelPrices, vision }, setCatalogInfo] = useState<{ prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean> }>(() => ({ prices: new Map(), vision: new Map() }));
+  const [{ prices: modelPrices, vision, names: llmNames }, setCatalogInfo] = useState<{ prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean>; names: ReadonlyMap<string, string> }>(() => ({ prices: new Map(), vision: new Map(), names: new Map() }));
   const [selectableModels, setSelectableModels] = useState<ReadonlySet<string>>();
   const [aspectRatio, setAspectRatio] = useState("");
   const sd = useSd();
@@ -202,6 +202,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   const reviewUnavailable = !llm || localEngine || vision.get(llm) === false
     ? "Select a chat model that can read images to review these shots."
     : reviewProvider && reviewProvider !== "ollama" && !keys[reviewProvider] ? "Add the chat provider’s API key in Settings." : undefined;
+  const reviewModels = [...vision].filter(([id, canRead]) => canRead && id !== llm && selectableModels?.has(`llm:${id}`))
+    .map(([id]) => ({ id, name: llmNames.get(id) ?? id }));
   const active = useRef<AbortController | null>(null);
   const agentMessageIndex = useRef(0);
   const agentSelection = useRef<VisibleImage[] | null>(null);
@@ -1948,7 +1950,9 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
           }))}
           onPreview={(plan) => renderFromTimeline(plan, "preview")} onExport={(plan) => renderFromTimeline(plan, "export")} />
         <StoryboardReview storyboard={storyboard} images={storyImages} open={boardDialog === "review"} onOpenChange={(open) => setBoardDialog(open ? "review" : null)}
-          contextKey={JSON.stringify([canvasId, boardOwner, llm])} unavailableReason={reviewUnavailable} complete={completeStoryboardReview} onUpdate={setStoryboard} />
+          contextKey={JSON.stringify([canvasId, boardOwner, llm])} unavailableReason={reviewUnavailable}
+          visionModels={reviewModels} onSelectModel={(id) => setModels((current) => [...current.filter((entry) => !entry.startsWith("llm:")), `llm:${id}`])}
+          complete={completeStoryboardReview} onUpdate={setStoryboard} />
       </>}
       {!storyboard && selection.some(({ file }) => !storyboardQueued || canvasFileKind(file) === "image") && <div aria-label="Selected canvas items" className="flex max-h-36 gap-2 overflow-x-auto px-3 py-2">
         {selection.filter(({ file }) => !storyboardQueued || canvasFileKind(file) === "image").map((item) => <div key={item.id} title={item.file.name} className="flex size-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted">
