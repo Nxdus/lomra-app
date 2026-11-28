@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { localCanvasStorage as canvasStorage, canvasFileError, canvasFileKind, canvasFileSize, displaySize, imageFileError } from "./image-canvas-storage";
-import { canvasHistory, canvasStorage as remoteCanvasStorage, isCanvasFilePending, loadCanvasFile, renameCanvas } from './image-canvas-storage';
+import { canvasHistory, canvasName, canvasStorage as remoteCanvasStorage, isCanvasFilePending, loadCanvasFile, renameCanvas } from './image-canvas-storage';
 import { storageFile, storage } from '../storage';
 
 test("canvas accepts videos and GLB, checks size limits and rejects invalid GLB headers", async () => {
@@ -242,7 +242,9 @@ test('separate canvases preserve the original and reopen saved file layouts', as
     const restored = await remoteCanvasStorage(undefined, id);
     assert.equal(restored[0].x, 42);
     assert.equal(await restored[0].file.text(), 'history-bytes');
-    assert.deepEqual(await canvasHistory(), [{ id, count: 1 }, { id: 'default', count: 0 }]);
+    const history = await canvasHistory();
+    assert.deepEqual(history, [{ id, count: 1, date: Number(id.split('-')[1]) }, { id: 'default', count: 0 }]);
+    assert.deepEqual([canvasName(id, history), canvasName('default', history)], ['Canvas 1', 'Original canvas']);
     await assert.rejects(remoteCanvasStorage(undefined, 'missing'), /no longer exists/);
   } finally { globalThis.fetch = originalFetch; }
 });

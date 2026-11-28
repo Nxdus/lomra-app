@@ -1625,7 +1625,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       ref={panel}
       aria-label="Prompt editor"
       aria-busy={loading}
-      className="fixed flex max-h-[calc(var(--app-content-height)-2rem)] min-h-13.5 w-184 max-w-[calc(100%-2rem)] flex-col gap-2 overflow-y-auto rounded-3xl border border-border bg-card p-2 text-card-foreground shadow-xl"
+      className="fixed flex max-h-[calc(var(--app-content-height)-2rem)] min-h-13.5 w-184 max-w-[calc(100%-2rem)] flex-col min-[480px]:max-[899px]:max-w-[calc(100%-10rem)] gap-2 overflow-y-auto rounded-3xl border border-border bg-card p-2 text-card-foreground shadow-xl"
       style={position
         ? { left: position.x, ...(chatBottom === null
           ? { top: `max(calc(var(--app-titlebar-space) + 1rem), ${position.y}px)` }

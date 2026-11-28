@@ -60,7 +60,7 @@ export async function deleteCanvasStorage(id: string) {
   await storage(`canvas/${encodeURIComponent(id)}`, 'DELETE');
 }
 
-export type CanvasHistoryItem = { id: string; count: number; name?: string };
+export type CanvasHistoryItem = { id: string; count: number; name?: string; date?: number };
 
 export async function renameCanvas(id: string, name: string) {
   const trimmed = name.trim();
@@ -73,12 +73,20 @@ export async function canvasHistory(): Promise<CanvasHistoryItem[]> {
   const [rows, settings]: [{ id: string; value: SavedCanvasImage[] }[], { id: string; value: unknown }[]] = await Promise.all([storage('canvas'), storage('settings')]);
   return rows.map((row) => {
     const name = settings.find(setting => setting.id === `canvas-name-${row.id}`)?.value;
-    return { id: row.id, count: row.value.length, ...(typeof name === 'string' && name.trim() ? { name } : {}) };
+    // Canvases are dated by the time in their id; the original canvas has none, so use its newest file.
+    const date = Number(row.id.split('-')[1]) || Math.max(0, ...row.value.map(item => Number(item.lastModified) || 0));
+    return { id: row.id, count: row.value.length, ...(typeof name === 'string' && name.trim() ? { name } : {}), ...(date ? { date } : {}) };
   }).sort((a, b) => (Number(b.id.split('-')[1]) || 0) - (Number(a.id.split('-')[1]) || 0));
 }
 
-export function canvasTitle(id: string) {
-  return id === 'default' ? 'Original canvas' : `Canvas · ${new Date(Number(id.split('-')[1])).toLocaleString()}`;
+// The saved name, else a stable numbered default (oldest unnamed canvas is "Canvas 1").
+export function canvasName(id: string, history: CanvasHistoryItem[]) {
+  const item = history.find(other => other.id === id);
+  if (item?.name) return item.name;
+  if (id === 'default') return 'Original canvas';
+  const unnamed = history.filter(other => !other.name && other.id !== 'default').sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
+  const index = unnamed.findIndex(other => other.id === id);
+  return index < 0 ? 'Canvas' : `Canvas ${index + 1}`;
 }
 
 async function saveCanvas(images: CanvasImage[], id: string) {
