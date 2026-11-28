@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { Storyboard } from "./storyboard-data";
@@ -22,6 +23,10 @@ export type StoryboardReviewProps = {
   contextKey: string;
   /** Provide a message when the selected chat model cannot receive images. */
   unavailableReason?: string;
+  /** Configured chat models that accept images, offered in the dialog when the selected one cannot review. */
+  visionModels?: readonly { id: string; name: string }[];
+  /** Makes `id` the selected chat model. */
+  onSelectModel?: (id: string) => void;
   /** The storyboard chat completion path, with no prior messages or tools. */
   complete: (instruction: string, text: string, images: ReviewImage[], signal: AbortSignal) => Promise<unknown>;
   onUpdate: (update: (current: Storyboard | undefined) => Storyboard | undefined) => void;
@@ -56,7 +61,7 @@ function timestamp(seconds: number) {
 type ReviewResult = ReturnType<typeof parseReview> & { snapshot: string };
 type ReviewShots = ReturnType<typeof reviewShots>;
 
-function ReviewForm({ storyboard, images, unavailableReason, complete, onUpdate }: Omit<StoryboardReviewProps, "open" | "onOpenChange">) {
+function ReviewForm({ storyboard, images, unavailableReason, visionModels, onSelectModel, complete, onUpdate }: Omit<StoryboardReviewProps, "open" | "onOpenChange">) {
   const [tab, setTab] = useState("selection");
   const [selected, setSelected] = useState(new Set<string>());
   const [approved, setApproved] = useState(new Set<string>());
@@ -148,10 +153,10 @@ function ReviewForm({ storyboard, images, unavailableReason, complete, onUpdate 
                     className={cn("relative aspect-video h-auto min-h-16 min-w-0 overflow-hidden rounded-lg border p-0 text-left",
                       active ? "border-ring ring-1 ring-ring" : "hover:border-ring/50")}>
                     <span className="absolute inset-0"><ReviewThumbnail picture={picture} /></span>
-                    {hasPicture && <span aria-hidden="true" className="absolute inset-0 bg-linear-to-t from-black/95 via-black/35 to-black/20" />}
+                    {hasPicture && <span aria-hidden="true" className="absolute inset-0 bg-linear-to-t from-black/95 from-10% via-black/70 via-45% to-black/25" />}
                     <span className={cn("absolute top-1.5 left-1.5 rounded px-1.5 py-0.5 text-xs font-medium", hasPicture ? "bg-black/75 text-white" : "bg-background")}>Shot {number}</span>
                     {active && <CheckIcon aria-hidden="true" className="absolute top-1.5 right-1.5 size-4 rounded-full bg-primary p-0.5 text-primary-foreground" />}
-                    <span className={cn("absolute inset-x-1.5 bottom-1.5 block min-w-0 leading-tight", hasPicture && "text-white")}>
+                    <span className={cn("absolute inset-x-1.5 bottom-1.5 block min-w-0 leading-tight", hasPicture && "text-white [text-shadow:0_1px_2px_rgb(0_0_0/0.9)]")}>
                       {caption && <span className="block truncate text-xs font-medium">{caption}</span>}
                       <span className={cn("block truncate text-xs tabular-nums", hasPicture ? "text-white/90" : "text-muted-foreground")}>{timestamp(offset)} · {media}</span>
                     </span>
@@ -184,6 +189,18 @@ function ReviewForm({ storyboard, images, unavailableReason, complete, onUpdate 
         {(error || (tab === "selection" && (unavailableReason || overLimit))) && <p role="alert" className="wrap-anywhere text-xs text-destructive">
           {error || unavailableReason || `Select fewer shots or references to fit within ${reviewImageLimit} images.`}
         </p>}
+        {!error && tab === "selection" && unavailableReason && !!visionModels?.length && onSelectModel && <div className="flex flex-wrap items-center gap-2 text-xs">
+          <label htmlFor="review-model" className="text-muted-foreground">Review with</label>
+          <Select items={visionModels.map(({ id, name }) => ({ value: id, label: name }))} value={null} disabled={!!status}
+            onValueChange={(value) => { if (value) onSelectModel(value); }}>
+            <SelectTrigger id="review-model" size="sm" className="max-w-64 text-xs">
+              <SelectValue placeholder="Choose a model that reads images" className="truncate" />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              {visionModels.map(({ id, name }) => <SelectItem key={id} value={id}>{name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>}
         <DialogFooter className="shrink-0 flex-row flex-wrap items-center justify-between gap-2">
           {tab === "selection" ? <>
             <div className="min-w-0 space-y-1 text-xs tabular-nums text-muted-foreground">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { DownloadIcon, ExternalLinkIcon, LoaderCircleIcon, PauseIcon, PlayIcon, PowerOffIcon, RefreshCwIcon, SaveIcon, SlidersHorizontalIcon, Trash2Icon, XIcon } from "lucide-react";
+import { DownloadIcon, ExternalLinkIcon, LoaderCircleIcon, PauseIcon, PlayIcon, RefreshCwIcon, SaveIcon, SlidersHorizontalIcon, Trash2Icon, XIcon } from "lucide-react";
 import { Tip } from "@/components/tip";
 import { LocalModelRow } from "@/components/local-model-row";
 import { OllamaIcon } from "@/components/ollama-icon";
@@ -168,8 +168,8 @@ export function OllamaSettings() {
                 {installing ? <LoaderCircleIcon aria-hidden="true" className="motion-safe:animate-spin" /> : installMethod === "winget" ? <DownloadIcon aria-hidden="true" /> : <ExternalLinkIcon aria-hidden="true" />}
               </Button></Tip>
               : <Tip label="Check again"><Button type="button" variant="outline" size="icon-sm" aria-label="Check again" onClick={() => void refresh()}><RefreshCwIcon aria-hidden="true" /></Button></Tip>)}
-          {canUninstall && <Tip label={uninstalling ? "Uninstalling…" : "Uninstall Ollama"}><Button type="button" variant="ghost" size="icon-sm" aria-label="Uninstall Ollama" disabled={busy || uninstalling || starting} onClick={() => setConfirmingUninstall(true)}>
-            {uninstalling ? <LoaderCircleIcon aria-hidden="true" className="motion-safe:animate-spin" /> : <PowerOffIcon aria-hidden="true" />}
+          {canUninstall && <Tip label={uninstalling ? "Uninstalling…" : "Uninstall Ollama from this computer"}><Button type="button" variant="ghost" size="icon-sm" aria-label="Uninstall Ollama" disabled={busy || uninstalling || starting} onClick={() => setConfirmingUninstall(true)}>
+            {uninstalling ? <LoaderCircleIcon aria-hidden="true" className="motion-safe:animate-spin" /> : <Trash2Icon aria-hidden="true" />}
           </Button></Tip>}
           <Tip label="Change server"><Button type="button" variant="ghost" size="icon-sm" aria-label="Change Ollama server" aria-pressed={editing} disabled={busy} onClick={() => setEditing((value) => !value)}><SlidersHorizontalIcon aria-hidden="true" /></Button></Tip>
         </div>

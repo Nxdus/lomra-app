@@ -565,7 +565,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
       </Select>
       <ConfirmDelete open={!!deletingModel} onOpenChange={(open) => { if (!open) setDeletingModel(null); }} title="Remove model?" actionLabel="Remove" description={`“${deletingModel?.name}” will be removed from your model list.`} disabled={disabled || settingsSaving || !canDelete} onConfirm={async () => { if (deletingModel) await removeModel(deletingModel.value); }} />
       <Dialog open={!!addingGroup} onOpenChange={(open) => { if (!open && !settingsSaving) setAddingGroup(null); }}>
-        <DialogContent showCloseButton={!settingsSaving} className="gap-4 rounded-2xl p-4 shadow-lg">
+        <DialogContent showCloseButton={!settingsSaving} className="gap-4 rounded-2xl p-4 shadow-lg sm:max-w-lg">
           <DialogHeader className="min-h-8 justify-center pr-8">
             <DialogTitle>Add {addingGroup?.value === "llm" ? "LLM" : addingGroup?.value === "3d" ? "3D" : addingGroup?.label.toLowerCase()} model</DialogTitle>
             <DialogDescription className="sr-only">Choose a provider and add a model to your list.</DialogDescription>
@@ -605,13 +605,13 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
               onModelsChange((current) => [...current.filter((model) => !model.startsWith(`${addingGroup.value}:`)), value]);
             }
           }}>
-            {providerOptions.length > 0 ? <FieldGroup className="grid grid-cols-[fit-content(45%)_minmax(0,1fr)] items-center gap-2">
+            {providerOptions.length > 0 ? <FieldGroup className="gap-3">
               {addingGroup && <Field className="min-w-0">
-                <FieldLabel htmlFor="add-model-provider" className="sr-only">Provider</FieldLabel>
+                <FieldLabel htmlFor="add-model-provider">Provider</FieldLabel>
                 <Select items={providerOptions.map(({ id, name }) => ({ value: id, label: name }))}
                   value={selectedProvider?.id} disabled={disabled || settingsSaving}
                   onValueChange={(value) => { setAddProvider(value); setModelId(null); }}>
-                  <SelectTrigger id="add-model-provider" title={selectedProvider?.name} className="w-full min-w-0 px-2">
+                  <SelectTrigger id="add-model-provider" title={selectedProvider?.name} className="w-full min-w-0">
                     <SelectValue className="min-w-0 items-center">
                       <ModelProviderIcon value={`${addingGroup.value}:${selectedProvider?.id ?? ""}`} provider={addingGroup.provider} />
                       <span className="truncate">{selectedProvider?.name}</span>
@@ -628,7 +628,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
                 </Select>
               </Field>}
               <Field className="min-w-0">
-                <FieldLabel htmlFor="custom-model-search" className="sr-only">Search models</FieldLabel>
+                <FieldLabel htmlFor="custom-model-search">Search models</FieldLabel>
                 <Combobox items={availableOptions}
                   value={modelToAdd ?? null}
                   itemToStringLabel={(model) => model.name} itemToStringValue={(model) => model.id}
@@ -638,8 +638,8 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
                   <ComboboxInput id="custom-model-search" placeholder={loadingModels ? "Loading models…" : "Search by name or ID…"} disabled={modelsUnavailable || settingsSaving} showClear />
                   <ComboboxContent className="shadow-lg">
                     <ComboboxEmpty>No matching models.</ComboboxEmpty>
-                    <ComboboxList>
-                      {(model: CatalogModel) => <ComboboxItem key={model.id} value={model}>
+                    <ComboboxList className="max-h-[min(14.5rem,calc(var(--available-height)-2.25rem))] snap-y">
+                      {(model: CatalogModel) => <ComboboxItem key={model.id} value={model} title={model.name} className="snap-start">
                         <div className="flex min-w-0 flex-col gap-1">
                           <span className="flex w-full min-w-0 items-center gap-2">
                             {addingGroup && <ModelProviderIcon value={`${addingGroup.value}:${model.id}`} provider={addingGroup.provider} />}

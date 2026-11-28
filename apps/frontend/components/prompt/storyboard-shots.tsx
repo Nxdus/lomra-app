@@ -392,7 +392,7 @@ export function StoryboardShots({ shots, images, characters, busy, status, video
               </div>
               <Field className="gap-1">
                 <FieldLabel htmlFor={`shot-${number}`}>Description</FieldLabel>
-                <Textarea id={`shot-${number}`} className="min-h-0 field-sizing-fixed resize-y py-2" rows={2} value={shot.description}
+                <Textarea id={`shot-${number}`} className="min-h-0 field-sizing-fixed resize-y py-2.5 leading-relaxed [scrollbar-width:thin] scroll-py-2.5" rows={3} value={shot.description}
                   maxLength={shotLimit} disabled={busy} onChange={(event) => onEdit(editing, { description: event.target.value })} />
               </Field>
               <div className="grid gap-3 sm:grid-cols-2">
