@@ -4,7 +4,7 @@ import { ConfirmDelete } from "@/components/confirm-delete";
 import { Tip } from "@/components/tip";
 import { useEffect, useId, useImperativeHandle, useRef, useState, type KeyboardEvent, type PointerEvent, type Ref } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, ImagesIcon, Loader2Icon, MessageCircleIcon, MicIcon, SquareIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, Rows3Icon, ScanEyeIcon, TrashIcon } from "lucide-react";
+import { ArrowUpIcon, ClapperboardIcon, BoxIcon, CheckIcon, PencilIcon, CloudUploadIcon, DownloadIcon, EyeIcon, GripVerticalIcon, HistoryIcon, ImagesIcon, Loader2Icon, MessageCircleIcon, MicIcon, SquareIcon, PlayIcon, PlusIcon, RefreshCwIcon, PanelsTopLeftIcon, ScanEyeIcon, TrashIcon, FileDownIcon, ChartGanttIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { chatStorage, persistentUrl, restoreGenerations, writeChat, type Chat } from "./chat-storage";
 import { Button } from "@/components/ui/button";
@@ -115,7 +115,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   const [characterOptions, setCharacterOptions] = useState<Character[] | false | null>(null);
   const [characterIndex, setCharacterIndex] = useState(0);
   const [models, setModels] = useState<string[]>([]);
-  const [{ prices: modelPrices, vision }, setCatalogInfo] = useState<{ prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean> }>(() => ({ prices: new Map(), vision: new Map() }));
+  const [{ prices: modelPrices, vision, names: llmNames }, setCatalogInfo] = useState<{ prices: ReadonlyMap<string, string>; vision: ReadonlyMap<string, boolean>; names: ReadonlyMap<string, string> }>(() => ({ prices: new Map(), vision: new Map(), names: new Map() }));
   const [selectableModels, setSelectableModels] = useState<ReadonlySet<string>>();
   const [aspectRatio, setAspectRatio] = useState("");
   const sd = useSd();
@@ -202,6 +202,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
   const reviewUnavailable = !llm || localEngine || vision.get(llm) === false
     ? "Select a chat model that can read images to review these shots."
     : reviewProvider && reviewProvider !== "ollama" && !keys[reviewProvider] ? "Add the chat provider’s API key in Settings." : undefined;
+  const reviewModels = [...vision].filter(([id, canRead]) => canRead && id !== llm && selectableModels?.has(`llm:${id}`))
+    .map(([id]) => ({ id, name: llmNames.get(id) ?? id }));
   const active = useRef<AbortController | null>(null);
   const agentMessageIndex = useRef(0);
   const agentSelection = useRef<VisibleImage[] | null>(null);
@@ -1421,7 +1423,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     "aria-controls": commandsOpen || characterMenuOpen ? suggestionsId : undefined,
     "aria-activedescendant": activeOptionId,
     onFocus: () => setPromptFocused(true),
-    onBlur: () => setPromptFocused(false),
+    // Leaving the app window also blurs the prompt; keep the suggestions so they are there on return.
+    onBlur: () => { if (document.hasFocus()) setPromptFocused(false); },
     onKeyDown: handlePromptKeyDown,
   };
 
@@ -1624,7 +1627,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
       ref={panel}
       aria-label="Prompt editor"
       aria-busy={loading}
-      className="fixed flex max-h-[calc(var(--app-content-height)-2rem)] min-h-13.5 w-184 max-w-[calc(100%-2rem)] flex-col gap-2 overflow-y-auto rounded-3xl border border-border bg-card p-2 text-card-foreground shadow-xl"
+      className="fixed flex max-h-[calc(var(--app-content-height)-2rem)] min-h-13.5 w-184 max-w-[calc(100%-2rem)] flex-col min-[480px]:max-[899px]:max-w-[calc(100%-10rem)] gap-2 overflow-y-auto rounded-3xl border border-border bg-card p-2 text-card-foreground shadow-xl"
       style={position
         ? { left: position.x, ...(chatBottom === null
           ? { top: `max(calc(var(--app-titlebar-space) + 1rem), ${position.y}px)` }
@@ -1807,7 +1810,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         </DialogContent>}
       </Dialog>
       {(history.length > 0 || generations.length > 0 || status) && <AccordionContent className="border-b pb-2">
-      <div ref={transcript} className="flex max-h-[40dvh] flex-col gap-3 overflow-y-auto overscroll-contain py-2 [&>*]:shrink-0" aria-label="Generation results" aria-busy={!!status}>
+      <div ref={transcript} className="flex max-h-[40dvh] flex-col gap-3 overflow-y-auto overscroll-contain pt-2 pb-6 [mask-image:linear-gradient(to_bottom,#000_calc(100%-1.5rem),transparent)] [&>*]:shrink-0" aria-label="Generation results" aria-busy={!!status}>
         {chatTimeline(history, generations).map(({ message, tasks }, index) => <div key={index} className="flex flex-col gap-1">
         {message && !(chatStoryboard && message.role === "assistant") && <div className={message.role === "user" ? "ml-auto flex max-w-[85%] flex-col items-end gap-1 px-3" : "flex flex-col gap-1 px-3"}>
           <span className="text-xs text-muted-foreground">{message.role === "user" ? "You" : "Lomra"}</span>
@@ -1914,8 +1917,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
           toolbarActions={<>
             <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Apply reference set" onClick={() => setBoardDialog("references")} />}><ImagesIcon /></TooltipTrigger><TooltipContent>Apply reference set</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Preview storyboard" onClick={() => setBoardDialog("preview")} />}><PlayIcon /></TooltipTrigger><TooltipContent>Preview storyboard</TooltipContent></Tooltip>
-            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Export storyboard" onClick={() => setBoardDialog("export")} />}><DownloadIcon /></TooltipTrigger><TooltipContent>Export storyboard</TooltipContent></Tooltip>
-            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Edit timeline" onClick={() => setBoardDialog("timeline")} />}><Rows3Icon /></TooltipTrigger><TooltipContent>Edit timeline</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Export storyboard" onClick={() => setBoardDialog("export")} />}><FileDownIcon /></TooltipTrigger><TooltipContent>Export storyboard</TooltipContent></Tooltip>
+            <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Edit timeline" onClick={() => setBoardDialog("timeline")} />}><ChartGanttIcon /></TooltipTrigger><TooltipContent>Edit timeline</TooltipContent></Tooltip>
             <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="AI storyboard review" onClick={() => setBoardDialog("review")} />}><ScanEyeIcon /></TooltipTrigger><TooltipContent>AI storyboard review</TooltipContent></Tooltip>
           </>}
           video={videoBounds && { ...videoBounds, x: videoBounds.x - origin.x, y: videoBounds.y - origin.y }} onMoveStart={startMove} onMakeVideo={() => void planStoryboardVideo(storyboard)} onEditStory={() => setStoryDraft(storyboard.story)} onRedraft={() => setRedrafting(true)} />
@@ -1947,7 +1950,9 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
           }))}
           onPreview={(plan) => renderFromTimeline(plan, "preview")} onExport={(plan) => renderFromTimeline(plan, "export")} />
         <StoryboardReview storyboard={storyboard} images={storyImages} open={boardDialog === "review"} onOpenChange={(open) => setBoardDialog(open ? "review" : null)}
-          contextKey={JSON.stringify([canvasId, boardOwner, llm])} unavailableReason={reviewUnavailable} complete={completeStoryboardReview} onUpdate={setStoryboard} />
+          contextKey={JSON.stringify([canvasId, boardOwner, llm])} unavailableReason={reviewUnavailable}
+          visionModels={reviewModels} onSelectModel={(id) => setModels((current) => [...current.filter((entry) => !entry.startsWith("llm:")), `llm:${id}`])}
+          complete={completeStoryboardReview} onUpdate={setStoryboard} />
       </>}
       {!storyboard && selection.some(({ file }) => !storyboardQueued || canvasFileKind(file) === "image") && <div aria-label="Selected canvas items" className="flex max-h-36 gap-2 overflow-x-auto px-3 py-2">
         {selection.filter(({ file }) => !storyboardQueued || canvasFileKind(file) === "image").map((item) => <div key={item.id} title={item.file.name} className="flex size-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border bg-muted">
@@ -1992,7 +1997,11 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         rows={1}
         className="min-h-9 max-h-[min(8.5rem,calc(100dvh-5rem))] w-full min-w-0 resize-none overflow-y-auto rounded-none border-0 bg-transparent px-3 py-2 leading-5 shadow-none field-sizing-content focus-visible:border-transparent focus-visible:ring-0"
       />}
-      <Popover open={commandsOpen || characterMenuOpen} onOpenChange={(open) => { if (!open) setSuggestionsDismissed(true); }}>
+      <Popover open={commandsOpen || characterMenuOpen} onOpenChange={(open, { reason, event }) => {
+        // A press inside the prompt only moves the caret; the caret decides whether the menu still applies.
+        if (open || (reason === "outside-press" && event.target instanceof Node && promptAnchor.current?.contains(event.target))) return;
+        setSuggestionsDismissed(true);
+      }}>
         <PopoverContent anchor={promptAnchor} side="top" align="start" initialFocus={false} finalFocus={false}
           id={suggestionsId} role="listbox" aria-label={characterMenuOpen ? "Characters" : "Commands"} className="w-max min-w-48 max-w-(--available-width) gap-0 p-1">
           <div className="px-3 py-2 text-xs text-muted-foreground" aria-hidden="true">{characterMenuOpen ? "Characters" : "Commands"}</div>

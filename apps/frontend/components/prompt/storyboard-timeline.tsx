@@ -263,7 +263,7 @@ function TimelineEditor({ storyboard, images, suspended, onOpenChange, onSave, o
       </Tabs>
       <DialogFooter className="shrink-0 flex-row flex-wrap justify-end border-t pt-3">
         {operation === "render" && <span role="status" className="mr-auto self-center text-xs text-muted-foreground">Generating</span>}
-        <Button variant="ghost" size="sm" disabled={busy} onClick={() => void saveEdits()}>{operation === "save" ? "Saving…" : "Save edits"}</Button>
+        <Button variant="secondary" size="sm" disabled={busy} onClick={() => void saveEdits()}>{operation === "save" ? "Saving…" : "Save edits"}</Button>
         <Button variant="outline" size="sm" disabled={busy} onClick={() => void render(onPreview)}><PlayIcon data-icon="inline-start" />Preview</Button>
         <Button size="sm" disabled={busy} onClick={() => void render(onExport)}><DownloadIcon data-icon="inline-start" />Export MP4</Button>
       </DialogFooter>

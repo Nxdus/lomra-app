@@ -60,7 +60,7 @@ export async function deleteCanvasStorage(id: string) {
   await storage(`canvas/${encodeURIComponent(id)}`, 'DELETE');
 }
 
-export type CanvasHistoryItem = { id: string; count: number; name?: string };
+export type CanvasHistoryItem = { id: string; count: number; name?: string; date?: number };
 
 export async function renameCanvas(id: string, name: string) {
   const trimmed = name.trim();
@@ -73,12 +73,20 @@ export async function canvasHistory(): Promise<CanvasHistoryItem[]> {
   const [rows, settings]: [{ id: string; value: SavedCanvasImage[] }[], { id: string; value: unknown }[]] = await Promise.all([storage('canvas'), storage('settings')]);
   return rows.map((row) => {
     const name = settings.find(setting => setting.id === `canvas-name-${row.id}`)?.value;
-    return { id: row.id, count: row.value.length, ...(typeof name === 'string' && name.trim() ? { name } : {}) };
+    // Canvases are dated by the time in their id; the original canvas has none, so use its newest file.
+    const date = Number(row.id.split('-')[1]) || Math.max(0, ...row.value.map(item => Number(item.lastModified) || 0));
+    return { id: row.id, count: row.value.length, ...(typeof name === 'string' && name.trim() ? { name } : {}), ...(date ? { date } : {}) };
   }).sort((a, b) => (Number(b.id.split('-')[1]) || 0) - (Number(a.id.split('-')[1]) || 0));
 }
 
-export function canvasTitle(id: string) {
-  return id === 'default' ? 'Original canvas' : `Canvas · ${new Date(Number(id.split('-')[1])).toLocaleString()}`;
+// The saved name, else a stable numbered default (oldest unnamed canvas is "Canvas 1").
+export function canvasName(id: string, history: CanvasHistoryItem[]) {
+  const item = history.find(other => other.id === id);
+  if (item?.name) return item.name;
+  if (id === 'default') return 'Original canvas';
+  const unnamed = history.filter(other => !other.name && other.id !== 'default').sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
+  const index = unnamed.findIndex(other => other.id === id);
+  return index < 0 ? 'Canvas' : `Canvas ${index + 1}`;
 }
 
 async function saveCanvas(images: CanvasImage[], id: string) {
@@ -92,6 +100,27 @@ async function saveCanvas(images: CanvasImage[], id: string) {
     id, x, y, width, height, harness, name: file.name, type: file.type, lastModified: file.lastModified,
   }));
   await storage(`canvas/${encodeURIComponent(id)}`, 'PUT', manifest);
+}
+
+/** `name`, or the first free "<base> <n><ext>" when another item already has it ("Image 1.png" becomes "Image 2.png"). */
+export function uniqueName(name: string, taken: ReadonlySet<string>) {
+  if (!taken.has(name)) return name;
+  const dot = name.lastIndexOf('.');
+  const extension = dot > 0 ? name.slice(dot) : '';
+  const base = (dot > 0 ? name.slice(0, dot) : name).replace(/ \d+$/, '');
+  for (let number = 2; ; number++) if (!taken.has(`${base} ${number}${extension}`)) return `${base} ${number}${extension}`;
+}
+
+/** Gives repeated item names a number so every item on a canvas has its own name; the first keeps its name. */
+export function uniqueNames(names: readonly string[]) {
+  const taken = new Set(names);
+  const seen = new Set<string>();
+  return names.map((name) => {
+    const unique = seen.has(name) ? uniqueName(name, taken) : name;
+    seen.add(unique);
+    taken.add(unique);
+    return unique;
+  });
 }
 
 export async function canvasStorage(images?: CanvasImage[], id = 'default', layoutOnly = false): Promise<CanvasImage[]> {
@@ -108,7 +137,10 @@ export async function canvasStorage(images?: CanvasImage[], id = 'default', layo
       await saveCanvas(legacy, id);
       return legacy;
     }
-    if (layoutOnly) return saved.value.map(({ name, type, lastModified, ...item }) => {
+    // Older canvases can hold several items with one name; number them here so the next save keeps the names apart.
+    const names = uniqueNames(saved.value.map((item) => item.name));
+    const entries = saved.value.map((item, index) => ({ ...item, name: names[index] }));
+    if (layoutOnly) return entries.map(({ name, type, lastModified, ...item }) => {
       const file = new File([], name, { type, lastModified });
       pendingFiles.add(file);
       // These files already exist remotely; saving a layout must never upload empty placeholders.
@@ -120,7 +152,7 @@ export async function canvasStorage(images?: CanvasImage[], id = 'default', layo
     await Promise.all(Array.from({ length: Math.min(4, saved.value.length) }, async () => {
     while (cursor < saved.value.length) {
       const index = cursor++;
-      const { name, type, lastModified, ...item } = saved.value[index];
+      const { name, type, lastModified, ...item } = entries[index];
       try {
         const blob = await storageFile(item.id);
         if (!blob) throw new Error('Canvas file missing');

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { localCanvasStorage as canvasStorage, canvasFileError, canvasFileKind, canvasFileSize, displaySize, imageFileError } from "./image-canvas-storage";
-import { canvasHistory, canvasStorage as remoteCanvasStorage, isCanvasFilePending, loadCanvasFile, renameCanvas } from './image-canvas-storage';
+import { canvasHistory, canvasName, canvasStorage as remoteCanvasStorage, isCanvasFilePending, loadCanvasFile, renameCanvas, uniqueNames } from './image-canvas-storage';
 import { storageFile, storage } from '../storage';
 
 test("canvas accepts videos and GLB, checks size limits and rejects invalid GLB headers", async () => {
@@ -242,8 +242,30 @@ test('separate canvases preserve the original and reopen saved file layouts', as
     const restored = await remoteCanvasStorage(undefined, id);
     assert.equal(restored[0].x, 42);
     assert.equal(await restored[0].file.text(), 'history-bytes');
-    assert.deepEqual(await canvasHistory(), [{ id, count: 1 }, { id: 'default', count: 0 }]);
+    const history = await canvasHistory();
+    assert.deepEqual(history, [{ id, count: 1, date: Number(id.split('-')[1]) }, { id: 'default', count: 0 }]);
+    assert.deepEqual([canvasName(id, history), canvasName('default', history)], ['Canvas 1', 'Original canvas']);
     await assert.rejects(remoteCanvasStorage(undefined, 'missing'), /no longer exists/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('repeated item names get numbers when a canvas loads, without touching the stored files', async () => {
+  assert.deepEqual(uniqueNames(['Image 1.png', 'Image 1.png', 'Image 2.png', 'Image 1.png', 'clip.mp4', 'clip.mp4', 'notes']),
+    ['Image 1.png', 'Image 3.png', 'Image 2.png', 'Image 4.png', 'clip.mp4', 'clip 2.mp4', 'notes']);
+  const originalFetch = globalThis.fetch;
+  const saved = ['a', 'b'].map((id) => ({ id, x: 0, y: 0, width: 10, height: 10, name: 'Image 1.png', type: 'image/png', lastModified: 1 }));
+  const fetched: string[] = [];
+  try {
+    globalThis.fetch = (async (url, options) => {
+      const path = String(url);
+      if (path === '/api/storage/canvas' && !options?.method) return Response.json([{ id: 'default', value: saved }]);
+      if (path.includes('/files/') && options?.method !== 'PUT') { fetched.push(path); return new Response('bytes'); }
+      throw new Error(`Unexpected request: ${path}`);
+    }) as typeof fetch;
+    assert.deepEqual((await remoteCanvasStorage()).map(({ id, file }) => [id, file.name]), [['a', 'Image 1.png'], ['b', 'Image 2.png']]);
+    assert.deepEqual((await remoteCanvasStorage(undefined, 'default', true)).map(({ file }) => file.name), ['Image 1.png', 'Image 2.png']);
+    assert.equal(fetched.length, 2);
+    assert.equal(saved[1].name, 'Image 1.png');
   } finally { globalThis.fetch = originalFetch; }
 });
 

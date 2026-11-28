@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronDownIcon, ClapperboardIcon, DownloadIcon, EllipsisIcon, FilmIcon, GripVerticalIcon, ImageIcon, ListIcon, PencilIcon, RotateCcwIcon, SlidersHorizontalIcon, SquareIcon, Trash2Icon, UserRoundPlusIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronDownIcon, ClapperboardIcon, DownloadIcon, EllipsisIcon, FilmIcon, GripVerticalIcon, ImageIcon, ListIcon, NotebookPenIcon, RotateCcwIcon, SlidersHorizontalIcon, SquareIcon, Trash2Icon, UserRoundPlusIcon, WandSparklesIcon } from "lucide-react";
 import { Tip } from "@/components/tip";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -316,8 +316,8 @@ export function StoryboardShots({ shots, images, characters, busy, status, video
           </DialogContent>
         </Dialog>
         {toolbarActions}
-        <Tip label="Edit story"><Button variant="ghost" size="icon-sm" aria-label="Edit story" onClick={onEditStory}><PencilIcon /></Button></Tip>
-        <Tip label="Redraft shots"><Button variant="ghost" size="icon-sm" aria-label="Redraft shots" onClick={onRedraft}><ClapperboardIcon /></Button></Tip>
+        <Tip label="Edit story"><Button variant="ghost" size="icon-sm" aria-label="Edit story" onClick={onEditStory}><NotebookPenIcon /></Button></Tip>
+        <Tip label="Redraft shots"><Button variant="ghost" size="icon-sm" aria-label="Redraft shots" onClick={onRedraft}><WandSparklesIcon /></Button></Tip>
       </div>}
     </div>
     {shots.map((item, index) => {
@@ -392,7 +392,7 @@ export function StoryboardShots({ shots, images, characters, busy, status, video
               </div>
               <Field className="gap-1">
                 <FieldLabel htmlFor={`shot-${number}`}>Description</FieldLabel>
-                <Textarea id={`shot-${number}`} className="min-h-0 field-sizing-fixed resize-y py-2" rows={2} value={shot.description}
+                <Textarea id={`shot-${number}`} className="min-h-0 field-sizing-fixed resize-y py-2.5 leading-relaxed [scrollbar-width:thin] scroll-py-2.5" rows={3} value={shot.description}
                   maxLength={shotLimit} disabled={busy} onChange={(event) => onEdit(editing, { description: event.target.value })} />
               </Field>
               <div className="grid gap-3 sm:grid-cols-2">
