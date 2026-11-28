@@ -1421,7 +1421,8 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
     "aria-controls": commandsOpen || characterMenuOpen ? suggestionsId : undefined,
     "aria-activedescendant": activeOptionId,
     onFocus: () => setPromptFocused(true),
-    onBlur: () => setPromptFocused(false),
+    // Leaving the app window also blurs the prompt; keep the suggestions so they are there on return.
+    onBlur: () => { if (document.hasFocus()) setPromptFocused(false); },
     onKeyDown: handlePromptKeyDown,
   };
 
@@ -1807,7 +1808,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         </DialogContent>}
       </Dialog>
       {(history.length > 0 || generations.length > 0 || status) && <AccordionContent className="border-b pb-2">
-      <div ref={transcript} className="flex max-h-[40dvh] flex-col gap-3 overflow-y-auto overscroll-contain py-2 [&>*]:shrink-0" aria-label="Generation results" aria-busy={!!status}>
+      <div ref={transcript} className="flex max-h-[40dvh] flex-col gap-3 overflow-y-auto overscroll-contain pt-2 pb-6 [mask-image:linear-gradient(to_bottom,#000_calc(100%-1.5rem),transparent)] [&>*]:shrink-0" aria-label="Generation results" aria-busy={!!status}>
         {chatTimeline(history, generations).map(({ message, tasks }, index) => <div key={index} className="flex flex-col gap-1">
         {message && !(chatStoryboard && message.role === "assistant") && <div className={message.role === "user" ? "ml-auto flex max-w-[85%] flex-col items-end gap-1 px-3" : "flex flex-col gap-1 px-3"}>
           <span className="text-xs text-muted-foreground">{message.role === "user" ? "You" : "Lomra"}</span>
@@ -1992,7 +1993,11 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
         rows={1}
         className="min-h-9 max-h-[min(8.5rem,calc(100dvh-5rem))] w-full min-w-0 resize-none overflow-y-auto rounded-none border-0 bg-transparent px-3 py-2 leading-5 shadow-none field-sizing-content focus-visible:border-transparent focus-visible:ring-0"
       />}
-      <Popover open={commandsOpen || characterMenuOpen} onOpenChange={(open) => { if (!open) setSuggestionsDismissed(true); }}>
+      <Popover open={commandsOpen || characterMenuOpen} onOpenChange={(open, { reason, event }) => {
+        // A press inside the prompt only moves the caret; the caret decides whether the menu still applies.
+        if (open || (reason === "outside-press" && event.target instanceof Node && promptAnchor.current?.contains(event.target))) return;
+        setSuggestionsDismissed(true);
+      }}>
         <PopoverContent anchor={promptAnchor} side="top" align="start" initialFocus={false} finalFocus={false}
           id={suggestionsId} role="listbox" aria-label={characterMenuOpen ? "Characters" : "Commands"} className="w-max min-w-48 max-w-(--available-width) gap-0 p-1">
           <div className="px-3 py-2 text-xs text-muted-foreground" aria-hidden="true">{characterMenuOpen ? "Characters" : "Commands"}</div>
@@ -2059,9 +2064,9 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
             <GripVerticalIcon />
           </Button>
       {threeDModel && <div aria-label="3D model input requirements" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">{multiview ? "Multiview" : requiresImage(threeDModel) ? "Single image" : "Text to 3D"}</span>
+        <span className="font-medium text-foreground">3D</span>
         <span aria-hidden="true">·</span>
-        <span>{multiview ? multiviewRequirements(threeDModel) : requiresImage(threeDModel) ? "1 image" : "Text only"}</span>
+        <span>{multiview ? `Multiview · ${multiviewRequirements(threeDModel)}` : requiresImage(threeDModel) ? "1 image" : "Text only"}</span>
       </div>}
           <div className="ml-auto flex min-w-0 items-center gap-2">
           {localEngine && agentEfforts[localEngine.engine] && <EffortPicker levels={agentEfforts[localEngine.engine] ?? []} value={efforts[localEngine.engine]}
@@ -2075,7 +2080,7 @@ export function FloatingPrompt({ ref, canvasId = "default", loading = false, onA
               <Select items={ratioItems} value={aspectRatio} onValueChange={(value) => setAspectRatio(value ?? "")} disabled={!!status}>
                 <Tip label="Image aspect ratio">
                   <SelectTrigger size="sm" variant="ghost" aria-label="Image aspect ratio" className="w-auto min-w-0 px-2 text-xs">
-                    <SelectValue>{aspectRatio || "Auto"}</SelectValue>
+                    <SelectValue>{`Image · ${aspectRatio || "Auto"}`}</SelectValue>
                   </SelectTrigger>
                 </Tip>
                 <SelectContent side="top" align="end" alignItemWithTrigger={false}>

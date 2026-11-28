@@ -344,7 +344,7 @@ export function ModelSelector({ models, onModelsChange, onCatalogInfoChange, onS
             if (!item || typeof item.value !== "string" || typeof item.name !== "string" || !item.name.trim()) continue;
             const group = results.find((group) => item.value.startsWith(`${group.value}:`) && item.value.length > group.value.length + 1);
             if (group && !group.models.some((model) => model.value === item.value)) {
-              const name = item.value === `picture:${browserImageModel}` ? browserProvider : item.value === `picture:${geminiImageModel}` || item.value === `video:${geminiVideoModel}` ? geminiProvider : modelDisplayName(item.value.startsWith("llm:") && localAgentModel(item.value.slice(4))?.modelId
+              const name = item.value === `picture:${browserImageModel}` ? browserProvider : item.value === `picture:${geminiImageModel}` ? `${geminiProvider} (Image)` : item.value === `video:${geminiVideoModel}` ? `${geminiProvider} (Video)` : modelDisplayName(item.value.startsWith("llm:") && localAgentModel(item.value.slice(4))?.modelId
                 ? item.name.replace(/ · (Claude Code|Codex)$/, "")
                 : item.name);
               group.models.push({ value: item.value, name, label: name, capabilities: group.value === "3d" && isMultiview(item.value.slice(3)) ? ["multi-view-to-3d"] : Array.isArray(item.capabilities) ? item.capabilities.filter((value: unknown): value is Capability => typeof value === "string" && Object.hasOwn(capabilityLabels, value)) : undefined, custom: true });
